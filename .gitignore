@@ -1,0 +1,69 @@
+# ─── Secrets — HECH QACHON push qilmaslik ───
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+credentials.json
+service-account*.json
+gcp-key*.json
+
+# Database & data
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+.env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local settings
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+voice_*.ogg
+voice_*.mp3
+voice_*.wav
+
+# Runtime
+*.pid
+bot.pid
+*.sock

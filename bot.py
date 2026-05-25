@@ -1,0 +1,147 @@
+"""Yordamchi — main entry point. Runs the Telegram bot.
+
+Run: python bot.py
+"""
+
+import asyncio
+import logging
+import signal
+import sys
+import warnings
+
+# Silence noisy third-party logs that aren't actionable for us:
+# - urllib3-future emits a WARNING when a server advertises HTTP/3 via Alt-Svc
+#   but the local stack can't negotiate it. caldav (Apple iCloud) triggers this.
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="caldav")
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, MenuButtonDefault
+
+import config
+import database
+import handlers
+from scheduler import YordamchiScheduler
+
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("yordamchi")
+
+
+async def _register_bot_commands(bot: Bot) -> None:
+    """Register the slash-command list shown in Telegram's command picker."""
+    commands = [
+        BotCommand(command="cockpit", description="🎛 Boshqaruv paneli"),
+        BotCommand(command="today", description="📅 Bugungi briefing"),
+        BotCommand(command="tasks", description="📌 Vazifalar"),
+        BotCommand(command="reminders", description="⏰ Eslatmalar"),
+        BotCommand(command="team", description="👥 Ijrochilar paneli"),
+        BotCommand(command="risks", description="🚨 Risklar paneli"),
+        BotCommand(command="new", description="➕ Yangi vazifa"),
+        BotCommand(command="meetings", description="🤝 Uchrashuvlar"),
+        BotCommand(command="stats", description="📊 Statistika"),
+        BotCommand(command="search", description="🔍 Qidiruv"),
+        BotCommand(command="plan", description="🎯 Executive reja"),
+        BotCommand(command="insights", description="💡 Tavsiyalar"),
+        BotCommand(command="settings", description="⚙️ Sozlamalar"),
+        BotCommand(command="calendar", description="📆 iCloud kalendar"),
+        BotCommand(command="help", description="Yordam"),
+    ]
+    try:
+        await bot.set_my_commands(commands)
+        logger.info("Bot commands registered: %d", len(commands))
+    except Exception:
+        logger.exception("Failed to register bot commands")
+
+
+async def _clear_menu_button(bot: Bot) -> None:
+    """Ensure Telegram chat menu button is the default (commands list)."""
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+    except Exception:
+        pass
+
+
+async def main() -> None:
+    config.ensure_paths()
+    await database.init()
+    logger.info("Database initialized")
+
+    # Warm iCloud CalDAV connection cache so the first user-triggered push is sub-second.
+    if config.ICLOUD_ENABLED:
+        try:
+            import calendar_service
+            cal = await asyncio.to_thread(calendar_service._get_calendar_cached)
+            if cal:
+                try:
+                    cal_name = cal.get_display_name()
+                except Exception:
+                    cal_name = getattr(cal, "name", "?")
+                logger.info("iCloud cache primed (calendar: %s)", cal_name)
+            else:
+                logger.warning("iCloud cache prime returned no calendar")
+        except Exception:
+            logger.exception("iCloud cache prime failed (non-fatal)")
+
+    bot = Bot(
+        token=config.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
+    )
+    dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.include_router(handlers.router)
+
+    await _register_bot_commands(bot)
+    await _clear_menu_button(bot)
+
+    scheduler = YordamchiScheduler(bot)
+    scheduler.start()
+    # Apply user-configured briefing times (DB-backed; defaults to 08:00 / 18:00 if unset).
+    await scheduler.apply_briefing_settings()
+    await scheduler.apply_reminder_settings()
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _signal_handler():
+        logger.info("Shutdown signal received")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except NotImplementedError:
+            pass
+
+    me = await bot.get_me()
+    logger.info("Bot started: @%s (id=%s). Principal user_id=%s", me.username, me.id, config.PRINCIPAL_USER_ID)
+
+    polling_task = asyncio.create_task(
+        dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
+    )
+    tasks_to_watch = {polling_task, asyncio.create_task(stop_event.wait())}
+
+    done, pending = await asyncio.wait(tasks_to_watch, return_when=asyncio.FIRST_COMPLETED)
+
+    logger.info("Shutting down...")
+    for task in pending:
+        task.cancel()
+    try:
+        await dispatcher.stop_polling()
+    except Exception:
+        pass
+    scheduler.stop()
+    await bot.session.close()
+    logger.info("Stopped cleanly.")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(0)
