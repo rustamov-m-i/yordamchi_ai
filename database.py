@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status_deadline ON tasks(status, deadline);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+-- Hot paths flagged in audit: assignee filtering (team panel),
+-- source-tagged queries (recurring/manual filters), reminded_at IS NULL scans.
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_source_created ON tasks(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_reminded ON tasks(reminded_at);
 
 CREATE TABLE IF NOT EXISTS meetings (
     id TEXT PRIMARY KEY,
@@ -69,6 +74,10 @@ CREATE TABLE IF NOT EXISTS meetings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(datetime_start);
+-- Hot paths: reminded_at IS NULL scans for sweep claim;
+-- followup_sent_at IS NULL for post-meeting follow-up sweep.
+CREATE INDEX IF NOT EXISTS idx_meetings_reminded ON meetings(reminded_at);
+CREATE INDEX IF NOT EXISTS idx_meetings_followup ON meetings(followup_sent_at);
 -- idx_meetings_icloud is created in init() migration block (needs column to exist first
 -- on databases that were created before this column was added).
 
@@ -156,6 +165,16 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS idx_reminders_status_time ON reminders(status, remind_at);
 CREATE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id);
 CREATE INDEX IF NOT EXISTS idx_reminders_meeting ON reminders(meeting_id);
+-- Time-window scans (list_due_in_window, reminders_overview) benefit from a
+-- standalone remind_at index. Note: SQLite is smart enough to use the leading
+-- column of idx_reminders_status_time(status, remind_at) for status-filtered
+-- queries, so this only helps date-range queries that don't filter on status.
+CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(remind_at);
+-- NOTE: FOREIGN KEY constraints on reminders.task_id → tasks.id and
+-- reminders.meeting_id → meetings.id were intentionally NOT added.
+-- SQLite doesn't allow ALTER TABLE ADD CONSTRAINT, so retrofitting would
+-- require full table recreation. Tracked as future work (Sprint C1.future):
+-- needs orphan cleanup + migration script + downtime window.
 
 CREATE TABLE IF NOT EXISTS icloud_retry_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -631,6 +650,40 @@ async def list_due_in_window(start_iso: str, end_iso: str) -> list[dict]:
         )
         rows = await cur.fetchall()
         return [_row_to_task(r) for r in rows]
+
+
+async def risk_score_counts() -> dict:
+    """One-shot SELECT returning every count needed by handlers.compute_risk_score.
+    Replaces the previous N+1 pattern (6 separate queries opening 6 connections)
+    with a single aggregate query — same connection, same plan, ~6× faster on
+    a cold cache and avoids racy cross-query inconsistencies."""
+    now = datetime.now(TZ)
+    h24 = (now + timedelta(hours=24)).isoformat()
+    h48 = (now + timedelta(hours=48)).isoformat()
+    now_iso_val = now.isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT
+                  SUM(CASE WHEN deadline IS NOT NULL AND deadline < ? THEN 1 ELSE 0 END) AS overdue,
+                  SUM(CASE WHEN deadline IS NOT NULL AND deadline >= ? AND deadline <= ? THEN 1 ELSE 0 END) AS due_24h,
+                  SUM(CASE WHEN deadline IS NOT NULL AND deadline >= ? AND deadline <= ? THEN 1 ELSE 0 END) AS due_48h,
+                  SUM(CASE WHEN deadline IS NULL THEN 1 ELSE 0 END) AS no_deadline,
+                  SUM(CASE WHEN (assignee IS NULL OR TRIM(assignee) = '' OR LOWER(assignee) = 'belgilanmagan') THEN 1 ELSE 0 END) AS unassigned,
+                  SUM(CASE WHEN priority = 'P0' THEN 1 ELSE 0 END) AS urgent_open,
+                  SUM(CASE WHEN (assignee IS NULL OR TRIM(assignee) = '' OR LOWER(assignee) = 'belgilanmagan')
+                           AND deadline IS NOT NULL AND deadline <= ? THEN 1 ELSE 0 END) AS unassigned_due_48h
+               FROM tasks
+               WHERE status IN ('todo', 'in_progress')""",
+            (now_iso_val, now_iso_val, h24, now_iso_val, h48, h48),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return {k: 0 for k in (
+            "overdue", "due_24h", "due_48h", "no_deadline", "unassigned",
+            "urgent_open", "unassigned_due_48h",
+        )}
+    return {k: int(row[k] or 0) for k in row.keys()}
 
 
 async def list_unassigned_tasks(limit: int = 50) -> list[dict]:
@@ -1718,6 +1771,11 @@ DEFAULT_SETTINGS = {
     "evening_summary_time": "18:00",
     "meeting_reminder_min": 15,
     "task_reminder_hours": 2,
+    # Quiet hours — default OFF so existing users see no behavior change
+    # until they explicitly enable via /settings.
+    "quiet_hours_enabled": False,
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00",
 }
 
 
@@ -1789,6 +1847,77 @@ async def trim_history(keep: int = 200) -> None:
                 (total - keep,),
             )
             await db.commit()
+
+
+async def purge_old_conversation_history(retention_days: int) -> int:
+    """Time-based retention purge — drops every conversation_history row
+    older than retention_days. Complements trim_history's count cap to
+    satisfy NBU / banking data retention rules (1–3 year limits depending
+    on data class). Returns rows deleted."""
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now(TZ) - timedelta(days=retention_days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM conversation_history WHERE created_at < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
+async def llm_cost_breakdown(days: int = 7) -> dict:
+    """Cost analytics for the past N days, broken down by model and cache
+    hit/miss. Used by /diagnostics and the executive dashboard to track
+    where Claude spend is going and whether prompt caching is actually
+    working as intended."""
+    cutoff = (datetime.now(TZ) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT
+                  model,
+                  COUNT(*) AS calls,
+                  SUM(COALESCE(input_tokens, 0)) AS input_tokens,
+                  SUM(COALESCE(output_tokens, 0)) AS output_tokens,
+                  SUM(COALESCE(cache_read_tokens, 0)) AS cache_read,
+                  SUM(COALESCE(cache_creation_tokens, 0)) AS cache_write,
+                  SUM(COALESCE(estimated_cost_usd, 0)) AS cost_usd
+               FROM llm_audit_log
+               WHERE ts >= ? AND error IS NULL
+               GROUP BY model
+               ORDER BY cost_usd DESC""",
+            (cutoff,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    totals = {
+        "calls": sum(r["calls"] or 0 for r in rows),
+        "input_tokens": sum(r["input_tokens"] or 0 for r in rows),
+        "output_tokens": sum(r["output_tokens"] or 0 for r in rows),
+        "cache_read": sum(r["cache_read"] or 0 for r in rows),
+        "cache_write": sum(r["cache_write"] or 0 for r in rows),
+        "cost_usd": round(sum(float(r["cost_usd"] or 0) for r in rows), 4),
+    }
+    # Cache hit rate = cache_read / (input_tokens + cache_read). If it's
+    # >50%, prompt caching is paying off significantly.
+    denom = totals["input_tokens"] + totals["cache_read"]
+    totals["cache_hit_rate"] = round(totals["cache_read"] / denom, 3) if denom else 0.0
+    return {"by_model": rows, "totals": totals, "days": days}
+
+
+async def purge_old_audit_logs(retention_days: int) -> int:
+    """Same idea for the LLM audit log table — used by scheduler nightly."""
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now(TZ) - timedelta(days=retention_days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM llm_audit_log WHERE ts < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return cur.rowcount
 
 
 # ─────────────────────────────────────────── PLANS ───────────────────────────────────────────

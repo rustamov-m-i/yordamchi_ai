@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -704,15 +705,21 @@ def new_item_keyboard() -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    """Settings menu — 5 actions + Back."""
+    """Settings menu — actions + Back."""
     notif_on = settings.get("notifications_enabled", True)
     notif_label = "🔔 Bildirishnomalar: YOQ" if notif_on else "🔕 Bildirishnomalar: O'CHIQ"
     morning_time = settings.get("morning_briefing_time", "08:00")
     evening_time = settings.get("evening_summary_time", "18:00")
+    quiet_on = settings.get("quiet_hours_enabled", False)
+    qh_start = settings.get("quiet_hours_start", "22:00")
+    qh_end = settings.get("quiet_hours_end", "07:00")
+    quiet_label = (f"🌙 Sukunat: {qh_start}–{qh_end}" if quiet_on
+                    else "🌙 Sukunat: o'chiq")
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=notif_label, callback_data="setting:notifications_toggle")],
         [InlineKeyboardButton(text=f"⏰ Brifing vaqti: {morning_time}", callback_data="setting:briefing_time")],
         [InlineKeyboardButton(text=f"🌙 Kechki yakun: {evening_time}", callback_data="setting:evening_time")],
+        [InlineKeyboardButton(text=quiet_label, callback_data="setting:quiet_hours")],
         [InlineKeyboardButton(text="📲 Eslatma parametrlari", callback_data="setting:reminders")],
         [InlineKeyboardButton(text="📅 Kalendar holati", callback_data="setting:calendar")],
         [back_button()],
@@ -1272,6 +1279,179 @@ async def cmd_new_command(message: Message, state: FSMContext) -> None:
     await cmd_new(message, state)
 
 
+@router.message(Command("backup"))
+async def cmd_backup(message: Message) -> None:
+    """Create an on-demand SQLite backup using the .backup API (consistent
+    snapshot — works even while the bot is writing). Saves to data/backups/
+    with a timestamped name. Sends a status reply with the file size and
+    integrity-check result.
+
+    For automated daily backups see DEPLOY.md cron section."""
+    import os
+    import sqlite3
+    from datetime import datetime as _dt
+
+    timestamp = _dt.now(database.TZ).strftime("%Y%m%d-%H%M%S")
+    backup_dir = Path(config.DATABASE_PATH).parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"yordamchi-manual-{timestamp}.db"
+
+    typing_task = asyncio.create_task(_keep_typing(message.bot, message.chat.id))
+    try:
+        # sqlite3 .backup runs in a thread; use to_thread to keep the loop free.
+        def _do_backup() -> tuple[int, str]:
+            with sqlite3.connect(config.DATABASE_PATH) as src, sqlite3.connect(str(backup_path)) as dst:
+                src.backup(dst)
+            size = os.path.getsize(backup_path)
+            # Integrity check on the backup file (not source)
+            with sqlite3.connect(str(backup_path)) as check:
+                cur = check.execute("PRAGMA integrity_check")
+                result = cur.fetchone()[0]
+            return size, result
+
+        size, integrity = await asyncio.to_thread(_do_backup)
+    except Exception as e:
+        logger.exception("Backup failed")
+        await message.answer(f"❌ Backup xato: {type(e).__name__}: {e}")
+        return
+    finally:
+        typing_task.cancel()
+
+    kb_size = size / 1024
+    ok_mark = "✓" if integrity == "ok" else f"⚠️ {integrity}"
+    await _safe_answer(
+        message,
+        f"💾 **Backup yaratildi**\n\n"
+        f"📁 `{backup_path.name}`\n"
+        f"📦 Hajmi: {kb_size:,.0f} KB\n"
+        f"🔎 Integrity: {ok_mark}\n\n"
+        f"_To'liq yo'l: `{backup_path}`_\n"
+        f"_Avtomatik kunlik backup GCS'ga ham olinadi (DEPLOY.md)._",
+        parse_mode="Markdown",
+    )
+
+
+@router.message(Command("delegations"))
+async def cmd_delegations(message: Message) -> None:
+    """Delegation tracker — show tasks assigned to others, sorted by how
+    long they've been pending. Surfaces "stuck" delegations before they
+    become problems."""
+    import aiosqlite
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT id, title, assignee, deadline, status, created_at,
+                      julianday('now') - julianday(created_at) AS age_days
+               FROM tasks
+               WHERE status IN ('todo', 'in_progress')
+                 AND assignee IS NOT NULL
+                 AND TRIM(assignee) != ''
+                 AND LOWER(assignee) NOT IN ('belgilanmagan', 'men', 'siz', 'o''zim', 'ozim', 'o''z', 'oz')
+               ORDER BY age_days DESC
+               LIMIT 20"""
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    if not rows:
+        await _safe_answer(
+            message,
+            "👥 **DELEGATSIYALAR**\n\n_Boshqa kishilarga berilgan aktiv vazifa yo'q._",
+            parse_mode="Markdown",
+            reply_markup=single_back_keyboard(),
+        )
+        return
+
+    lines = ["👥 **DELEGATSIYALAR**", "", f"_{len(rows)} ta aktiv delegatsiya:_", ""]
+    for i, t in enumerate(rows[:12], 1):
+        age = int(t["age_days"] or 0)
+        age_label = "bugun" if age == 0 else f"{age} kun"
+        deadline_label, _ = _format_deadline_short(t.get("deadline"))
+        title = (t.get("title") or "—")[:60]
+        lines.append(f"**{i}. {title}**")
+        lines.append(f"   👤 {t['assignee']} · ⏳ {deadline_label} · 📅 {age_label} oldin")
+        lines.append("")
+    if len(rows) > 12:
+        lines.append(f"_+{len(rows) - 12} ta yana_")
+
+    await _safe_answer(
+        message,
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=single_back_keyboard(),
+    )
+
+
+@router.message(Command("diagnostics"))
+async def cmd_diagnostics(message: Message) -> None:
+    """Bot health snapshot — DB size, recent LLM cost, scheduler state, iCloud.
+    Useful when something feels broken and you want a single view of internals."""
+    import os
+    import claude_service
+    lines = ["🔍 **DIAGNOSTICS**", ""]
+
+    # DB size
+    try:
+        db_bytes = os.path.getsize(config.DATABASE_PATH)
+        db_kb = db_bytes / 1024
+        lines.append(f"📦 DB: `{config.DATABASE_PATH}` — {db_kb:,.0f} KB")
+    except OSError:
+        lines.append(f"📦 DB: `{config.DATABASE_PATH}` — ❌ topilmadi")
+
+    # Pending actions
+    try:
+        stuck = await database.list_stuck_pending_actions(stuck_after_minutes=5)
+        lines.append(f"⏳ Stuck pending_actions: {len(stuck)}" if stuck else "⏳ Stuck pending_actions: 0 ✓")
+    except Exception:
+        lines.append("⏳ Stuck pending_actions: tekshirib bo'lmadi")
+
+    # LLM cost + cache hit rate (last 7 days)
+    try:
+        breakdown = await database.llm_cost_breakdown(days=7)
+        totals = breakdown["totals"]
+        lines.append(
+            f"💰 7-kunlik: ${totals['cost_usd']:.4f} · "
+            f"{totals['calls']} chaqiruv · cache hit {totals['cache_hit_rate'] * 100:.0f}%"
+        )
+        if breakdown["by_model"]:
+            lines.append("   Modellar:")
+            for row in breakdown["by_model"][:5]:
+                lines.append(f"     • {row['model']}: {row['calls']} (${float(row['cost_usd'] or 0):.4f})")
+    except Exception as e:
+        lines.append(f"💰 LLM cost: xato ({type(e).__name__})")
+
+    # Circuit breaker
+    if claude_service._circuit_is_open():
+        remain = claude_service._circuit_open_until - __import__("time").time()
+        lines.append(f"⚠️ Claude circuit OPEN ({remain:.0f}s qoldi)")
+    else:
+        lines.append("✓ Claude circuit closed")
+
+    # Scheduler
+    sched = scheduler_module.get_scheduler()
+    if sched and sched.scheduler.running:
+        jobs = sched.scheduler.get_jobs()
+        lines.append(f"⏰ Scheduler: {len(jobs)} aktiv job")
+    else:
+        lines.append("⏰ Scheduler: ❌ ishlamayapti")
+
+    # iCloud
+    if config.ICLOUD_ENABLED:
+        lines.append("☁️ iCloud: yoqilgan")
+    else:
+        lines.append("☁️ iCloud: o'chiq")
+
+    # Redaction
+    import redaction
+    redaction_label = "o'chiq" if redaction.DISABLED else "yoqilgan"
+    lines.append(f"🛡 Redaction: {redaction_label}")
+
+    # Background tasks
+    bg = len(_background_tasks)
+    lines.append(f"🔧 Background tasks: {bg}")
+
+    await _safe_answer(message, "\n".join(lines), parse_mode="Markdown")
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     await message.answer(
@@ -1668,22 +1848,16 @@ async def compute_risk_score() -> dict:
 
     Returns: {score: int, status: str, components: dict}
     """
-    overdue = await database.list_overdue_tasks()
-    due_24h = await database.list_tasks_due_within(hours=24)
-    due_48h = await database.list_tasks_due_within(hours=48)
-    no_deadline = await database.list_tasks_without_deadline()
-    unassigned = await database.list_unassigned_tasks()
-    active = await database.list_tasks(status_in=["todo", "in_progress"], limit=200)
-    urgent_open = [t for t in active if t.get("priority") == "P0"]
-
-    unassigned_due_48h = [t for t in unassigned if t.get("deadline") and t["deadline"] <= (datetime.now(database.TZ) + timedelta(hours=48)).isoformat()]
+    # Single SELECT with conditional aggregates — was 6 separate queries
+    # opening 6 connections (N+1 anti-pattern). See database.risk_score_counts.
+    counts = await database.risk_score_counts()
 
     components = {
-        "overdue": min(25, len(overdue) * 5),
-        "due_24h": min(20, len(due_24h) * 4),
-        "unassigned_urgent": min(18, len(unassigned_due_48h) * 6),
-        "no_deadline": min(12, int(len(no_deadline) * 1.5)),
-        "urgent_open": min(25, len(urgent_open) * 5),
+        "overdue": min(25, counts["overdue"] * 5),
+        "due_24h": min(20, counts["due_24h"] * 4),
+        "unassigned_urgent": min(18, counts["unassigned_due_48h"] * 6),
+        "no_deadline": min(12, int(counts["no_deadline"] * 1.5)),
+        "urgent_open": min(25, counts["urgent_open"] * 5),
     }
     score = min(100, sum(components.values()))
     if score <= 30:
@@ -1704,12 +1878,12 @@ async def compute_risk_score() -> dict:
         "emoji": emoji,
         "components": components,
         "counts": {
-            "overdue": len(overdue),
-            "due_24h": len(due_24h),
-            "due_48h": len(due_48h),
-            "no_deadline": len(no_deadline),
-            "unassigned": len(unassigned),
-            "urgent_open": len(urgent_open),
+            "overdue": counts["overdue"],
+            "due_24h": counts["due_24h"],
+            "due_48h": counts["due_48h"],
+            "no_deadline": counts["no_deadline"],
+            "unassigned": counts["unassigned"],
+            "urgent_open": counts["urgent_open"],
         },
     }
 
@@ -1887,6 +2061,85 @@ async def _apply_reminder_settings_live() -> None:
 async def cb_setting_calendar(query: CallbackQuery) -> None:
     await query.answer()
     await cmd_calendar(query.message)
+
+
+@router.callback_query(F.data == "setting:quiet_hours")
+async def cb_setting_quiet_hours(query: CallbackQuery) -> None:
+    """Toggle quiet hours on/off + show the time window picker."""
+    settings = await database.get_settings()
+    qh_on = settings.get("quiet_hours_enabled", False)
+    qh_start = settings.get("quiet_hours_start", "22:00")
+    qh_end = settings.get("quiet_hours_end", "07:00")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=("🔕 Sukunatni O'CHIRISH" if qh_on else "🌙 Sukunatni YOQISH"),
+            callback_data="quiet:toggle",
+        )],
+        [InlineKeyboardButton(text=f"⏰ Boshlanish: {qh_start}", callback_data="quiet:start")],
+        [InlineKeyboardButton(text=f"⏰ Tugash: {qh_end}", callback_data="quiet:end")],
+        [back_button("nav_settings")],
+    ])
+    state_label = "yoqilgan" if qh_on else "o'chiq"
+    await query.answer()
+    await query.message.answer(
+        f"🌙 **Sukunat soatlari**\n\n"
+        f"Holat: **{state_label}**\n"
+        f"Vaqt: `{qh_start}` → `{qh_end}`\n\n"
+        f"_Sukunat ichida brifing va eslatmalar yo'naltirilmaydi. "
+        f"Faqat /diagnostics, /cancel va sizning xabarlaringizga javob qaytadi._",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "quiet:toggle")
+async def cb_quiet_toggle(query: CallbackQuery) -> None:
+    settings = await database.get_settings()
+    new_val = not settings.get("quiet_hours_enabled", False)
+    await database.set_setting("quiet_hours_enabled", new_val)
+    label = "yoqildi" if new_val else "o'chirildi"
+    await query.answer(f"Sukunat {label} ✓")
+    try:
+        await query.message.delete()
+    except TelegramBadRequest:
+        pass
+    await cb_setting_quiet_hours(query)
+
+
+@router.callback_query(F.data.in_({"quiet:start", "quiet:end"}))
+async def cb_quiet_time_picker(query: CallbackQuery) -> None:
+    which = "start" if query.data == "quiet:start" else "end"
+    label = "Boshlanish" if which == "start" else "Tugash"
+    presets = ["19:00", "20:00", "21:00", "22:00", "23:00"] if which == "start" else \
+              ["06:00", "07:00", "08:00", "09:00", "10:00"]
+    rows = [
+        [InlineKeyboardButton(text=t, callback_data=f"qtime:{which}:{t}") for t in presets[:3]],
+        [InlineKeyboardButton(text=t, callback_data=f"qtime:{which}:{t}") for t in presets[3:]],
+        [back_button("nav_settings")],
+    ]
+    await query.answer()
+    await query.message.answer(
+        f"⏰ Sukunat {label} vaqti:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("qtime:"))
+async def cb_quiet_set_time(query: CallbackQuery) -> None:
+    parts = query.data.split(":", 3)  # qtime:start:HH:MM
+    if len(parts) < 4:
+        await query.answer()
+        return
+    which, hh, mm = parts[1], parts[2], parts[3]
+    new_time = f"{hh}:{mm}"
+    key = "quiet_hours_start" if which == "start" else "quiet_hours_end"
+    await database.set_setting(key, new_time)
+    await query.answer(f"Saqlandi: {new_time} ✓")
+    try:
+        await query.message.delete()
+    except TelegramBadRequest:
+        pass
+    await cb_setting_quiet_hours(query)
 
 
 # ─────────────────────── YANGI SUBMENU ───────────────────────
@@ -6112,8 +6365,18 @@ async def cmd_cockpit(message: Message, state: FSMContext | None = None) -> None
     finally:
         typing_task.cancel()
 
-    # Inline kbd: faqat 1 ta tugma (foydalanuvchi so'rovi — bajardim olib tashlandi)
+    # Inline kbd with drill-down rows so users can jump straight from the
+    # cockpit into the underlying panels (team, risks, stats, delegations)
+    # without leaving and finding the section buttons in the main keyboard.
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👥 Ijrochilar", callback_data="cockpit_team"),
+            InlineKeyboardButton(text="🚨 Risklar", callback_data="cockpit_risks"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Statistika", callback_data="cockpit_stats"),
+            InlineKeyboardButton(text="📋 Delegatsiyalar", callback_data="cockpit_delegations"),
+        ],
         [InlineKeyboardButton(text="🔄 Yangilash", callback_data="cockpit_refresh")],
     ])
 
@@ -6181,6 +6444,12 @@ async def cb_cockpit_stats(query: CallbackQuery) -> None:
 async def cb_cockpit_plan(query: CallbackQuery, state: FSMContext) -> None:
     await query.answer()
     await cmd_plan(query.message, state)
+
+
+@router.callback_query(F.data == "cockpit_delegations")
+async def cb_cockpit_delegations(query: CallbackQuery) -> None:
+    await query.answer()
+    await cmd_delegations(query.message)
 
 
 # ─────────────────────── MESSAGE HANDLERS ───────────────────────
@@ -6960,12 +7229,18 @@ async def cb_complete(query: CallbackQuery) -> None:
     await database.complete_task(target_id)
     await query.answer("Bajarildi ✓")
     # Cardni vizual yangilash — foydalanuvchi yangi statusni darrov ko'rsin.
+    # Plus add an "Undo" button so a fat-finger tap can be reversed within
+    # the next minute without hunting through the task detail menu.
     task = await database.get_task(target_id)
     if task:
+        undo_row = InlineKeyboardButton(text="↶ Bekor qilish", callback_data=f"unclomp:{target_id}")
+        kb = _task_card_kb_with_back(task)
+        # Prepend the undo row so it's the most prominent action.
+        kb = InlineKeyboardMarkup(inline_keyboard=[[undo_row]] + list(kb.inline_keyboard))
         try:
             await query.message.edit_text(
                 _format_task_card(task), parse_mode="Markdown",
-                reply_markup=_task_card_kb_with_back(task),
+                reply_markup=kb,
             )
             return
         except TelegramBadRequest:
@@ -6976,6 +7251,31 @@ async def cb_complete(query: CallbackQuery) -> None:
             reply_markup=single_back_keyboard("taskfilter:active"))
     except Exception:
         pass
+
+
+@router.callback_query(F.data.startswith("unclomp:"))
+async def cb_uncomplete(query: CallbackQuery) -> None:
+    """Undo a task completion. Flips status back to 'todo' and re-renders
+    the card so the user can immediately recover from a fat-finger tap."""
+    parts = query.data.split(":", 1)
+    target_id = parts[1] if len(parts) > 1 else ""
+    if not target_id:
+        await query.answer()
+        return
+    ok = await database.update_task(target_id, {"status": "todo"}, source="undo_complete")
+    if not ok:
+        await query.answer("Vazifa topilmadi", show_alert=True)
+        return
+    await query.answer("↶ Yana aktiv ✓")
+    task = await database.get_task(target_id)
+    if task:
+        try:
+            await query.message.edit_text(
+                _format_task_card(task), parse_mode="Markdown",
+                reply_markup=_task_card_kb_with_back(task),
+            )
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data.startswith("task_detail:"))

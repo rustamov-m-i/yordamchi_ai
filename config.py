@@ -58,6 +58,11 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 
 ERROR_NOTIFY_USER_ID: int = _int("ERROR_NOTIFY_USER_ID", required=False, default=PRINCIPAL_USER_ID)
 
+# Data retention — banking-compliance friendly defaults. Override per
+# deployment if your jurisdiction requires longer/shorter windows.
+CONVERSATION_TTL_DAYS: int = _int("CONVERSATION_TTL_DAYS", required=False, default=365)
+LLM_AUDIT_TTL_DAYS: int = _int("LLM_AUDIT_TTL_DAYS", required=False, default=365)
+
 # iCloud Calendar integration (optional)
 APPLE_ID: str = os.getenv("APPLE_ID", "").strip()
 APPLE_APP_SPECIFIC_PASSWORD: str = os.getenv("APPLE_APP_SPECIFIC_PASSWORD", "").strip()

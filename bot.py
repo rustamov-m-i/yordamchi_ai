@@ -18,12 +18,12 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="caldav")
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, MenuButtonDefault
 
 import config
 import database
 import handlers
+from fsm_storage import SQLiteStorage
 from scheduler import YordamchiScheduler
 
 logging.basicConfig(
@@ -51,6 +51,10 @@ async def _register_bot_commands(bot: Bot) -> None:
         BotCommand(command="insights", description="💡 Tavsiyalar"),
         BotCommand(command="settings", description="⚙️ Sozlamalar"),
         BotCommand(command="calendar", description="📆 iCloud kalendar"),
+        BotCommand(command="delegations", description="👥 Delegatsiyalar trekeri"),
+        BotCommand(command="diagnostics", description="🔍 Bot holati"),
+        BotCommand(command="backup", description="💾 Backup yaratish"),
+        BotCommand(command="cancel", description="✕ Joriy amalni bekor qilish"),
         BotCommand(command="help", description="Yordam"),
     ]
     try:
@@ -111,7 +115,14 @@ async def main() -> None:
         token=config.TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
-    dispatcher = Dispatcher(storage=MemoryStorage())
+    fsm = SQLiteStorage()
+    await fsm.init()
+    # Drop FSM rows older than 24 hours on startup — backstop for the
+    # in-handler TTL middleware (30 min) when the user never returns.
+    purged_fsm = await fsm.purge_old_rows(max_age_hours=24)
+    if purged_fsm:
+        logger.info("Purged %d stale FSM rows (>24h)", purged_fsm)
+    dispatcher = Dispatcher(storage=fsm)
     dispatcher.include_router(handlers.router)
 
     await _register_bot_commands(bot)

@@ -75,6 +75,25 @@ class YordamchiScheduler:
             pass
         return default
 
+    def _in_quiet_hours(self, settings: dict) -> bool:
+        """True if the current local time falls inside the user's configured
+        quiet hours window. Returns False if quiet hours are disabled or
+        misconfigured. Handles wrap-around windows (e.g. 22:00 → 07:00)."""
+        if not settings.get("quiet_hours_enabled", False):
+            return False
+        start = self._parse_hhmm(settings.get("quiet_hours_start", "22:00"), (22, 0))
+        end = self._parse_hhmm(settings.get("quiet_hours_end", "07:00"), (7, 0))
+        now = datetime.now(database.TZ)
+        cur = (now.hour, now.minute)
+        if start == end:
+            return False  # zero-length window
+        if start < end:
+            # Same-day window (e.g. 13:00 → 14:00 lunch quiet)
+            return start <= cur < end
+        # Wrap-around window (e.g. 22:00 → 07:00) — quiet if we're past
+        # start OR before end.
+        return cur >= start or cur < end
+
     def start(self) -> None:
         # Briefings are registered with defaults; an async _apply_settings_briefings()
         # call right after start() reschedules them with the user's settings.
@@ -150,6 +169,29 @@ class YordamchiScheduler:
             id="trim_history",
             replace_existing=True,
             next_run_time=datetime.now(database.TZ) + timedelta(minutes=10),
+        )
+        # Nightly retention purge — NBU / banking compliance time-based TTL.
+        # Runs at 03:00 local when the bot is idle and DB load is minimal.
+        self.scheduler.add_job(
+            self._retention_purge_sweep,
+            CronTrigger(hour=3, minute=0, timezone=config.TIMEZONE),
+            id="retention_purge",
+            replace_existing=True,
+        )
+        # Friday 18:00 — weekly retrospective via Claude.
+        self.scheduler.add_job(
+            self._weekly_retrospective,
+            CronTrigger(day_of_week="fri", hour=18, minute=0, timezone=config.TIMEZONE),
+            id="weekly_retrospective",
+            replace_existing=True,
+        )
+        # Nightly 02:30 — Haiku-based dependency / blocker analysis.
+        # Only pushes a message if something actionable is found.
+        self.scheduler.add_job(
+            self._proactive_dependency_check,
+            CronTrigger(hour=2, minute=30, timezone=config.TIMEZONE),
+            id="proactive_dependency_check",
+            replace_existing=True,
         )
 
         if config.ICLOUD_ENABLED:
@@ -261,11 +303,18 @@ class YordamchiScheduler:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
 
-    async def _send(self, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+    async def _send(self, text: str, reply_markup: InlineKeyboardMarkup | None = None,
+                     bypass_quiet_hours: bool = False) -> None:
         try:
             settings = await database.get_settings()
             if not settings.get("notifications_enabled", True):
                 logger.info("Scheduled message suppressed because notifications are disabled")
+                return
+            # Quiet hours — silence non-urgent pushes during user's chosen
+            # window (e.g. 22:00 → 07:00). Urgent flows that absolutely must
+            # interrupt (P0 escalations) can pass bypass_quiet_hours=True.
+            if not bypass_quiet_hours and self._in_quiet_hours(settings):
+                logger.info("Scheduled message suppressed by quiet hours")
                 return
         except Exception:
             logger.exception("Failed to read notification settings; sending message anyway")
@@ -433,6 +482,82 @@ class YordamchiScheduler:
             await database.trim_history(keep=200)
         except Exception:
             logger.exception("trim_history sweep failed")
+
+    async def _proactive_dependency_check(self) -> None:
+        """Nightly Haiku pass — feed all open tasks to Claude and ask for
+        critical-path / circular-dependency / blocker warnings. Cheap because
+        Haiku + cache; pushes only when something actionable is found."""
+        try:
+            tasks = await database.list_tasks(status_in=["todo", "in_progress"], limit=100)
+            if len(tasks) < 5:
+                return  # Too few to warrant a dep analysis
+            task_brief = "\n".join(
+                f"- [{t['priority']}] {t['title']} (id={t['id']}, deadline={t.get('deadline') or '—'}, "
+                f"assignee={t.get('assignee') or '—'})"
+                for t in tasks[:50]
+            )
+            directive = (
+                "[INTERNAL] task_dependency_check\n\n"
+                "Quyidagi aktiv vazifalar ro'yxati. Tahlil qiling:\n"
+                "  1. Critical path — qaysi vazifalar boshqa muhim vazifalarni bloklab turadi?\n"
+                "  2. Risk — deadline yaqin va aktiv ish ko'rinmayotgan vazifalar.\n"
+                "  3. Circular dependency yoki konflikt.\n\n"
+                f"VAZIFALAR:\n{task_brief}\n\n"
+                "Agar hech qanday risk yo'q bo'lsa, user_message='' qaytaring.\n"
+                "Aks holda 2-3 punktli qisqa Uzbek alert yozing."
+            )
+            response = await claude_service.process_message(
+                "", internal_directive=directive, complexity="fast",
+            )
+            text = (response.get("user_message") or "").strip()
+            if text:
+                await self._send("🔗 **VAZIFA BOG'LANISHLARI**\n\n" + text)
+        except Exception:
+            logger.exception("Proactive dependency check failed")
+
+    async def _weekly_retrospective(self) -> None:
+        """Friday 18:00 — auto-generate the week's retrospective via Claude.
+        Aggregates last-7-day stats and asks Claude to identify wins,
+        bottlenecks, and one concrete suggestion for next week."""
+        try:
+            stats = await database.executive_stats(days=7)
+            directive = (
+                "[INTERNAL] weekly_retrospective\n\n"
+                "Bu Juma kuni avtomatik hisobot. Quyidagi statistika asosida:\n"
+                f"  - Yaratilgan vazifalar: {stats.get('tasks', {}).get('created_7d', 0)}\n"
+                f"  - Yopilgan vazifalar: {stats.get('tasks', {}).get('done_7d', 0)}\n"
+                f"  - O'tgan muddat: {stats.get('tasks', {}).get('overdue_count', 0)}\n"
+                f"  - Risk score: {stats.get('risk_score', 0)}/100\n"
+                f"  - Uchrashuvlar (7-kun): {stats.get('meetings', {}).get('count', 0)}\n\n"
+                "Quyidagi tarkibda Uzbek tilida qisqa hisobot yozing (300-400 so'z):\n"
+                "1. 🏆 HAFTANING G'ALABALARI (2-3 punkt)\n"
+                "2. ⚠️ E'TIBOR KERAK (2-3 punkt)\n"
+                "3. 🎯 KEYINGI HAFTA UCHUN TAVSIYA (1 aniq qadam)\n\n"
+                "user_message ichiga to'liq matnni qaytaring. actions=[]."
+            )
+            response = await claude_service.process_message(
+                "", internal_directive=directive, complexity="complex"
+            )
+            text = response.get("user_message", "").strip()
+            if text:
+                await self._send("📊 **HAFTALIK RETROSPEKTIV**\n\n" + text)
+        except Exception:
+            logger.exception("Weekly retrospective failed")
+
+    async def _retention_purge_sweep(self) -> None:
+        """Time-based retention purge — NBU / banking compliance. Drops
+        conversation_history and llm_audit_log rows older than the
+        configured TTL. Logged for audit trail."""
+        try:
+            conv = await database.purge_old_conversation_history(config.CONVERSATION_TTL_DAYS)
+            audit = await database.purge_old_audit_logs(config.LLM_AUDIT_TTL_DAYS)
+            if conv or audit:
+                logger.info(
+                    "Retention purge: %d conversation_history rows, %d llm_audit_log rows (TTL conv=%dd, audit=%dd)",
+                    conv, audit, config.CONVERSATION_TTL_DAYS, config.LLM_AUDIT_TTL_DAYS,
+                )
+        except Exception:
+            logger.exception("Retention purge sweep failed")
 
     async def _icloud_sync(self) -> None:
         """Pull next-30-days events from iCloud into local DB."""

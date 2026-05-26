@@ -26,10 +26,76 @@ logger = logging.getLogger(__name__)
 _client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY, timeout=60.0, max_retries=2)
 
 
+# ──────────────────────── CIRCUIT BREAKER ────────────────────────
+# Tracks recent Anthropic failures. When >= _CIRCUIT_THRESHOLD consecutive
+# failures occur within _CIRCUIT_WINDOW seconds, the circuit "opens" and we
+# short-circuit for _CIRCUIT_COOLDOWN seconds (returning a degraded fallback
+# instead of hammering a down API). After cooldown, the next call is allowed
+# ("half-open"): success closes the circuit; failure re-opens it.
+_CIRCUIT_THRESHOLD = 5            # consecutive failures to trip
+_CIRCUIT_WINDOW = 60              # seconds within which threshold counts
+_CIRCUIT_COOLDOWN = 120           # seconds the circuit stays open
+import time as _time
+
+_circuit_failures: list[float] = []  # timestamps of recent failures
+_circuit_open_until: float = 0.0     # epoch seconds; 0 = closed
+
+
+def _circuit_is_open() -> bool:
+    return _time.time() < _circuit_open_until
+
+
+def _circuit_record_failure() -> None:
+    now = _time.time()
+    _circuit_failures.append(now)
+    # Keep only failures within the window
+    cutoff = now - _CIRCUIT_WINDOW
+    while _circuit_failures and _circuit_failures[0] < cutoff:
+        _circuit_failures.pop(0)
+    if len(_circuit_failures) >= _CIRCUIT_THRESHOLD:
+        global _circuit_open_until
+        _circuit_open_until = now + _CIRCUIT_COOLDOWN
+        logger.error(
+            "Anthropic circuit OPEN — %d failures in %ds, cooling down for %ds",
+            len(_circuit_failures), _CIRCUIT_WINDOW, _CIRCUIT_COOLDOWN,
+        )
+        _circuit_failures.clear()
+
+
+def _circuit_record_success() -> None:
+    """Successful call closes the circuit and resets the failure counter."""
+    global _circuit_open_until
+    _circuit_open_until = 0.0
+    _circuit_failures.clear()
+
+
 # Internal-directive keywords that signal complex reasoning and benefit from Opus.
 # Anything not on this list (and not explicitly forced via complexity="fast"|"complex")
 # uses the default CLAUDE_MODEL (Sonnet).
 _COMPLEX_DIRECTIVE_KEYWORDS = ("executive_plan", "check_followups", "risk_analysis")
+
+
+_MAX_HISTORY_TOKENS_APPROX = 2000  # ~4 chars/token heuristic
+
+
+def _budget_history(history: list[dict], max_tokens: int = _MAX_HISTORY_TOKENS_APPROX) -> list[dict]:
+    """Trim conversation history to fit within an approximate token budget.
+    Walks newest-first so the most-recent context is preserved when older
+    turns get dropped. Uses a coarse `len(content) // 4` estimate — not
+    perfect but enough to prevent surprise context-window overruns when the
+    user pastes long meeting notes."""
+    if not history:
+        return history
+    out: list[dict] = []
+    total = 0
+    for msg in reversed(history):
+        content = msg.get("content") or ""
+        approx = max(1, len(content) // 4)
+        if total + approx > max_tokens and out:
+            break
+        out.insert(0, msg)
+        total += approx
+    return out
 
 
 def _pick_model(complexity: Optional[str], internal_directive: Optional[str]) -> str:
@@ -183,10 +249,19 @@ async def process_message(
                 router auto-picks based on internal_directive keywords.
     """
 
+    if _circuit_is_open():
+        logger.warning("Anthropic circuit open — short-circuiting (cooldown remaining: %.0fs)",
+                        _circuit_open_until - _time.time())
+        return _fallback(
+            "Claude vaqtinchalik mavjud emas. Bir necha daqiqadan keyin qayta urinib ko'ring. "
+            "Bot boshqa funksiyalari (ro'yxatlar, qidiruv) ishlayapti."
+        )
+
     model = _pick_model(complexity, internal_directive)
     state_block = await _build_state_block()
 
     history = await database.recent_messages(limit=10)
+    history = _budget_history(history)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Redact PII for BOTH user messages and internal directives. Internal directives
@@ -225,15 +300,20 @@ async def process_message(
     except RateLimitError:
         logger.warning("Anthropic rate limited (model=%s)", model)
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="rate_limit")
+        _circuit_record_failure()
         return _fallback("Juda ko'p so'rov. Bir-ikki daqiqadan keyin qayta urinib ko'ring.")
     except AuthenticationError:
         logger.exception("Anthropic auth failed — check ANTHROPIC_API_KEY")
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="auth")
+        _circuit_record_failure()
         return _fallback("Claude kalit kalitida muammo. Administrator bilan bog'laning.")
     except BadRequestError as e:
         msg = str(e).lower()
         err_label = "credit_low" if ("credit" in msg or "balance" in msg or "billing" in msg) else "bad_request"
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error=err_label)
+        # credit_low is "permanent" until billing is fixed — keep circuit closed
+        # so we don't waste calls on a known-broken state during the cooldown.
+        _circuit_record_failure()
         if err_label == "credit_low":
             return _fallback("Claude balansi tugadi. Hisobni to'ldiring: https://console.anthropic.com/settings/billing")
         logger.exception("Anthropic bad request")
@@ -241,13 +321,16 @@ async def process_message(
     except APITimeoutError:
         logger.warning("Anthropic timeout (model=%s)", model)
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="timeout")
+        _circuit_record_failure()
         return _fallback("Javob kech keldi. Qaytadan urinib ko'ring.")
     except APIConnectionError:
         logger.warning("Anthropic connection error")
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="connection")
+        _circuit_record_failure()
         return _fallback("Tarmoqqa ulanib bo'lmadi. Bir ozdan keyin qaytadan urinib ko'ring.")
     except APIStatusError as e:
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error=f"status_{e.status_code}")
+        _circuit_record_failure()
         if getattr(e, "status_code", None) == 529:
             return _fallback("Claude vaqtincha band. Bir ozdan keyin qaytadan urinib ko'ring.")
         logger.exception("Anthropic API status error: %s", e.status_code)
@@ -255,8 +338,11 @@ async def process_message(
     except APIError:
         logger.exception("Anthropic API error")
         await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="api_error")
+        _circuit_record_failure()
         return _FALLBACK_RESPONSE
 
+    # Successful call — reset the circuit so any cooldown clears immediately.
+    _circuit_record_success()
     raw = response.content[0].text if response.content else ""
 
     # Audit log — success path. Log the model that was actually used (after
@@ -321,6 +407,7 @@ async def process_message_stream(
     model = _pick_model(complexity, None)
     state_block = await _build_state_block()
     history = await database.recent_messages(limit=10)
+    history = _budget_history(history)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     outgoing_content, redacted_count = redaction.redact(user_text)

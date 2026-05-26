@@ -333,11 +333,11 @@ async def test_handlers_surface():
     dm_count = sum(len(row) for row in dm.inline_keyboard)
     t("handlers", "Task detail menu: 7 buttons (6 actions + Back)", dm_count == 7)
 
-    # Settings keyboard — 5 action rows + 1 back row (notif + morning + evening + reminders + calendar)
+    # Settings keyboard — 6 action rows + 1 back row (notif + morning + evening + quiet hours + reminders + calendar)
     sk = handlers.settings_keyboard({"notifications_enabled": True,
                                       "morning_briefing_time": "08:00",
                                       "evening_summary_time": "18:00"})
-    t("handlers", "Settings keyboard: 6 rows (5 actions + Back)", len(sk.inline_keyboard) == 6)
+    t("handlers", "Settings keyboard: 7 rows (6 actions + Back)", len(sk.inline_keyboard) == 7)
     settings_labels = [btn.text for row in sk.inline_keyboard for btn in row]
     t("handlers", "No 'Til' in settings", not any("Til" in l for l in settings_labels))
     t("handlers", "Settings has Brifing + Kechki yakun",

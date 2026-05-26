@@ -1,0 +1,27 @@
+# Pre-commit hooks for Yordamchi.
+# Install once: pip install pre-commit && pre-commit install
+# Runs on `git commit` automatically. Can be triggered manually:
+#   pre-commit run --all-files
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-real-bugs
+        name: ruff (F-series — real bugs only)
+        entry: ./venv/bin/ruff check --select=F --exclude=venv,venv-win,__pycache__,tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: py-compile
+        name: python syntax check
+        entry: ./venv/bin/python3 -m py_compile
+        language: system
+        types: [python]
+        files: ^(bot|config|database|handlers|scheduler|calendar_service|claude_service|voice_service|redaction|fsm_storage)\.py$
+
+      - id: forbid-env-commit
+        name: prevent .env from ever being staged
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^\.env$|^\.env\."; then echo "❌ .env or .env.* in staging — never commit secrets"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        always_run: true
