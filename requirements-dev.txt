@@ -1,0 +1,4 @@
+# Dev/CI dependencies. Pinned for reproducibility.
+# Install: ./venv/bin/python -m pip install -r requirements-dev.txt
+ruff==0.6.9
+pytest==8.3.3

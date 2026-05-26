@@ -32,19 +32,33 @@ logger = logging.getLogger(__name__)
 DISABLED = os.getenv("REDACTION_DISABLE", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
-# Patterns are applied in order. First match wins per region.
+# Patterns are applied in order. First match wins per region. Pattern order
+# matters: context-keyword patterns (INN, INPS) come BEFORE generic digit
+# patterns (CARD, ACCOUNT) so that "INPS 12345678901234" gets labeled as
+# INPS rather than CARD.
 _PATTERNS: list[tuple[str, re.Pattern]] = [
-    # Card numbers: 13–19 digits possibly separated by spaces or dashes
-    ("CARD", re.compile(r"\b(?:\d[ -]?){13,19}\b")),
     # Phone numbers: +998 followed by digits (with optional spaces/dashes)
     ("PHONE", re.compile(r"\+998[\s\-]?\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}")),
     # Email
     ("EMAIL", re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")),
     # IBAN-like (Uzbek): UZ + 2 digits + 16 alphanumeric
     ("IBAN", re.compile(r"\bUZ\d{2}[A-Z0-9]{16,20}\b", re.IGNORECASE)),
-    # INN-like: word "inn"/"стир"/"стир" near 9 digits
+    # Uzbek passport: 2 Latin letters (typically AA, AB, etc) + 7 digits, no space.
+    ("PASSPORT", re.compile(r"\b[A-Z]{2}\d{7}\b")),
+    # INN-like: word "inn"/"стир"/"stir" near 9 digits
     ("INN", re.compile(r"(?:\binn\b|\bстир\b|\bstir\b)[\s:№#]*(\d{9})\b", re.IGNORECASE)),
-    # Long digit runs that look like account numbers (≥12 digits, not already caught)
+    # INPS / JShShIR / PINFL (Uz national personal ID, 14 digits) with explicit
+    # context word. Must precede CARD so 14-digit IDs aren't mis-labelled CARD.
+    ("INPS", re.compile(
+        r"(?:\binps\b|\bjsh?shir\b|\bпинфл\b|\bpinfl\b)[\s:№#]*(\d{14})\b",
+        re.IGNORECASE,
+    )),
+    # Bare 14-digit run (likely INPS/JShShIR/PINFL without keyword).
+    ("INPS_BARE", re.compile(r"\b\d{14}\b")),
+    # Card numbers: 13–19 digits possibly separated by spaces or dashes.
+    # Runs after INPS/INPS_BARE so 14-digit national IDs are claimed first.
+    ("CARD", re.compile(r"\b(?:\d[ -]?){13,19}\b")),
+    # Long digit runs that look like account numbers (≥12 digits, not already caught).
     ("ACCOUNT", re.compile(r"\b\d{12,}\b")),
 ]
 
@@ -82,6 +96,7 @@ _PRICES_USD_PER_MTOK = {
     "claude-opus-4-7":     {"in": 15.0, "out": 75.0, "cache_read": 1.5,  "cache_write": 18.75},
     "claude-sonnet-4-6":   {"in": 3.0,  "out": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
     "claude-sonnet-4-5":   {"in": 3.0,  "out": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
+    "claude-haiku-4-5":    {"in": 0.8,  "out": 4.0,  "cache_read": 0.08, "cache_write": 1.0},
     "whisper-1":           {"in": 6.0,  "out": 0.0,  "cache_read": 0.0,  "cache_write": 0.0},  # $0.006/min ≈ rough est.
 }
 

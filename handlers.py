@@ -727,11 +727,113 @@ async def _keep_typing(bot: Bot, chat_id: int) -> None:
             await asyncio.sleep(4)
     except asyncio.CancelledError:
         return
-    except Exception:
-        return
+    except Exception as e:
+        # Network blip, bot blocked, chat deleted — don't crash the caller, but
+        # leave a breadcrumb so silent typing-failures are diagnosable.
+        logger.debug("_keep_typing stopped on chat %s: %s", chat_id, e)
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+# Strong refs to fire-and-forget tasks. Without these, Python's GC can collect
+# the task object mid-flight (PEP 3156 only holds weak refs), causing the
+# coroutine to be silently cancelled and any exception swallowed.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _log_background_exception(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task %r failed: %s", task.get_name(), exc, exc_info=exc)
+
+
+def _spawn_background(coro, *, name: str) -> asyncio.Task:
+    """Schedule a fire-and-forget coroutine while keeping a strong reference and
+    logging any unhandled exception. Use instead of bare asyncio.create_task()
+    for work that runs past the current handler's response."""
+    task = asyncio.create_task(coro, name=name)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(_log_background_exception)
+    return task
+
+
+def _cb_int(data: str | None, *, default: int = 0) -> int:
+    """Extract an int from callback_data of the form 'prefix:N'. Returns
+    `default` on any parse failure (missing data, no colon, non-numeric tail)
+    so a malformed or stale callback can't crash the handler with
+    IndexError/ValueError. The auth middleware blocks non-principal users
+    so this is mainly defence against stale buttons from older bot versions."""
+    if not data:
+        return default
+    parts = data.split(":", 1)
+    if len(parts) < 2:
+        return default
+    try:
+        return int(parts[1])
+    except (TypeError, ValueError):
+        return default
+
+
+def _cb_part(data: str | None, index: int, *, default: str = "") -> str:
+    """Safe positional access into a colon-separated callback_data string.
+    `_cb_part('a:b:c', 2)` → 'c'; `_cb_part('a:b', 2)` → ''. Use in place of
+    `query.data.split(':')[index]` when the tail is optional."""
+    if not data:
+        return default
+    parts = data.split(":")
+    if 0 <= index < len(parts):
+        return parts[index]
+    return default
+
+
+async def _get_text_or_transcribe(message: Message, bot: Bot | None = None) -> str | None:
+    """Universal text extractor for state handlers that accept F.text | F.voice.
+    Returns the message text (for text messages) OR the STT transcript (for
+    voice). Returns None if the voice download/transcribe failed — caller
+    should respond with a retry prompt in that case.
+
+    This lets every FSM state accept voice without each handler re-implementing
+    download + transcribe + error messaging."""
+    if message.text:
+        return message.text
+    if message.voice and (bot or message.bot):
+        b = bot or message.bot
+        if message.voice.file_size and message.voice.file_size > voice_service.MAX_AUDIO_BYTES:
+            await message.answer(
+                f"Ovoz xabari juda katta ({message.voice.file_size // 1024} KB). "
+                f"Iltimos, {voice_service.MAX_AUDIO_BYTES // (1024 * 1024)} MB dan kichikroq yuboring."
+            )
+            return None
+        try:
+            file = await b.get_file(message.voice.file_id)
+            audio_io = await b.download_file(file.file_path)
+            if hasattr(audio_io, "getvalue"):
+                audio_bytes = audio_io.getvalue()
+            elif hasattr(audio_io, "read"):
+                audio_bytes = audio_io.read()
+            else:
+                audio_bytes = bytes(audio_io)
+        except Exception:
+            logger.exception("Voice download failed")
+            await message.answer("Ovozni yuklab ololmadim. Iltimos, qaytadan yuboring.")
+            return None
+        transcript = await voice_service.transcribe(audio_bytes, filename="voice.ogg", language="uz")
+        if not transcript:
+            await message.answer("Ovozni o'qiy olmadim. Matn yozib yuboring yoki qaytadan urinib ko'ring.")
+            return None
+        # Patch message.text in-place so handler bodies using `message.text`
+        # transparently see the transcript. Pydantic v2 forbids regular
+        # assignment on Message; object.__setattr__ bypasses the descriptor.
+        try:
+            object.__setattr__(message, "text", transcript)
+        except Exception:
+            logger.debug("Could not patch message.text in-place; caller must use return value")
+        return transcript
+    return None
 
 
 # ─────────────────────── AUTH MIDDLEWARE ───────────────────────
@@ -741,11 +843,21 @@ def _is_principal(user_id: int | None) -> bool:
     return user_id == config.PRINCIPAL_USER_ID
 
 
-async def _reject(message_or_query):
+def _is_private_chat(chat) -> bool:
+    """True if chat is a 1:1 private chat. This bot is designed for the
+    principal in private — group/channel/supergroup behavior is undefined
+    (formatting, FSM state, mentions all break)."""
+    return chat is not None and chat.type == "private"
+
+
+async def _reject(message_or_query, reason: str = "Bu shaxsiy bot."):
     if isinstance(message_or_query, Message):
-        await message_or_query.answer("Bu shaxsiy bot.")
+        await message_or_query.answer(reason)
     elif isinstance(message_or_query, CallbackQuery):
-        await message_or_query.answer("Bu shaxsiy bot.", show_alert=True)
+        await message_or_query.answer(reason, show_alert=True)
+
+
+_FSM_STATE_TTL_SECONDS = 30 * 60  # 30 minutes
 
 
 @router.message.middleware()
@@ -753,6 +865,36 @@ async def auth_message_middleware(handler, event: Message, data):
     if not _is_principal(event.from_user.id if event.from_user else None):
         await _reject(event)
         return
+    # Reject group/channel use — even from the principal. Forwarding the bot
+    # to a group is the most common accident; this keeps state and formatting
+    # behaviour predictable. The principal can DM directly.
+    if not _is_private_chat(event.chat):
+        await _reject(event, "Bu bot faqat shaxsiy chat'da ishlaydi. Iltimos, men bilan to'g'ridan-to'g'ri yozing.")
+        return
+    # FSM state TTL: if the user started a flow (say, NewTaskFSM.awaiting_title),
+    # walked away for >30 min, and comes back with a random "Salom", we'd
+    # store "Salom" as the task title. Detect stale state via timestamp in
+    # state.data and auto-clear with a friendly notice.
+    state = data.get("state")
+    if state is not None:
+        try:
+            current = await state.get_state()
+            if current and current != "default_state":
+                sdata = await state.get_data()
+                started_at = sdata.get("_fsm_started_at")
+                now_ts = datetime.now(database.TZ).timestamp()
+                if started_at and (now_ts - float(started_at)) > _FSM_STATE_TTL_SECONDS:
+                    await state.clear()
+                    await event.answer(
+                        "⏱ Avvalgi amaliyot 30 daqiqadan ortiq vaqt o'tgani uchun bekor qilindi. "
+                        "Yangi xabar yuboring yoki /start bosing.",
+                    )
+                    return
+                # Refresh the timestamp on each interaction so an active flow
+                # never times out mid-conversation.
+                await state.update_data(_fsm_started_at=now_ts)
+        except Exception:
+            logger.debug("FSM TTL check failed (non-fatal)", exc_info=True)
     return await handler(event, data)
 
 
@@ -760,6 +902,9 @@ async def auth_message_middleware(handler, event: Message, data):
 async def auth_callback_middleware(handler, event: CallbackQuery, data):
     if not _is_principal(event.from_user.id if event.from_user else None):
         await _reject(event)
+        return
+    if event.message and not _is_private_chat(event.message.chat):
+        await _reject(event, "Faqat shaxsiy chat'da ishlaydi.")
         return
     return await handler(event, data)
 
@@ -876,7 +1021,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                 # Push to iCloud as a FIRE-AND-FORGET background task — the user gets their
                 # bot reply within ~1 second; iCloud sync happens in parallel (typically 1-3s).
                 if config.ICLOUD_ENABLED and data.get("datetime_start"):
-                    asyncio.create_task(_push_meeting_to_icloud(mid, data))
+                    _spawn_background(_push_meeting_to_icloud(mid, data), name=f"icloud_push:{mid}")
                 await _upsert_contacts(list(data.get("participants") or []))
             elif atype == "cancel_meeting" and target_id:
                 await database.cancel_meeting(target_id)
@@ -980,41 +1125,119 @@ def _append_back_row(kb: InlineKeyboardMarkup | None,
 # ─────────────────────── CORE PROCESSING ───────────────────────
 
 
+_STREAM_EDIT_MIN_INTERVAL_SEC = 1.2  # Telegram message-edit rate limit headroom
+_STREAM_EDIT_MIN_DELTA_CHARS = 24    # don't spam edits for tiny additions
+
+
 async def _process_and_reply(message: Message, user_text: str) -> None:
-    """Send user_text to Claude, execute actions, reply with formatted message + buttons."""
+    """Send user_text to Claude (streaming), edit a progress message as the
+    reply arrives, then attach action buttons once parsing completes.
+
+    Wrapped in a pending_actions row so:
+      - a redelivered Telegram update doesn't double-process (UNIQUE update_id),
+      - a crash mid-handler is recoverable / observable on next bot start."""
 
     if not user_text or not user_text.strip():
         await message.answer("Bo'sh xabar. Iltimos, matn yoki ovoz yuboring.")
         return
 
-    typing_task = asyncio.create_task(_keep_typing(message.bot, message.chat.id))
-    try:
-        response = await claude_service.process_message(user_text)
-    finally:
-        typing_task.cancel()
-
-    if response.get("needs_clarification"):
-        question = response.get("clarification_question") or response.get("user_message") or "Aniqlashtiring."
-        await message.answer(question, reply_markup=single_back_keyboard())
+    update_id = getattr(getattr(message, "_update", None), "update_id", None)
+    pending_id = await database.enqueue_pending_action(
+        update_id=update_id,
+        chat_id=message.chat.id if message.chat else None,
+        message_id=message.message_id,
+        user_text=user_text,
+    )
+    if pending_id is None:
+        # Duplicate Telegram update — already handled, swallow silently.
         return
 
-    ids_by_type = await _execute_actions(response.get("actions", []))
-    keyboard = _build_keyboard(response.get("buttons", []), ids_by_type)
-    if keyboard:
-        keyboard = _append_back_row(keyboard)
+    typing_task = asyncio.create_task(_keep_typing(message.bot, message.chat.id))
+    progress_msg: Message | None = None
+    last_edit_at = 0.0
+    last_edit_text = ""
+    loop = asyncio.get_event_loop()
+    try:
+        await database.mark_pending_in_progress(pending_id)
+        final_response: dict | None = None
 
-    text = response.get("user_message", "").strip()
-    if not text:
-        text = "✓"
+        async for kind, payload in claude_service.process_message_stream(user_text):
+            if kind == "partial":
+                text = (payload or "").strip()
+                if not text:
+                    continue
+                # Throttle edits: at least N seconds AND N characters of growth
+                # before issuing another edit_text call. Telegram's edit rate
+                # limit is loose but spammy edits churn the chat for no UX win.
+                now = loop.time()
+                if (now - last_edit_at) < _STREAM_EDIT_MIN_INTERVAL_SEC:
+                    continue
+                if abs(len(text) - len(last_edit_text)) < _STREAM_EDIT_MIN_DELTA_CHARS:
+                    continue
+                if progress_msg is None:
+                    progress_msg = await message.answer(text + " ▌")
+                else:
+                    try:
+                        await progress_msg.edit_text(text + " ▌")
+                    except TelegramBadRequest:
+                        # "message is not modified" or similar — silently skip;
+                        # the next edit will be different.
+                        pass
+                last_edit_at = now
+                last_edit_text = text
+            elif kind == "complete":
+                final_response = payload  # dict envelope
+                break
 
-    await _safe_answer(message, text, reply_markup=keyboard, parse_mode="Markdown")
+        if final_response is None:
+            final_response = claude_service._FALLBACK_RESPONSE
+
+        if final_response.get("needs_clarification"):
+            question = (final_response.get("clarification_question")
+                        or final_response.get("user_message")
+                        or "Aniqlashtiring.")
+            if progress_msg is not None:
+                try:
+                    await progress_msg.edit_text(question, reply_markup=single_back_keyboard())
+                except TelegramBadRequest:
+                    await message.answer(question, reply_markup=single_back_keyboard())
+            else:
+                await message.answer(question, reply_markup=single_back_keyboard())
+            await database.complete_pending_action(pending_id)
+            return
+
+        ids_by_type = await _execute_actions(final_response.get("actions", []))
+        keyboard = _build_keyboard(final_response.get("buttons", []), ids_by_type)
+        if keyboard:
+            keyboard = _append_back_row(keyboard)
+
+        text = (final_response.get("user_message") or "").strip() or "✓"
+        if progress_msg is not None:
+            # Finalize the same message we've been editing — single chat bubble.
+            try:
+                await progress_msg.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+            except TelegramBadRequest:
+                # Editing failed (deleted? markdown parse error?) — send fresh.
+                await _safe_answer(message, text, reply_markup=keyboard, parse_mode="Markdown")
+        else:
+            await _safe_answer(message, text, reply_markup=keyboard, parse_mode="Markdown")
+        await database.complete_pending_action(pending_id)
+    except Exception as e:
+        logger.exception("_process_and_reply failed for pending=%s", pending_id)
+        await database.fail_pending_action(pending_id, f"{type(e).__name__}: {e}")
+        raise
+    finally:
+        typing_task.cancel()
 
 
 # ─────────────────────── COMMAND HANDLERS ───────────────────────
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    # /start is the universal "I'm confused, reset" command — clear any FSM
+    # state so a user stuck mid-flow can recover without finding a Back button.
+    await state.clear()
     await message.answer(
         "**Yordamchi tayyor** 🤝\n\n"
         "Matn yoki ovoz orqali topshiriq yuborishingiz mumkin.\n"
@@ -1022,6 +1245,31 @@ async def cmd_start(message: Message) -> None:
         parse_mode="Markdown",
         reply_markup=main_reply_keyboard(),
     )
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    """Universal escape hatch — clear any FSM state and confirm to the user.
+    Matches industry-standard /cancel convention."""
+    current = await state.get_state()
+    await state.clear()
+    if current:
+        await message.answer(
+            "✕ Bekor qilindi. Asosiy menyu.",
+            reply_markup=main_reply_keyboard(),
+        )
+    else:
+        await message.answer(
+            "Hech qaysi amal aktiv emas. Asosiy menyu.",
+            reply_markup=main_reply_keyboard(),
+        )
+
+
+@router.message(Command("new"))
+async def cmd_new_command(message: Message, state: FSMContext) -> None:
+    """/new slash-command entry point. Delegates to the existing cmd_new()
+    submenu so behavior matches both /new typed and the ➕ Yangi button."""
+    await cmd_new(message, state)
 
 
 @router.message(Command("help"))
@@ -1062,7 +1310,6 @@ UZ_MONTHS_FULL = ["yanvar", "fevral", "mart", "aprel", "may", "iyun",
 async def _build_briefing_text() -> str:
     """Deterministic daily operating briefing."""
     now = datetime.now(database.TZ)
-    date_label = f"{now.day}-{UZ_MONTHS_FULL[now.month - 1]}"
 
     today_tasks = await database.list_today_tasks()
     done_today = await database.list_tasks_done_today()
@@ -1077,12 +1324,7 @@ async def _build_briefing_text() -> str:
     today_tasks = sorted(today_tasks, key=_key)
     best_task = (overdue[:1] or today_tasks[:1] or [None])[0]
     urgent_count = sum(1 for t in today_tasks if t.get("priority") == "P0")
-    important_count = sum(1 for t in today_tasks if t.get("priority") == "P1")
     missing_assignee = [t for t in today_tasks if not (t.get("assignee") or "").strip()]
-    due_with_deadline = [t for t in today_tasks if t.get("deadline")]
-    recommendations = _build_today_recommendations(
-        today_tasks, done_today, overdue, today_meetings, missing_assignee, now
-    )
 
     date_label_upper = f"{now.day}-{UZ_MONTHS_FULL[now.month - 1].upper()}"
     DIVIDER = "━" * 20
@@ -1256,51 +1498,6 @@ def _build_today_attention(tasks: list[dict], overdue: list[dict], missing_assig
     if no_deadline:
         attention.append(f"• {len(no_deadline)} ta vazifada muddat belgilanmagan.")
     return attention
-
-
-def _build_today_recommendations(
-    tasks: list[dict],
-    done_today: list[dict],
-    overdue: list[dict],
-    meetings: list[dict],
-    missing_assignee: list[dict],
-    now: datetime,
-) -> list[str]:
-    recommendations = []
-    priority_sorted = sorted(
-        tasks,
-        key=lambda t: (
-            {"P0": 0, "P1": 1, "P2": 2, "P3": 3}.get(t.get("priority", "P2"), 2),
-            t.get("deadline") or "9999",
-        ),
-    )
-    first = (overdue[:1] or priority_sorted[:1] or [None])[0]
-    if first:
-        deadline = _brief_time_label(first.get("deadline"))
-        recommendations.append(f"Avval «{_truncate(first['title'], 55)}» vazifasini nazorat qiling. Muddat: {deadline}.")
-    if missing_assignee:
-        recommendations.append(f"Ijrochisi belgilanmagan {len(missing_assignee)} ta vazifaga mas'ul tayinlang.")
-    due_late = [
-        t for t in tasks
-        if (dt := _parse_dt_safe(t.get("deadline"))) and dt.date() == now.date() and dt.hour >= 16
-    ]
-    if due_late:
-        recommendations.append(f"Kun oxiridagi {len(due_late)} ta vazifani hozirdanoq follow-upga qo'ying.")
-    upcoming_meetings = [
-        m for m in meetings
-        if (dt := _parse_dt_safe(m.get("datetime_start"))) and dt >= now
-    ]
-    if upcoming_meetings:
-        recommendations.append(f"Keyingi uchrashuvdan oldin prep briefni ko'rib chiqing: «{_truncate(upcoming_meetings[0]['title'], 45)}».")
-    if overdue:
-        recommendations.append("Muddati o'tgan vazifalarni yo yoping, yo yangi deadline bilan qayta rejalashtiring.")
-    if len(done_today) == 0 and tasks:
-        recommendations.append("Kun boshida bitta tez yopiladigan vazifani tanlab, momentum yarating.")
-    if len(recommendations) < 3:
-        recommendations.append("Har bir Muhim vazifa uchun keyingi aniq qadamni belgilang.")
-    if len(recommendations) < 4:
-        recommendations.append("Kunning oxirida /stats orqali bajarilish va risk holatini tekshiring.")
-    return recommendations
 
 
 def _today_inline_keyboard(today_tasks: list[dict] | None = None) -> InlineKeyboardMarkup | None:
@@ -1656,7 +1853,10 @@ async def cb_setting_reminders(query: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("meetremind:"))
 async def cb_meet_remind(query: CallbackQuery) -> None:
-    mins = int(query.data.split(":", 1)[1])
+    mins = _cb_int(query.data, default=15)
+    if mins <= 0 or mins > 24 * 60:
+        await query.answer("Noto'g'ri qiymat")
+        return
     await database.set_setting("meeting_reminder_min", mins)
     await _apply_reminder_settings_live()
     await query.answer(f"Uchrashuv eslatmasi: {mins} daq oldin ✓")
@@ -1664,7 +1864,10 @@ async def cb_meet_remind(query: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("taskremind:"))
 async def cb_task_remind(query: CallbackQuery) -> None:
-    hrs = int(query.data.split(":", 1)[1])
+    hrs = _cb_int(query.data, default=2)
+    if hrs <= 0 or hrs > 168:
+        await query.answer("Noto'g'ri qiymat")
+        return
     await database.set_setting("task_reminder_hours", hrs)
     await _apply_reminder_settings_live()
     await query.answer(f"Vazifa eslatmasi: {hrs} soat oldin ✓")
@@ -2489,8 +2692,12 @@ async def cb_task_search(query: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(StateFilter(TaskSearchFSM.awaiting_query), F.text)
+@router.message(StateFilter(TaskSearchFSM.awaiting_query), F.text | F.voice)
 async def handle_task_search(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     await state.clear()
     query = message.text.strip()
     if not query:
@@ -2501,8 +2708,12 @@ async def handle_task_search(message: Message, state: FSMContext) -> None:
     await _safe_answer(message, text, parse_mode="Markdown", reply_markup=tasks_compact_keyboard(found, "search"))
 
 
-@router.message(StateFilter(ReminderSearchFSM.awaiting_query), F.text)
+@router.message(StateFilter(ReminderSearchFSM.awaiting_query), F.text | F.voice)
 async def handle_reminder_search(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     await state.clear()
     query = message.text.strip()
     if not query:
@@ -2639,8 +2850,12 @@ async def cb_reminder_edit(query: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(StateFilter(ReminderEditFSM.awaiting_value), F.text)
+@router.message(StateFilter(ReminderEditFSM.awaiting_value), F.text | F.voice)
 async def handle_reminder_edit_value(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     data = await state.get_data()
     rid = data.get("reminder_id")
     field = data.get("field")
@@ -2707,10 +2922,8 @@ def _format_meeting_card(m: dict, show_date: bool = False) -> str:
 
     # Time range label
     try:
-        dt = datetime.fromisoformat(m["datetime_start"]).astimezone(database.TZ)
         time_start = _meeting_time_label(m.get("datetime_start") or "", with_past_marker=True)
     except (ValueError, TypeError):
-        dt = None
         time_start = m.get("datetime_start") or "—"
     end_iso = m.get("datetime_end")
     end_clock = ""
@@ -2738,7 +2951,8 @@ def _format_meeting_card(m: dict, show_date: bool = False) -> str:
 
     # Protocol: stored in follow_up_actions (JSON list of strings, see Phase 7).
     fu = m.get("follow_up_actions") or []
-    protocol_status = "tayyor" if (fu if isinstance(fu, list) and fu else (isinstance(fu, str) and fu.strip())) else "yo'q"
+    has_protocol = (isinstance(fu, list) and bool(fu)) or (isinstance(fu, str) and bool(fu.strip()))
+    protocol_status = "tayyor" if has_protocol else "yo'q"
 
     # iCloud sync indicator: only meaningful when iCloud is enabled for this deployment.
     icloud_row: list[str] = []
@@ -3077,8 +3291,12 @@ async def cb_meeting_search(query: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.message(StateFilter(MeetingSearchFSM.awaiting_query), F.text)
+@router.message(StateFilter(MeetingSearchFSM.awaiting_query), F.text | F.voice)
 async def handle_meeting_search(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     await state.clear()
     query = message.text.strip()
     if not query:
@@ -3185,8 +3403,12 @@ async def _run_meeting_followup_extraction(message: Message, meeting: dict, note
     await _safe_answer(message, text, parse_mode="Markdown", reply_markup=tasks_compact_keyboard([]))
 
 
-@router.message(StateFilter(MeetingFollowupFSM.awaiting_notes), F.text)
+@router.message(StateFilter(MeetingFollowupFSM.awaiting_notes), F.text | F.voice)
 async def handle_meeting_followup_text(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     data = await state.get_data()
     await state.clear()
     meeting = await database.get_meeting(data.get("meeting_id", ""))
@@ -3256,14 +3478,20 @@ async def cmd_insights(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("insight_accept:"))
 async def cb_insight_accept(query: CallbackQuery) -> None:
-    insight_id = int(query.data.split(":", 1)[1])
+    insight_id = _cb_int(query.data, default=0)
+    if insight_id <= 0:
+        await query.answer()
+        return
     await database.mark_insight_action(insight_id, "accepted")
     await query.answer("Qabul qilindi ✓ Bot bunday tavsiyalarni ko'proq taklif qiladi.")
 
 
 @router.callback_query(F.data.startswith("insight_dismiss:"))
 async def cb_insight_dismiss(query: CallbackQuery) -> None:
-    insight_id = int(query.data.split(":", 1)[1])
+    insight_id = _cb_int(query.data, default=0)
+    if insight_id <= 0:
+        await query.answer()
+        return
     await database.mark_insight_action(insight_id, "dismissed")
     await query.answer("Yopildi. Bunday tavsiyalar kamayadi.")
 
@@ -3345,7 +3573,7 @@ async def _generate_proactive_insights(limit: int = 5) -> list[dict]:
         insights.append({
             "type": "plan_followup",
             "title": "📋 Reja qanday o'tdi?",
-            "body": f"2 kun oldin reja qabul qildingiz. Bajarildimi? Ko'rib chiqaylik.",
+            "body": "2 kun oldin reja qabul qildingiz. Bajarildimi? Ko'rib chiqaylik.",
             "payload": {"plan_id": oldest_plan["id"]},
         })
 
@@ -3664,8 +3892,12 @@ async def cmd_plan(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(StateFilter(PlanFSM.awaiting_situation), F.text)
+@router.message(StateFilter(PlanFSM.awaiting_situation), F.text | F.voice)
 async def handle_plan_situation_text(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     await state.clear()
     await _run_planning_session(message, message.text)
 
@@ -3818,7 +4050,9 @@ async def cmd_stats(message: Message, state: FSMContext | None = None) -> None:
 
 @router.callback_query(F.data.startswith("stats_period:"))
 async def cb_stats_period(query: CallbackQuery) -> None:
-    days = int(query.data.split(":", 1)[1])
+    days = _cb_int(query.data, default=7)
+    if days not in (1, 7, 30):
+        days = 7
     label = {1: "Bugun", 7: "Oxirgi 7 kun", 30: "Oxirgi 30 kun"}.get(days, "Oxirgi 7 kun")
     await query.answer()
     stats = await database.executive_stats(days=days)
@@ -3843,7 +4077,9 @@ async def cmd_report(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("report_period:"))
 async def cb_report_period(query: CallbackQuery) -> None:
-    days = int(query.data.split(":", 1)[1])
+    days = _cb_int(query.data, default=7)
+    if days not in (7, 30):
+        days = 7
     label = {7: "Oxirgi 7 kun", 30: "Oxirgi 30 kun"}.get(days, "Oxirgi 7 kun")
     await query.answer()
     stats = await database.executive_stats(days=days)
@@ -4639,8 +4875,12 @@ async def cb_search_cancel(query: CallbackQuery, state: FSMContext) -> None:
         pass
 
 
-@router.message(StateFilter(GlobalSearchFSM.awaiting_query), F.text)
+@router.message(StateFilter(GlobalSearchFSM.awaiting_query), F.text | F.voice)
 async def handle_global_search(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     await state.clear()
     q = (message.text or "").strip()
     if not q or q.startswith("/"):
@@ -4719,9 +4959,7 @@ async def handle_global_search(message: Message, state: FSMContext) -> None:
         lines.append("🤝 **UCHRASHUVLAR**")
         lines.append("")
         nums: list[InlineKeyboardButton] = []
-        offset = min(len(tasks), 8)
         for i, m in enumerate(meetings[:5], start=1):
-            display_idx = offset + i  # avoid collision with task numbers in UI
             try:
                 dt = datetime.fromisoformat(m["datetime_start"]).astimezone(database.TZ)
                 when_label = dt.strftime("%d-%m %H:%M")
@@ -4866,8 +5104,12 @@ async def _newtask_start(message: Message, state: FSMContext) -> None:
     await _safe_answer(message, text, parse_mode="Markdown", reply_markup=kb)
 
 
-@router.message(StateFilter(NewTaskFSM.awaiting_title), F.text)
+@router.message(StateFilter(NewTaskFSM.awaiting_title), F.text | F.voice)
 async def newtask_title(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     title = (message.text or "").strip()
     if not title or title.startswith("/"):
         await message.answer("Sarlavha bo'sh bo'lmasin. Iltimos, qaytadan yuboring.")
@@ -4991,8 +5233,12 @@ async def newtask_deadline(query: CallbackQuery, state: FSMContext) -> None:
                             reply_markup=_newtask_assignee_kb())
 
 
-@router.message(StateFilter(NewTaskFSM.awaiting_deadline_manual), F.text)
+@router.message(StateFilter(NewTaskFSM.awaiting_deadline_manual), F.text | F.voice)
 async def newtask_deadline_manual(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     deadline_iso = await _parse_deadline_natural((message.text or "").strip())
     if not deadline_iso:
         await _safe_answer(
@@ -5026,8 +5272,12 @@ async def newtask_assignee_btn(query: CallbackQuery, state: FSMContext) -> None:
     await query.answer()
 
 
-@router.message(StateFilter(NewTaskFSM.awaiting_assignee), F.text)
+@router.message(StateFilter(NewTaskFSM.awaiting_assignee), F.text | F.voice)
 async def newtask_assignee_text(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     name = (message.text or "").strip()
     if not name or name.startswith("/"):
         await message.answer("Ism bo'sh bo'lmasin. Qaytadan yuboring yoki tugma bosing.",
@@ -5199,8 +5449,12 @@ async def _newreminder_start(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(StateFilter(NewReminderFSM.awaiting_title), F.text)
+@router.message(StateFilter(NewReminderFSM.awaiting_title), F.text | F.voice)
 async def newreminder_title(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     title = (message.text or "").strip()
     if not title or title.startswith("/"):
         await message.answer("Eslatma matni bo'sh bo'lmasin. Qaytadan yuboring.")
@@ -5276,8 +5530,12 @@ async def newreminder_time(query: CallbackQuery, state: FSMContext) -> None:
                            parse_mode="Markdown", reply_markup=_newreminder_repeat_kb())
 
 
-@router.message(StateFilter(NewReminderFSM.awaiting_time_manual), F.text)
+@router.message(StateFilter(NewReminderFSM.awaiting_time_manual), F.text | F.voice)
 async def newreminder_time_manual(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     remind_at = await _parse_deadline_natural((message.text or "").strip())
     if not remind_at:
         await _safe_answer(
@@ -6194,8 +6452,12 @@ async def handle_back_to_main(message: Message, state: FSMContext) -> None:
     await _restore_main_keyboard(message)
 
 
-@router.message(StateFilter(SectionFSM.in_tasks), F.text)
+@router.message(StateFilter(SectionFSM.in_tasks), F.text | F.voice)
 async def handle_tasks_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Vazifalar bo'limidagi reply tugmalari (state == in_tasks)."""
     label = message.text.strip()
     if label in _TASKS_SECTION_FILTERS:
@@ -6224,8 +6486,12 @@ async def handle_tasks_section_button(message: Message, state: FSMContext) -> No
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_reminders), F.text)
+@router.message(StateFilter(SectionFSM.in_reminders), F.text | F.voice)
 async def handle_reminders_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Eslatmalar bo'limidagi reply tugmalari."""
     label = message.text.strip()
     if label in _REMINDERS_SECTION_FILTERS:
@@ -6245,8 +6511,12 @@ async def handle_reminders_section_button(message: Message, state: FSMContext) -
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_meetings), F.text)
+@router.message(StateFilter(SectionFSM.in_meetings), F.text | F.voice)
 async def handle_meetings_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Uchrashuvlar bo'limidagi reply tugmalari (state == in_meetings)."""
     label = message.text.strip()
     if label in _MEETINGS_SECTION_FILTERS:
@@ -6265,8 +6535,12 @@ async def handle_meetings_section_button(message: Message, state: FSMContext) ->
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_stats), F.text)
+@router.message(StateFilter(SectionFSM.in_stats), F.text | F.voice)
 async def handle_stats_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Statistika bo'limidagi reply tugmalari (state == in_stats)."""
     label = message.text.strip()
     if label in _STATS_SECTION_PERIODS:
@@ -6291,8 +6565,12 @@ async def handle_stats_section_button(message: Message, state: FSMContext) -> No
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_team), F.text)
+@router.message(StateFilter(SectionFSM.in_team), F.text | F.voice)
 async def handle_team_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Ijrochilar bo'limidagi reply tugmalari (state == in_team)."""
     label = message.text.strip()
     if label == YBTN_TEAM_REFRESH:
@@ -6315,8 +6593,12 @@ async def handle_team_section_button(message: Message, state: FSMContext) -> Non
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_risks), F.text)
+@router.message(StateFilter(SectionFSM.in_risks), F.text | F.voice)
 async def handle_risks_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Risklar bo'limidagi reply tugmalari (state == in_risks)."""
     label = message.text.strip()
     if label == RBTN_RISKS_REFRESH:
@@ -6324,8 +6606,12 @@ async def handle_risks_section_button(message: Message, state: FSMContext) -> No
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_today), F.text)
+@router.message(StateFilter(SectionFSM.in_today), F.text | F.voice)
 async def handle_today_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Bugun bo'limidagi reply tugmalari (state == in_today)."""
     label = message.text.strip()
     if label == DBTN_TODAY_EVENING:
@@ -6358,8 +6644,12 @@ async def handle_today_section_button(message: Message, state: FSMContext) -> No
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_new), F.text)
+@router.message(StateFilter(SectionFSM.in_new), F.text | F.voice)
 async def handle_new_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Yangi bo'limidagi reply tugmalari (state == in_new)."""
     label = message.text.strip()
     prompts = {
@@ -6381,8 +6671,12 @@ async def handle_new_section_button(message: Message, state: FSMContext) -> None
     await _process_and_reply(message, message.text)
 
 
-@router.message(StateFilter(SectionFSM.in_search), F.text)
+@router.message(StateFilter(SectionFSM.in_search), F.text | F.voice)
 async def handle_search_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Qidiruv bo'limidagi reply tugmalari (state == in_search).
     Scope tugmasi tanlanmasa, matn to'g'ridan-to'g'ri qidiruv so'zi sifatida ishlatiladi.
     """
@@ -6430,8 +6724,12 @@ async def handle_search_section_button(message: Message, state: FSMContext) -> N
                        parse_mode="Markdown")
 
 
-@router.message(StateFilter(SectionFSM.in_settings), F.text)
+@router.message(StateFilter(SectionFSM.in_settings), F.text | F.voice)
 async def handle_settings_section_button(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """Sozlamalar bo'limidagi reply tugmalari (state == in_settings)."""
     label = message.text.strip()
     if label == GBTN_SETTINGS_NOTIFY:
@@ -6505,7 +6803,9 @@ async def _delete_if_possible(message: Message | None) -> None:
         return
     try:
         await message.delete()
-    except Exception:
+    except TelegramBadRequest:
+        # Message too old / already deleted / not modifiable — benign.
+        # Narrow except prevents masking unexpected errors (network, programming).
         pass
 
 
@@ -6737,8 +7037,12 @@ async def cb_clear_assignee(query: CallbackQuery, state: FSMContext) -> None:
             pass
 
 
-@router.message(StateFilter(AssigneeFSM.awaiting_name), F.text)
+@router.message(StateFilter(AssigneeFSM.awaiting_name), F.text | F.voice)
 async def handle_assignee_input(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     data = await state.get_data()
     tid = data.get("task_id")
     if not tid:
@@ -6830,7 +7134,7 @@ async def cb_move(query: CallbackQuery) -> None:
     else:
         new_dt = datetime.now(database.TZ) + timedelta(days=7)
     await database.update_task(tid, {"deadline": new_dt.isoformat()})
-    await query.answer(f"Vazifa keyingi haftaga ko'chirildi ✓")
+    await query.answer("Vazifa keyingi haftaga ko'chirildi ✓")
     updated = await database.get_task(tid)
     if updated:
         try:
@@ -6953,7 +7257,7 @@ async def _apply_reschedule(mid: str, new_start: datetime) -> dict | None:
 
     # iCloud re-sync (background — delete old event, push new one)
     if config.ICLOUD_ENABLED:
-        asyncio.create_task(_resync_meeting_to_icloud(mid))
+        _spawn_background(_resync_meeting_to_icloud(mid), name=f"icloud_resync:{mid}")
 
     return await database.get_meeting(mid)
 
@@ -7272,7 +7576,7 @@ async def handle_meeting_edit_value(message: Message, state: FSMContext, bot: Bo
 
     await database.update_meeting(mid, update_data)
     if config.ICLOUD_ENABLED:
-        asyncio.create_task(_resync_meeting_to_icloud(mid))
+        _spawn_background(_resync_meeting_to_icloud(mid), name=f"icloud_resync:{mid}")
 
     updated = await database.get_meeting(mid)
     if not updated:
@@ -7280,7 +7584,7 @@ async def handle_meeting_edit_value(message: Message, state: FSMContext, bot: Bo
         return
     await _safe_answer(
         message,
-        f"✓ Yangilandi.\n\n" + _format_meeting_card(updated, show_date=True),
+        "✓ Yangilandi.\n\n" + _format_meeting_card(updated, show_date=True),
         parse_mode="Markdown",
         reply_markup=meeting_inline_actions(updated),
     )
@@ -7311,7 +7615,7 @@ async def cb_meeting_duration(query: CallbackQuery) -> None:
     new_end = start + timedelta(minutes=minutes)
     await database.update_meeting(mid, {"datetime_end": new_end.isoformat()})
     if config.ICLOUD_ENABLED:
-        asyncio.create_task(_resync_meeting_to_icloud(mid))
+        _spawn_background(_resync_meeting_to_icloud(mid), name=f"icloud_resync:{mid}")
     updated = await database.get_meeting(mid)
     await query.answer(f"✓ Davomiylik {minutes} daq ga o'zgartirildi")
     if updated:
@@ -7902,8 +8206,12 @@ async def cb_edit_cancel(query: CallbackQuery, state: FSMContext) -> None:
             pass
 
 
-@router.message(StateFilter(TaskEditFSM.awaiting_value), F.text)
+@router.message(StateFilter(TaskEditFSM.awaiting_value), F.text | F.voice)
 async def handle_edit_value(message: Message, state: FSMContext) -> None:
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+
     """User typed a new value while editing. Apply and exit FSM."""
     data = await state.get_data()
     tid = data.get("task_id")
@@ -7945,15 +8253,20 @@ async def _parse_deadline_natural(text: str) -> str | None:
     now = datetime.now(database.TZ)
 
     # 0) Relative: "15 daqiqa", "2 soat", "2 soatdan keyin"
-    m = re.match(r"^(\d{1,3})\s*(daq|daqiqa|daqiqadan|min|minut)\b", text)
+    # Cap at 7 days so absurd inputs like "999 daqiqa" don't quietly schedule
+    # tasks 16 hours out (or worse, "99 soat" → 4 days). Anything bigger should
+    # use an explicit date.
+    MAX_RELATIVE_MINUTES = 7 * 24 * 60
+    MAX_RELATIVE_HOURS = 7 * 24
+    m = re.match(r"^(\d{1,4})\s*(daq|daqiqa|daqiqadan|min|minut)\b", text)
     if m:
         minutes = int(m.group(1))
-        if minutes > 0:
+        if 0 < minutes <= MAX_RELATIVE_MINUTES:
             return (now + timedelta(minutes=minutes)).replace(second=0, microsecond=0).isoformat()
-    m = re.match(r"^(\d{1,2})\s*(soat|soatdan|hour|h)\b", text)
+    m = re.match(r"^(\d{1,3})\s*(soat|soatdan|hour|h)\b", text)
     if m:
         hours = int(m.group(1))
-        if hours > 0:
+        if 0 < hours <= MAX_RELATIVE_HOURS:
             return (now + timedelta(hours=hours)).replace(second=0, microsecond=0).isoformat()
 
     # 1) ISO-ish: 2026-05-25 14:30 or 2026-05-25T14:30
@@ -8144,3 +8457,83 @@ async def handle_inline_query(query: InlineQuery) -> None:
         ))
 
     await query.answer(results=results, cache_time=2, is_personal=True)
+
+
+# ─────────────────────── FALLBACK HANDLERS (last-resort) ───────────────────────
+# These MUST be registered last — aiogram dispatches in registration order,
+# so state-specific handlers win when they match. Anything that falls through
+# (unexpected content type, message in a state with no matching handler,
+# edited messages) lands here instead of silently disappearing.
+
+
+@router.edited_message()
+async def handle_edited_message(message: Message) -> None:
+    """Telegram delivers message edits as `edited_message` updates. Without
+    this handler they vanish — user thinks the bot saw their edit when it
+    didn't. Reply with explicit guidance so they re-send."""
+    await message.answer(
+        "✏️ Tahrir qilingan xabarlar qabul qilinmaydi. "
+        "Yangi xabar (matn yoki ovoz) yuboring."
+    )
+
+
+@router.message(F.voice)
+async def handle_voice_fallback(message: Message, bot: Bot, state: FSMContext) -> None:
+    """Catches voice messages in states whose specific handler is text-only.
+    Transcribes, then re-emits the transcript as if the user typed it by
+    re-dispatching through the router. Without this, voice in any non-
+    default, non-meeting state vanishes."""
+    transcript = await _get_text_or_transcribe(message, bot)
+    if transcript is None:
+        return
+    # message.text was just patched in-place by the helper above. Now do the
+    # equivalent of the default_state voice handler: send the voice-confirm
+    # prompt only if we're in default_state. In other states, the handler
+    # that would have caught this text directly didn't run because aiogram
+    # already chose this fallback — so we either route through Claude or
+    # echo a recovery hint. Default state → confirm; else → Claude direct.
+    current = await state.get_state()
+    if current is None:
+        await _send_voice_confirm_prompt(message, state, transcript)
+    else:
+        # Voice arrived inside an FSM state that didn't claim it. Best UX:
+        # treat the transcript as a free-form message to Claude (same as
+        # text would in a section state's fall-through branch).
+        await _process_and_reply(message, transcript)
+
+
+@router.message(F.photo | F.document | F.video | F.video_note | F.sticker | F.animation | F.audio)
+async def handle_unsupported_attachment(message: Message) -> None:
+    """Polite "not yet supported" instead of silent drop for media types the
+    bot has no handler for. Helps the user know the bot is alive and what
+    DOES work."""
+    kind = (
+        "rasm" if message.photo else
+        "hujjat" if message.document else
+        "video" if message.video else
+        "video-xabar" if message.video_note else
+        "stiker" if message.sticker else
+        "animatsiya" if message.animation else
+        "audio fayl" if message.audio else
+        "fayl"
+    )
+    await message.answer(
+        f"📎 Hozircha {kind} qabul qila olmayman. "
+        "Matn yoki ovoz xabari yuboring."
+    )
+
+
+@router.message()
+async def handle_unmatched_message(message: Message) -> None:
+    """Last-resort catch-all for anything that didn't match a more specific
+    handler (unexpected content type, lingering FSM state with no matching
+    filter, etc). Without this the message vanishes and the user has no
+    idea what went wrong."""
+    await message.answer(
+        "🤔 Bu xabarni tushuna olmadim.\n\n"
+        "• Matn yoki ovoz xabari yuboring\n"
+        "• `/cancel` — joriy amalni bekor qilish\n"
+        "• `/help` — qo'llanma\n"
+        "• `/start` — boshidan boshlash",
+        parse_mode="Markdown",
+    )

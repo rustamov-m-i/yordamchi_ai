@@ -11,10 +11,17 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from caldav.lib.error import AuthorizationError, NotFoundError
+
 import calendar_service
 import claude_service
 import config
 import database
+
+# Errors that mean "this iCloud operation will never succeed without manual
+# intervention" — auth failure, deleted calendar, etc. We mark these dead
+# immediately instead of burning the full 5-attempt backoff sequence.
+_ICLOUD_PERMANENT_ERRORS = (AuthorizationError, NotFoundError, PermissionError)
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +39,29 @@ class YordamchiScheduler:
         self.scheduler = AsyncIOScheduler(timezone=config.TIMEZONE)
         self.meeting_reminder_min = 15
         self.task_reminder_hours = 2
+        # Lazy-imported once and cached; sentinel False means "import attempted
+        # and failed" so we don't retry the (expensive, log-spamming) import
+        # on every 5-minute sweep.
+        self._meeting_prep_generator: object = None
         global _instance
         _instance = self
+
+    def _get_meeting_prep_generator(self):
+        """Return _generate_meeting_prep coroutine factory, or None if it
+        can't be imported. Caches both success and failure to avoid retrying
+        a broken import on every sweep."""
+        if self._meeting_prep_generator is False:
+            return None
+        if self._meeting_prep_generator is not None:
+            return self._meeting_prep_generator
+        try:
+            from handlers import _generate_meeting_prep
+        except Exception:
+            logger.exception("Cannot import meeting prep generator (caching failure)")
+            self._meeting_prep_generator = False
+            return None
+        self._meeting_prep_generator = _generate_meeting_prep
+        return _generate_meeting_prep
 
     @staticmethod
     def _parse_hhmm(value: str, default: tuple[int, int]) -> tuple[int, int]:
@@ -113,6 +141,16 @@ class YordamchiScheduler:
             replace_existing=True,
             next_run_time=datetime.now(database.TZ) + timedelta(hours=1),
         )
+        # Hourly conversation_history trim. claude_service.process_message already
+        # trims on each call, but during long silences (overnight, weekends) the
+        # table can drift; this guarantees an upper bound regardless of activity.
+        self.scheduler.add_job(
+            self._trim_history_sweep,
+            IntervalTrigger(hours=1),
+            id="trim_history",
+            replace_existing=True,
+            next_run_time=datetime.now(database.TZ) + timedelta(minutes=10),
+        )
 
         if config.ICLOUD_ENABLED:
             self.scheduler.add_job(
@@ -156,8 +194,12 @@ class YordamchiScheduler:
         except (ValueError, TypeError):
             logger.warning("Cannot schedule reminder: invalid datetime %r", meeting_start_iso)
             return
+        # Aware inputs from other zones get converted, not relabeled — calling
+        # localize() on an already-aware dt would shift wall-clock by the offset.
         if start.tzinfo is None:
             start = database.TZ.localize(start)
+        else:
+            start = start.astimezone(database.TZ)
         lead_minutes = max(1, int(getattr(self, "meeting_reminder_min", 15) or 15))
         fire_at = start - timedelta(minutes=lead_minutes)
         if fire_at <= datetime.now(database.TZ):
@@ -275,12 +317,17 @@ class YordamchiScheduler:
             await self._send(text)
 
     async def _fire_meeting_reminder(self, meeting_id: str, lead_minutes: int | None = None) -> None:
-        """Single-meeting reminder. Scheduled at create-time."""
+        """Single-meeting reminder. Scheduled at create-time.
+        Claims the reminder slot BEFORE sending — if a parallel sweep already
+        claimed it (e.g. multi-instance bot), we silently skip instead of
+        double-notifying the user."""
         meeting = await database.get_meeting(meeting_id)
         if not meeting:
             logger.info("Meeting %s no longer exists, skipping reminder", meeting_id)
             return
         if meeting.get("reminded_at"):
+            return
+        if not await database.mark_meeting_reminded(meeting_id):
             return
         try:
             dt = datetime.fromisoformat(meeting["datetime_start"]).astimezone(database.TZ)
@@ -301,33 +348,37 @@ class YordamchiScheduler:
         lead_label = lead_minutes or self.meeting_reminder_min
         text_lines[0] = f"📞 **{lead_label} daqiqa qoldi: {meeting['title']}**"
         await self._send("\n".join(text_lines))
-        await database.mark_meeting_reminded(meeting_id)
 
     async def _meeting_prep_sweep(self) -> None:
-        """Send a prep brief once for meetings starting in the next hour."""
+        """Send a prep brief once for meetings starting in the next hour.
+        Claims each meeting BEFORE generating prep — if a sibling sweep already
+        claimed it, we skip immediately and avoid both the duplicate Claude call
+        and the duplicate notification."""
         meetings = await database.list_meetings_needing_prep(window_minutes=60)
         if not meetings:
             return
-        try:
-            from handlers import _generate_meeting_prep
-        except Exception:
-            logger.exception("Cannot import meeting prep generator")
+        gen = self._get_meeting_prep_generator()
+        if gen is None:
             return
         for meeting in meetings[:3]:
+            if not await database.mark_meeting_prep_sent(meeting["id"]):
+                continue
             try:
-                text = await _generate_meeting_prep(meeting)
+                text = await gen(meeting)
                 kb = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="📝 Keyin action items", callback_data=f"meeting_followup:{meeting['id']}")
                 ]])
                 await self._send(text, reply_markup=kb)
-                await database.mark_meeting_prep_sent(meeting["id"])
             except Exception:
                 logger.exception("Meeting prep sweep failed for %s", meeting.get("id"))
 
     async def _post_meeting_followup_sweep(self) -> None:
-        """Ask for notes after a meeting so action items don't evaporate."""
+        """Ask for notes after a meeting so action items don't evaporate.
+        Claims first to avoid duplicate prompts across overlapping sweeps."""
         meetings = await database.list_meetings_needing_followup(min_age_minutes=30, max_age_hours=24)
         for meeting in meetings[:3]:
+            if not await database.mark_meeting_followup_sent(meeting["id"]):
+                continue
             try:
                 kb = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="📝 Action items chiqarish", callback_data=f"meeting_followup:{meeting['id']}")
@@ -337,7 +388,6 @@ class YordamchiScheduler:
                     "Uchrashuvdan keyingi qisqa yozuv yoki ovoz yuborsangiz, action itemlarni tasklarga ajrataman.",
                     reply_markup=kb,
                 )
-                await database.mark_meeting_followup_sent(meeting["id"])
             except Exception:
                 logger.exception("Post-meeting follow-up sweep failed for %s", meeting.get("id"))
 
@@ -373,6 +423,16 @@ class YordamchiScheduler:
             await self._send(text)
         except Exception:
             logger.exception("Proactive insight sweep failed")
+
+    async def _trim_history_sweep(self) -> None:
+        """Bound conversation_history regardless of LLM activity. Without this
+        the table only shrinks when a Claude call runs (claude_service.process_message
+        calls trim_history at the end). During multi-day silences the table can
+        accumulate stale rows from background internal-directive calls."""
+        try:
+            await database.trim_history(keep=200)
+        except Exception:
+            logger.exception("trim_history sweep failed")
 
     async def _icloud_sync(self) -> None:
         """Pull next-30-days events from iCloud into local DB."""
@@ -435,6 +495,15 @@ class YordamchiScheduler:
                     logger.warning("Unknown retry operation: %s", op)
                     await database.mark_icloud_retry_success(item["id"])  # drop unknown ops
                     succeeded += 1
+            except _ICLOUD_PERMANENT_ERRORS as e:
+                # Auth/permission/not-found are not transient. Retrying 4 more
+                # times with backoff just delays the alert without fixing it.
+                logger.error(
+                    "iCloud permanent failure on retry %s (op=%s) — marking dead: %s",
+                    item["id"], item.get("operation"), e,
+                )
+                await database.mark_icloud_retry_dead(item["id"], f"{type(e).__name__}: {e}")
+                failed += 1
             except Exception as e:
                 logger.exception("iCloud retry sweep item failed")
                 await database.mark_icloud_retry_failure(item["id"], f"{type(e).__name__}: {e}")
@@ -458,6 +527,9 @@ class YordamchiScheduler:
             self.schedule_meeting_reminder(meeting["id"], meeting["datetime_start"])
 
     async def _task_reminder_sweep(self) -> None:
+        """Claim-then-notify: atomic mark_task_reminded acts as a lock token so
+        overlapping sweeps (multi-instance / restart-overlap) cannot deliver
+        the same reminder twice."""
         now = datetime.now(database.TZ)
         settings = await database.get_settings()
         try:
@@ -471,6 +543,8 @@ class YordamchiScheduler:
         # Raw P0/P1 kodlari foydalanuvchiga ko'rinmasin — Uzbek labellarda chiqaramiz.
         priority_uz = {"P0": "Shoshilinch", "P1": "Muhim", "P2": "Rejadagi", "P3": "Oddiy"}
         for task in due_soon:
+            if not await database.mark_task_reminded(task["id"]):
+                continue
             deadline = task.get("deadline", "")
             try:
                 dt = datetime.fromisoformat(deadline)
@@ -483,14 +557,17 @@ class YordamchiScheduler:
                 f"• Muddat: {deadline_str}\n"
                 f"• Ustuvorlik: {pri_label}"
             )
-            await database.mark_task_reminded(task["id"])
 
     async def _reminder_sweep(self) -> None:
+        """mark_reminder_sent is the atomic claim — if it returns False the
+        reminder was already handled by a sibling sweep, so we skip the send."""
         due = await database.list_due_reminders(limit=20)
         if not due:
             return
         for reminder in due:
             try:
+                if not await database.mark_reminder_sent(reminder["id"]):
+                    continue
                 remind_at = reminder.get("remind_at", "")
                 try:
                     dt = datetime.fromisoformat(remind_at).astimezone(database.TZ)
@@ -523,6 +600,5 @@ class YordamchiScheduler:
                     }
                     lines.append(f"• Takror: {labels.get(reminder['recurrence_rule'], reminder['recurrence_rule'])}")
                 await self._send("\n".join(lines), reply_markup=kb)
-                await database.mark_reminder_sent(reminder["id"])
             except Exception:
                 logger.exception("Reminder sweep failed for %s", reminder.get("id"))

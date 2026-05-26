@@ -15,7 +15,6 @@ API contract (Muxlisa v2):
   Response: {"text": "<transcript>"}
 """
 
-import asyncio
 import hashlib
 import io
 import logging
@@ -38,6 +37,11 @@ logger = logging.getLogger(__name__)
 MAX_AUDIO_BYTES = 5 * 1024 * 1024  # 5 MB hard limit
 MUXLISA_TIMEOUT = 45.0
 WHISPER_TIMEOUT = 45.0
+
+# Heuristic silence cutoff in bytes. An Ogg/Opus voice message of <2KB is
+# almost always silence/click — Telegram's minimum recordable audio is
+# ~3KB. Below this we skip the (paid) STT round-trip entirely.
+_SILENCE_BYTES_THRESHOLD = 2 * 1024
 
 _CA_BUNDLE = certifi.where()
 
@@ -208,6 +212,16 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg", language: 
         await database.log_llm_call(
             "muxlisa", "stt-v2", "voice_transcribe",
             None, len(audio_bytes), None, None, error="size_limit",
+        )
+        return None
+    # Skip silent/empty clips before paying for an STT round-trip. A real
+    # Telegram voice message is at least a few KB; anything below that is
+    # almost certainly an accidental tap or empty recording.
+    if len(audio_bytes) < _SILENCE_BYTES_THRESHOLD:
+        logger.info("Audio skipped: %d bytes below silence threshold", len(audio_bytes))
+        await database.log_llm_call(
+            "muxlisa", "stt-v2", "voice_transcribe",
+            None, len(audio_bytes), None, None, error="silence_skip",
         )
         return None
 

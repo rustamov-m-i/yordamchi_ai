@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import caldav
-from caldav.lib.error import AuthorizationError, DAVError
+from caldav.lib.error import AuthorizationError
 from icalendar import Calendar, Event, vText
 
 import config

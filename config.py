@@ -36,7 +36,14 @@ TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")
 PRINCIPAL_USER_ID: int = _int("PRINCIPAL_USER_ID")
 
 ANTHROPIC_API_KEY: str = _require("ANTHROPIC_API_KEY")
+# Default model used for normal user-facing turns and most internal calls.
 CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6").strip()
+# Fast/cheap model used for short, low-stakes calls (voice transcript polish,
+# simple intent classification). ~70% cheaper than Sonnet.
+CLAUDE_MODEL_FAST: str = os.getenv("CLAUDE_MODEL_FAST", "claude-haiku-4-5").strip()
+# Premium model reserved for long-form planning and high-judgement directives
+# (executive_plan, check_followups). Used sparingly; ~5x cost of Sonnet.
+CLAUDE_MODEL_COMPLEX: str = os.getenv("CLAUDE_MODEL_COMPLEX", "claude-opus-4-7").strip()
 
 OPENAI_API_KEY: str = _require("OPENAI_API_KEY")
 WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-1").strip()
@@ -73,7 +80,7 @@ def _load_system_prompt() -> str:
     legacy = ROOT / "system_prompt.md"
     if legacy.exists():
         return legacy.read_text(encoding="utf-8")
-    sys.stderr.write(f"FATAL: no system_prompts/ directory and no legacy system_prompt.md\n")
+    sys.stderr.write("FATAL: no system_prompts/ directory and no legacy system_prompt.md\n")
     sys.exit(1)
 
 

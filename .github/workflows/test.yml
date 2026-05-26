@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install runtime + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Ruff (real bugs only — F-series)
+        run: ruff check . --exclude=venv,venv-win,__pycache__,tests --select=F
+
+      - name: Syntax check (all .py)
+        run: |
+          python -m py_compile bot.py config.py database.py handlers.py \
+            scheduler.py calendar_service.py claude_service.py \
+            voice_service.py redaction.py
+
+      - name: QA regression suite (no external APIs)
+        env:
+          # Dummy values so config.py imports succeed; tests that hit external
+          # APIs are skipped or use offline paths.
+          TELEGRAM_BOT_TOKEN: "ci-dummy-token"
+          PRINCIPAL_USER_ID: "1"
+          ANTHROPIC_API_KEY: "ci-dummy-key"
+          OPENAI_API_KEY: "ci-dummy-key"
+          DATABASE_PATH: "./data/ci.db"
+          TIMEZONE: "Asia/Tashkent"
+        run: |
+          mkdir -p data system_prompts
+          # Minimal system_prompt so config._load_system_prompt() succeeds.
+          test -d system_prompts && ls system_prompts/*.md 2>/dev/null || \
+            echo "# CI placeholder" > system_prompts/00_ci.md
+          python tests/qa_regression.py

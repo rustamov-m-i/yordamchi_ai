@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Optional
+from typing import AsyncIterator, Optional, Tuple
 
 from anthropic import (
     APIConnectionError,
@@ -24,6 +24,29 @@ import redaction
 logger = logging.getLogger(__name__)
 
 _client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY, timeout=60.0, max_retries=2)
+
+
+# Internal-directive keywords that signal complex reasoning and benefit from Opus.
+# Anything not on this list (and not explicitly forced via complexity="fast"|"complex")
+# uses the default CLAUDE_MODEL (Sonnet).
+_COMPLEX_DIRECTIVE_KEYWORDS = ("executive_plan", "check_followups", "risk_analysis")
+
+
+def _pick_model(complexity: Optional[str], internal_directive: Optional[str]) -> str:
+    """Route to the cheapest model that can do the job well.
+
+    Explicit `complexity` (fast/default/complex) wins. Otherwise auto-detect
+    from internal_directive keywords. Defaults to CLAUDE_MODEL (Sonnet) so
+    behaviour is unchanged for the common case."""
+    if complexity == "fast":
+        return config.CLAUDE_MODEL_FAST
+    if complexity == "complex":
+        return config.CLAUDE_MODEL_COMPLEX
+    if complexity == "default":
+        return config.CLAUDE_MODEL
+    if internal_directive and any(k in internal_directive for k in _COMPLEX_DIRECTIVE_KEYWORDS):
+        return config.CLAUDE_MODEL_COMPLEX
+    return config.CLAUDE_MODEL
 
 
 async def _build_state_block() -> str:
@@ -77,6 +100,40 @@ async def _build_state_block() -> str:
     return "\n".join(lines)
 
 
+_USER_MESSAGE_KEY_RE = re.compile(r'"user_message"\s*:\s*"')
+
+
+def _extract_partial_user_message(buf: str) -> Optional[str]:
+    """Best-effort extraction of the `user_message` value from a partial JSON
+    buffer produced by Anthropic's streaming response. Returns None if the
+    key hasn't appeared yet; otherwise returns whatever text has accumulated
+    inside the string so far (possibly empty, possibly mid-word).
+
+    Handles the common JSON escape sequences. If the buffer ends mid-escape
+    (last char is '\\\\'), the escape is held back for the next call."""
+    m = _USER_MESSAGE_KEY_RE.search(buf)
+    if not m:
+        return None
+    out: list[str] = []
+    i = m.end()
+    n = len(buf)
+    while i < n:
+        c = buf[i]
+        if c == "\\":
+            if i + 1 >= n:
+                break  # incomplete escape — wait for more data
+            nxt = buf[i + 1]
+            mapping = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"}
+            out.append(mapping.get(nxt, nxt))
+            i += 2
+            continue
+        if c == '"':
+            break  # end of user_message string
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _extract_json(text: str) -> Optional[dict]:
     """Robust JSON extraction. Strips code fences and finds the first valid JSON object."""
     text = text.strip()
@@ -112,21 +169,32 @@ def _fallback(user_message: str) -> dict:
 _FALLBACK_RESPONSE = _fallback("Texnik xato yuz berdi. Iltimos, qaytadan urinib ko'ring.")
 
 
-async def process_message(user_text: str, internal_directive: Optional[str] = None) -> dict:
+async def process_message(
+    user_text: str,
+    internal_directive: Optional[str] = None,
+    complexity: Optional[str] = None,
+) -> dict:
     """Send user input to Claude, return parsed JSON envelope.
 
     internal_directive: when invoked by scheduler (briefings, follow-ups) instead of by the user,
                         pass a system-style directive like "[INTERNAL] generate_morning_briefing".
+    complexity: optional override for the model router — "fast" (Haiku),
+                "default" (Sonnet), or "complex" (Opus). When omitted, the
+                router auto-picks based on internal_directive keywords.
     """
 
+    model = _pick_model(complexity, internal_directive)
     state_block = await _build_state_block()
 
     history = await database.recent_messages(limit=10)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
-    redacted_count = 0
+    # Redact PII for BOTH user messages and internal directives. Internal directives
+    # are generated server-side but may interpolate state (task titles, meeting
+    # agendas) that could contain redactable values (card numbers, IBANs) the
+    # principal entered earlier.
     if internal_directive:
-        outgoing_content = internal_directive
+        outgoing_content, redacted_count = redaction.redact(internal_directive)
         purpose = "internal:" + internal_directive[:40]
     else:
         outgoing_content, redacted_count = redaction.redact(user_text)
@@ -139,7 +207,7 @@ async def process_message(user_text: str, internal_directive: Optional[str] = No
     try:
         max_tokens = 4000 if internal_directive and "executive_plan" in internal_directive else 1500
         response = await _client.messages.create(
-            model=config.CLAUDE_MODEL,
+            model=model,
             max_tokens=max_tokens,
             system=[
                 {
@@ -155,51 +223,52 @@ async def process_message(user_text: str, internal_directive: Optional[str] = No
             messages=messages,
         )
     except RateLimitError:
-        logger.warning("Anthropic rate limited")
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="rate_limit")
+        logger.warning("Anthropic rate limited (model=%s)", model)
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="rate_limit")
         return _fallback("Juda ko'p so'rov. Bir-ikki daqiqadan keyin qayta urinib ko'ring.")
     except AuthenticationError:
         logger.exception("Anthropic auth failed — check ANTHROPIC_API_KEY")
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="auth")
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="auth")
         return _fallback("Claude kalit kalitida muammo. Administrator bilan bog'laning.")
     except BadRequestError as e:
         msg = str(e).lower()
         err_label = "credit_low" if ("credit" in msg or "balance" in msg or "billing" in msg) else "bad_request"
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error=err_label)
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error=err_label)
         if err_label == "credit_low":
             return _fallback("Claude balansi tugadi. Hisobni to'ldiring: https://console.anthropic.com/settings/billing")
         logger.exception("Anthropic bad request")
         return _fallback("Texnik xato (bad request). Iltimos, qaytadan urinib ko'ring.")
     except APITimeoutError:
-        logger.warning("Anthropic timeout")
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="timeout")
+        logger.warning("Anthropic timeout (model=%s)", model)
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="timeout")
         return _fallback("Javob kech keldi. Qaytadan urinib ko'ring.")
     except APIConnectionError:
         logger.warning("Anthropic connection error")
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="connection")
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="connection")
         return _fallback("Tarmoqqa ulanib bo'lmadi. Bir ozdan keyin qaytadan urinib ko'ring.")
     except APIStatusError as e:
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error=f"status_{e.status_code}")
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error=f"status_{e.status_code}")
         if getattr(e, "status_code", None) == 529:
             return _fallback("Claude vaqtincha band. Bir ozdan keyin qaytadan urinib ko'ring.")
         logger.exception("Anthropic API status error: %s", e.status_code)
         return _FALLBACK_RESPONSE
     except APIError:
         logger.exception("Anthropic API error")
-        await database.log_llm_call("anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="api_error")
+        await database.log_llm_call("anthropic", model, purpose, input_hash, input_chars, None, None, redacted_terms_count=redacted_count, error="api_error")
         return _FALLBACK_RESPONSE
 
     raw = response.content[0].text if response.content else ""
 
-    # Audit log — success path
+    # Audit log — success path. Log the model that was actually used (after
+    # router decision), not config.CLAUDE_MODEL, so cost analytics stay accurate.
     usage = getattr(response, "usage", None)
     in_tokens = getattr(usage, "input_tokens", 0) if usage else 0
     out_tokens = getattr(usage, "output_tokens", 0) if usage else 0
     cache_read = getattr(usage, "cache_read_input_tokens", 0) if usage else 0
     cache_creation = getattr(usage, "cache_creation_input_tokens", 0) if usage else 0
-    cost = redaction.estimate_cost(config.CLAUDE_MODEL, in_tokens, out_tokens, cache_read, cache_creation)
+    cost = redaction.estimate_cost(model, in_tokens, out_tokens, cache_read, cache_creation)
     await database.log_llm_call(
-        "anthropic", config.CLAUDE_MODEL, purpose, input_hash, input_chars,
+        "anthropic", model, purpose, input_hash, input_chars,
         in_tokens, out_tokens, cache_read, cache_creation,
         redacted_terms_count=redacted_count, estimated_cost_usd=cost,
     )
@@ -222,3 +291,108 @@ async def process_message(user_text: str, internal_directive: Optional[str] = No
         await database.trim_history(keep=30)
 
     return parsed
+
+
+# ──────────────────────── STREAMING (user-facing path only) ────────────────────────
+
+
+async def process_message_stream(
+    user_text: str,
+    complexity: Optional[str] = None,
+) -> AsyncIterator[Tuple[str, object]]:
+    """Streaming variant of process_message for the interactive user path.
+
+    Yields tuples (kind, payload):
+        ("partial", str)   — current best-effort user_message text. Callers
+                              should treat each yield as the FULL accumulated
+                              text so far (not a delta) and replace/edit any
+                              progress message with it.
+        ("complete", dict) — the final, fully-parsed JSON envelope. Same shape
+                              as process_message() returns.
+
+    Internal directives (briefings etc.) intentionally do NOT use streaming —
+    they don't have a user actively waiting and the JSON envelope contract
+    is easier to handle in a single shot. This function is only safe for the
+    "user typed something" path.
+
+    Falls back to the non-streaming path on any unrecoverable error (yields
+    a single ("complete", fallback_dict))."""
+
+    model = _pick_model(complexity, None)
+    state_block = await _build_state_block()
+    history = await database.recent_messages(limit=10)
+    messages = [{"role": m["role"], "content": m["content"]} for m in history]
+
+    outgoing_content, redacted_count = redaction.redact(user_text)
+    purpose = "user_message_stream"
+    messages.append({"role": "user", "content": outgoing_content})
+
+    input_hash = redaction.hash_input(outgoing_content)
+    input_chars = len(outgoing_content)
+
+    buf = ""
+    last_emitted = ""
+    final_usage = None
+    try:
+        async with _client.messages.stream(
+            model=model,
+            max_tokens=1500,
+            system=[
+                {
+                    "type": "text",
+                    "text": config.SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": state_block},
+            ],
+            messages=messages,
+        ) as stream:
+            async for chunk in stream.text_stream:
+                if not chunk:
+                    continue
+                buf += chunk
+                partial = _extract_partial_user_message(buf)
+                if partial is None or partial == last_emitted:
+                    continue
+                last_emitted = partial
+                yield ("partial", partial)
+            final_message = await stream.get_final_message()
+            final_usage = getattr(final_message, "usage", None)
+    except (RateLimitError, AuthenticationError, BadRequestError,
+             APITimeoutError, APIConnectionError, APIStatusError, APIError) as e:
+        logger.warning("Streaming Claude failed (%s) — falling back to non-streaming", type(e).__name__)
+        fallback = await process_message(user_text, complexity=complexity)
+        yield ("complete", fallback)
+        return
+
+    raw = buf
+    # Audit log mirrors process_message (success path) so cost analytics still work.
+    in_tokens = getattr(final_usage, "input_tokens", 0) if final_usage else 0
+    out_tokens = getattr(final_usage, "output_tokens", 0) if final_usage else 0
+    cache_read = getattr(final_usage, "cache_read_input_tokens", 0) if final_usage else 0
+    cache_creation = getattr(final_usage, "cache_creation_input_tokens", 0) if final_usage else 0
+    cost = redaction.estimate_cost(model, in_tokens, out_tokens, cache_read, cache_creation)
+    await database.log_llm_call(
+        "anthropic", model, purpose, input_hash, input_chars,
+        in_tokens, out_tokens, cache_read, cache_creation,
+        redacted_terms_count=redacted_count, estimated_cost_usd=cost,
+    )
+
+    parsed = _extract_json(raw)
+    if not parsed:
+        logger.error("Claude (stream) returned non-JSON output: %s", raw[:500])
+        yield ("complete", _FALLBACK_RESPONSE)
+        return
+
+    parsed.setdefault("intent", "none")
+    parsed.setdefault("actions", [])
+    parsed.setdefault("user_message", "")
+    parsed.setdefault("buttons", [])
+    parsed.setdefault("needs_clarification", False)
+    parsed.setdefault("clarification_question", None)
+
+    await database.append_message("user", user_text)
+    await database.append_message("assistant", parsed.get("user_message", ""))
+    await database.trim_history(keep=30)
+
+    yield ("complete", parsed)

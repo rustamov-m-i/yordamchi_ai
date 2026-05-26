@@ -5,6 +5,7 @@ All datetime fields are stored as ISO 8601 strings in Asia/Tashkent timezone.
 """
 
 import json
+import logging
 import uuid
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -15,6 +16,7 @@ import pytz
 
 import config
 
+logger = logging.getLogger(__name__)
 TZ = pytz.timezone(config.TIMEZONE)
 
 
@@ -193,6 +195,28 @@ CREATE TABLE IF NOT EXISTS insights_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_insights_ts ON insights_log(ts DESC);
+
+-- Idempotency / crash-recovery queue for in-flight user message handling.
+-- Pattern: enqueue BEFORE Claude call (state=pending) → mark in_progress →
+-- complete on success → fail on exception. On bot restart, stuck rows
+-- (state in {pending,in_progress} and older than ~5 min) are surfaced
+-- so the principal knows their request was dropped instead of silently lost.
+-- update_id is the Telegram update id and is UNIQUE so a redelivered update
+-- (unusual but possible) cannot be double-processed.
+CREATE TABLE IF NOT EXISTS pending_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    update_id INTEGER UNIQUE,
+    chat_id INTEGER,
+    message_id INTEGER,
+    user_text TEXT,                        -- original input, redacted before LLM
+    state TEXT NOT NULL DEFAULT 'pending', -- pending | in_progress | completed | failed
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_state ON pending_actions(state, updated_at);
 """
 
 
@@ -204,6 +228,10 @@ async def init() -> None:
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.execute("PRAGMA busy_timeout=5000")
+        # Auto-checkpoint every 1000 pages keeps the WAL file from growing
+        # unbounded between manual checkpoints; without this it can balloon
+        # to >1GB after weeks of writes.
+        await db.execute("PRAGMA wal_autocheckpoint=1000")
         await db.executescript(SCHEMA)
 
         # Idempotent migrations for existing DBs (CREATE TABLE IF NOT EXISTS doesn't add columns)
@@ -331,15 +359,37 @@ async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
 
 
 async def complete_task(task_id: str) -> bool:
-    task = await get_task(task_id)
-    if not task:
-        return False
-    if task.get("status") == "done":
+    """Mark a task as done atomically. Only the first concurrent caller wins —
+    subsequent callers see status='done' and return True without re-creating
+    the recurring follow-up. This eliminates the duplicate-recurrence race
+    between two handlers completing the same task."""
+    now = now_iso()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        before = await cur.fetchone()
+        if before is None:
+            return False
+        if before["status"] == "done":
+            return True
+        # Conditional UPDATE: another caller may have flipped status between our
+        # SELECT and UPDATE. Only the caller whose rowcount > 0 owns the side-effects.
+        cur = await db.execute(
+            "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status != ?",
+            ("done", now, task_id, "done"),
+        )
+        won = cur.rowcount > 0
+        if won:
+            await _log_history(db, task_id, "update", field="status",
+                                old_value=before["status"], new_value="done",
+                                source="complete")
+        await db.commit()
+    if not won:
         return True
-    ok = await update_task(task_id, {"status": "done"}, source="complete")
-    if ok:
-        await create_next_recurring_task(task)
-    return ok
+    completed = _row_to_task(before)
+    if completed.get("recurrence_rule"):
+        await create_next_recurring_task(completed)
+    return True
 
 
 def normalize_recurrence_rule(raw: Any) -> Optional[str]:
@@ -358,21 +408,31 @@ def normalize_recurrence_rule(raw: Any) -> Optional[str]:
 
 
 def _coerce_dt(iso: Optional[str]) -> datetime:
+    """Parse an ISO timestamp into an Asia/Tashkent-aware datetime. Aware
+    inputs in another zone are converted (not localized — calling
+    pytz.localize on an already-aware dt raises and silently drifts the
+    wall-clock time). Returns now() on parse failure."""
     if iso:
         try:
             dt = datetime.fromisoformat(iso)
-            return dt if dt.tzinfo else TZ.localize(dt)
+            if dt.tzinfo is not None:
+                return dt.astimezone(TZ)
+            return TZ.localize(dt)
         except (TypeError, ValueError):
             pass
     return datetime.now(TZ)
 
 
 def parse_iso_dt(iso: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO timestamp into an Asia/Tashkent-aware datetime, or None
+    if the input is missing/invalid. See _coerce_dt for tz-handling notes."""
     if not iso:
         return None
     try:
         dt = datetime.fromisoformat(iso)
-        return dt if dt.tzinfo else TZ.localize(dt)
+        if dt.tzinfo is not None:
+            return dt.astimezone(TZ)
+        return TZ.localize(dt)
     except (TypeError, ValueError):
         return None
 
@@ -762,10 +822,17 @@ async def list_recurring_tasks(limit: int = 30) -> list[dict]:
         return [_row_to_task(r) for r in await cur.fetchall()]
 
 
-async def mark_task_reminded(task_id: str) -> None:
+async def mark_task_reminded(task_id: str) -> bool:
+    """Conditional claim: returns True only if THIS caller flipped reminded_at
+    from NULL. Lets the scheduler 'claim then send' so two overlapping sweep
+    instances cannot both deliver the same reminder."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        await db.execute("UPDATE tasks SET reminded_at = ? WHERE id = ?", (now_iso(), task_id))
+        cur = await db.execute(
+            "UPDATE tasks SET reminded_at = ? WHERE id = ? AND reminded_at IS NULL",
+            (now_iso(), task_id),
+        )
         await db.commit()
+        return cur.rowcount > 0
 
 
 def _row_to_task(row) -> dict:
@@ -774,6 +841,7 @@ def _row_to_task(row) -> dict:
         try:
             d["tags"] = json.loads(d["tags"])
         except json.JSONDecodeError:
+            logger.warning("Corrupted JSON in tasks.tags for id=%s — defaulting to []", d.get("id"))
             d["tags"] = []
     else:
         d["tags"] = []
@@ -966,22 +1034,36 @@ async def reminders_overview() -> dict:
 
 
 async def mark_reminder_sent(reminder_id: str) -> bool:
-    reminder = await get_reminder(reminder_id)
-    if not reminder:
-        return False
+    """Atomically mark a reminder as sent, or roll it forward if it has a
+    recurrence_rule. Single transaction: the conditional UPDATE on
+    status='scheduled' ensures only one concurrent caller succeeds, so the
+    scheduler cannot fire the same reminder twice during overlapping sweeps."""
     sent_at = now_iso()
-    rule = normalize_recurrence_rule(reminder.get("recurrence_rule"))
-    next_at = compute_next_recurrence(reminder.get("remind_at"), rule) if rule else None
-    if next_at:
-        return await update_reminder(reminder_id, {
-            "remind_at": next_at,
-            "status": "scheduled",
-            "sent_at": sent_at,
-        })
-    return await update_reminder(reminder_id, {
-        "status": "sent",
-        "sent_at": sent_at,
-    })
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,))
+        reminder = await cur.fetchone()
+        if reminder is None:
+            return False
+        if reminder["status"] != "scheduled":
+            return False  # already sent / cancelled by another caller
+        rule = normalize_recurrence_rule(reminder["recurrence_rule"])
+        next_at = compute_next_recurrence(reminder["remind_at"], rule) if rule else None
+        if next_at:
+            cur = await db.execute(
+                "UPDATE reminders SET remind_at = ?, status = 'scheduled', "
+                "sent_at = ?, updated_at = ? WHERE id = ? AND status = 'scheduled'",
+                (next_at, sent_at, sent_at, reminder_id),
+            )
+        else:
+            cur = await db.execute(
+                "UPDATE reminders SET status = 'sent', sent_at = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'scheduled'",
+                (sent_at, sent_at, reminder_id),
+            )
+        won = cur.rowcount > 0
+        await db.commit()
+        return won
 
 
 def _row_to_reminder(row) -> dict:
@@ -1079,18 +1161,37 @@ async def list_upcoming_meetings(within_minutes: int = 15) -> list[dict]:
         return [_row_to_meeting(r) for r in rows]
 
 
-async def mark_meeting_reminded(meeting_id: str) -> None:
+async def mark_meeting_reminded(meeting_id: str) -> bool:
+    """Conditional claim — see mark_task_reminded."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        await db.execute("UPDATE meetings SET reminded_at = ? WHERE id = ?", (now_iso(), meeting_id))
+        cur = await db.execute(
+            "UPDATE meetings SET reminded_at = ? WHERE id = ? AND reminded_at IS NULL",
+            (now_iso(), meeting_id),
+        )
         await db.commit()
+        return cur.rowcount > 0
 
 
-async def mark_meeting_prep_sent(meeting_id: str) -> None:
-    await update_meeting(meeting_id, {"prep_sent_at": now_iso()})
+async def mark_meeting_prep_sent(meeting_id: str) -> bool:
+    """Conditional claim — see mark_task_reminded."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "UPDATE meetings SET prep_sent_at = ? WHERE id = ? AND prep_sent_at IS NULL",
+            (now_iso(), meeting_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
-async def mark_meeting_followup_sent(meeting_id: str) -> None:
-    await update_meeting(meeting_id, {"followup_sent_at": now_iso()})
+async def mark_meeting_followup_sent(meeting_id: str) -> bool:
+    """Conditional claim — see mark_task_reminded."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "UPDATE meetings SET followup_sent_at = ? WHERE id = ? AND followup_sent_at IS NULL",
+            (now_iso(), meeting_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def list_meetings_needing_prep(window_minutes: int = 60) -> list[dict]:
@@ -1167,6 +1268,8 @@ def _row_to_meeting(row) -> dict:
             try:
                 d[key] = json.loads(d[key])
             except json.JSONDecodeError:
+                logger.warning("Corrupted JSON in meetings.%s for id=%s — defaulting to []",
+                                key, d.get("id"))
                 d[key] = []
         else:
             d[key] = []
@@ -1301,8 +1404,6 @@ async def executive_stats(days: int = 7) -> dict:
     """Return decision-grade operational metrics for /stats and /report."""
     now = datetime.now(TZ)
     start = now - timedelta(days=days)
-    today_start = TZ.localize(datetime.combine(now.date(), datetime.min.time()))
-    tomorrow_start = today_start + timedelta(days=1)
     next_24 = now + timedelta(hours=24)
     next_48 = now + timedelta(hours=48)
     next_7 = now + timedelta(days=7)
@@ -1443,7 +1544,11 @@ async def executive_stats(days: int = 7) -> dict:
                FROM insights_log WHERE ts >= ?""",
             (start.isoformat(),),
         )
-        insight_row = dict(await cur.fetchone())
+        row = await cur.fetchone()
+        # Aggregate queries normally return one row even on empty input, but
+        # guard against fetchone()→None (e.g. closed cursor) so the executive
+        # dashboard doesn't crash with TypeError on dict(None).
+        insight_row = dict(row) if row else {"total": 0, "accepted": 0, "dismissed": 0}
 
     completion_rate = round((tasks_done / tasks_created) * 100, 1) if tasks_created else 0.0
 
@@ -1533,43 +1638,38 @@ async def executive_stats(days: int = 7) -> dict:
 # ─────────────────────────────────────────── CONTACTS ───────────────────────────────────────────
 
 async def save_contact(data: dict) -> str:
+    """Idempotent upsert by contact name. Uses a single INSERT … ON CONFLICT
+    statement so two concurrent callers with the same name cannot both pass
+    the existence check and race to INSERT — the old SELECT-then-INSERT
+    pattern crashed on the second caller with a UNIQUE constraint violation."""
     name = data.get("name")
     if not name:
         return ""
+    candidate_id = new_id("c-")
+    role = data.get("role")
+    formality = data.get("formality_level")
+    preferred = data.get("preferred_channel")
+    now = now_iso()
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT id FROM contacts WHERE name = ?", (name,))
-        existing = await cur.fetchone()
-        if existing:
-            contact_id = existing["id"]
-            fields = []
-            values: list[Any] = []
-            for key in ("role", "formality_level", "preferred_channel"):
-                if key in data and data[key] is not None:
-                    fields.append(f"{key} = ?")
-                    values.append(data[key])
-            fields.append("last_interaction = ?")
-            values.append(now_iso())
-            values.append(contact_id)
-            await db.execute(f"UPDATE contacts SET {', '.join(fields)} WHERE id = ?", values)
-        else:
-            contact_id = new_id("c-")
-            await db.execute(
-                """INSERT INTO contacts (id, name, role, formality_level, preferred_channel,
-                                         last_interaction, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    contact_id,
-                    name,
-                    data.get("role"),
-                    data.get("formality_level", 3),
-                    data.get("preferred_channel"),
-                    now_iso(),
-                    now_iso(),
-                ),
-            )
+        # excluded.* are the "would-have-inserted" values from the VALUES clause.
+        # COALESCE(excluded.col, contacts.col) preserves existing data when the
+        # caller didn't provide a new value (matches original update-only-if-set logic).
+        cur = await db.execute(
+            """INSERT INTO contacts (id, name, role, formality_level, preferred_channel,
+                                     last_interaction, created_at)
+               VALUES (?, ?, ?, COALESCE(?, 3), ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+                   role = COALESCE(excluded.role, contacts.role),
+                   formality_level = COALESCE(?, contacts.formality_level),
+                   preferred_channel = COALESCE(excluded.preferred_channel, contacts.preferred_channel),
+                   last_interaction = excluded.last_interaction
+               RETURNING id""",
+            (candidate_id, name, role, formality, preferred, now, now, formality),
+        )
+        row = await cur.fetchone()
         await db.commit()
-    return contact_id
+        return row["id"] if row else ""
 
 
 async def list_contacts() -> list[dict]:
@@ -1632,6 +1732,11 @@ async def get_settings() -> dict:
         try:
             saved = json.loads(row["data"])
         except json.JSONDecodeError:
+            logger.error(
+                "principal_profile.settings JSON is corrupted — falling back to "
+                "defaults. User-customised reminder/briefing times have been lost "
+                "until /settings is used again."
+            )
             saved = {}
     merged = {**DEFAULT_SETTINGS, **saved}
     return merged
@@ -1676,11 +1781,11 @@ async def trim_history(keep: int = 200) -> None:
         (total,) = await cur.fetchone()
         if total > keep:
             await db.execute(
-                f"""DELETE FROM conversation_history
-                    WHERE id IN (
-                        SELECT id FROM conversation_history
-                        ORDER BY id ASC LIMIT ?
-                    )""",
+                """DELETE FROM conversation_history
+                   WHERE id IN (
+                       SELECT id FROM conversation_history
+                       ORDER BY id ASC LIMIT ?
+                   )""",
                 (total - keep,),
             )
             await db.commit()
@@ -1790,6 +1895,90 @@ async def insight_acceptance_rate(insight_type: str) -> float:
         return (accepted / responded) if responded else 0.5  # neutral when no data
 
 
+# ─────────────────────────────────────────── PENDING ACTIONS (idempotency) ───────────────────────────────────────────
+
+
+async def enqueue_pending_action(update_id: Optional[int], chat_id: Optional[int],
+                                  message_id: Optional[int], user_text: str) -> Optional[int]:
+    """Record that we're about to process a user message. Returns the row id,
+    or None if this update_id was already processed (idempotency win — a
+    redelivered Telegram update won't trigger a second Claude call)."""
+    now = now_iso()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        try:
+            cur = await db.execute(
+                """INSERT INTO pending_actions
+                   (update_id, chat_id, message_id, user_text, state, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
+                (update_id, chat_id, message_id, user_text, now, now),
+            )
+            await db.commit()
+            return cur.lastrowid
+        except aiosqlite.IntegrityError:
+            # update_id UNIQUE constraint hit — already processed.
+            logger.info("Skipping duplicate Telegram update_id=%s", update_id)
+            return None
+
+
+async def mark_pending_in_progress(pending_id: int) -> None:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE pending_actions SET state='in_progress', updated_at=? WHERE id=?",
+            (now_iso(), pending_id),
+        )
+        await db.commit()
+
+
+async def complete_pending_action(pending_id: int) -> None:
+    """Mark an action as completed. The row is kept (not deleted) so it
+    serves as an idempotency record for the update_id."""
+    now = now_iso()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE pending_actions SET state='completed', updated_at=?, completed_at=? WHERE id=?",
+            (now, now, pending_id),
+        )
+        await db.commit()
+
+
+async def fail_pending_action(pending_id: int, error: str) -> None:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE pending_actions SET state='failed', error=?, updated_at=? WHERE id=?",
+            (error[:500], now_iso(), pending_id),
+        )
+        await db.commit()
+
+
+async def list_stuck_pending_actions(stuck_after_minutes: int = 5) -> list[dict]:
+    """Return rows still in pending/in_progress state past the timeout —
+    these likely belong to a crashed handler. Caller decides whether to
+    notify the principal, retry, or just log."""
+    cutoff = (datetime.now(TZ) - timedelta(minutes=stuck_after_minutes)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM pending_actions
+               WHERE state IN ('pending','in_progress') AND updated_at < ?
+               ORDER BY updated_at ASC""",
+            (cutoff,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def purge_old_pending_actions(retention_days: int = 7) -> int:
+    """Drop completed/failed rows older than retention_days. Returns rows
+    deleted. Keeps the table bounded over time."""
+    cutoff = (datetime.now(TZ) - timedelta(days=retention_days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM pending_actions WHERE state IN ('completed','failed') AND updated_at < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 # ─────────────────────────────────────────── iCLOUD RETRY QUEUE ───────────────────────────────────────────
 
 # Exponential backoff: 1min → 5min → 15min → 1h → 4h → give up
@@ -1836,6 +2025,19 @@ async def list_due_icloud_retries(limit: int = 20) -> list[dict]:
 async def mark_icloud_retry_success(retry_id: int) -> None:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute("DELETE FROM icloud_retry_queue WHERE id = ?", (retry_id,))
+        await db.commit()
+
+
+async def mark_icloud_retry_dead(retry_id: int, error: str) -> None:
+    """Permanently retire a retry row — sets attempts past the max so the
+    list_due_icloud_retries() WHERE clause filters it out. Use for
+    unrecoverable failures (auth, missing calendar) where further retries
+    would just spam logs without ever succeeding."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE icloud_retry_queue SET attempts = ?, last_error = ? WHERE id = ?",
+            (len(_RETRY_BACKOFFS_SECONDS), error[:500], retry_id),
+        )
         await db.commit()
 
 

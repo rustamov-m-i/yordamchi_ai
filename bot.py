@@ -73,6 +73,24 @@ async def main() -> None:
     await database.init()
     logger.info("Database initialized")
 
+    # Surface any in-flight user requests that didn't finish before the last
+    # shutdown (handler crash, kill -9, OOM). These rows are diagnostic only —
+    # we don't auto-retry because the user may have already worked around them.
+    try:
+        stuck = await database.list_stuck_pending_actions(stuck_after_minutes=5)
+        if stuck:
+            logger.warning(
+                "Found %d stuck pending_actions from previous run "
+                "(state in {pending,in_progress} older than 5min). "
+                "First stuck id=%s, text=%r",
+                len(stuck), stuck[0]["id"], (stuck[0].get("user_text") or "")[:80],
+            )
+        purged = await database.purge_old_pending_actions(retention_days=7)
+        if purged:
+            logger.info("Purged %d old pending_actions rows (>7 days, completed/failed)", purged)
+    except Exception:
+        logger.exception("pending_actions startup sweep failed (non-fatal)")
+
     # Warm iCloud CalDAV connection cache so the first user-triggered push is sub-second.
     if config.ICLOUD_ENABLED:
         try:
