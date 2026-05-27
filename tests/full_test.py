@@ -371,6 +371,22 @@ async def test_handlers_surface():
     t("handlers", "No 'Til' in settings", not any("Til" in l for l in settings_labels))
     t("handlers", "Settings has Brifing + Kechki yakun",
       any("Brifing" in l for l in settings_labels) and any("Kechki" in l for l in settings_labels))
+    settings_section = handlers.settings_section_reply_keyboard()
+    settings_section_labels = [b.text for row in settings_section.keyboard for b in row]
+    t("handlers", "Settings section reply kbd has voice confirmation",
+      handlers.GBTN_SETTINGS_VOICE in settings_section_labels
+      and handlers.GBTN_SETTINGS_CREATE_CONFIRM in settings_section_labels)
+    summary = handlers._format_settings_summary({
+        "notifications_enabled": True,
+        "morning_briefing_time": "08:00",
+        "evening_summary_time": "18:00",
+        "meeting_reminder_min": 15,
+        "task_reminder_hours": 2,
+        "voice_auto_confirm": False,
+        "confirm_create_actions": True,
+    })
+    t("handlers", "Settings summary shows voice confirmation status",
+      "Ovoz transkripti" in summary and "tasdiq so'raladi" in summary)
 
     # Yangi menu — 5 creation options + 1 back row
     nk = handlers.new_item_keyboard()

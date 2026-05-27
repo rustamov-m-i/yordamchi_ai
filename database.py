@@ -197,6 +197,12 @@ CREATE INDEX IF NOT EXISTS idx_retry_next ON icloud_retry_queue(next_attempt_at)
 CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
+    -- HTML-formatted copy of the content (Telegram entities preserved as HTML
+    -- tags). Used when rendering a forwarded note inside a <blockquote> so the
+    -- original bold/italic/links/code formatting survives the round-trip.
+    -- NULL for non-forward sources or older rows; render path falls back to
+    -- escaped plain content.
+    content_html TEXT,
     title TEXT,
     source TEXT NOT NULL,
     source_chat TEXT,
@@ -299,6 +305,18 @@ async def init() -> None:
         for col in ("prep_sent_at", "followup_sent_at"):
             if col not in meeting_cols:
                 await db.execute(f"ALTER TABLE meetings ADD COLUMN {col} TEXT")
+
+        # Notes: content_html column added later — backfill on existing rows
+        # is unnecessary (renderer falls back to escaped content when NULL).
+        try:
+            cur = await db.execute("PRAGMA table_info(notes)")
+            note_cols = {row[1] for row in await cur.fetchall()}
+            if note_cols and "content_html" not in note_cols:
+                await db.execute("ALTER TABLE notes ADD COLUMN content_html TEXT")
+        except Exception:
+            # notes table didn't exist before this run — the CREATE TABLE
+            # above already includes content_html, nothing to migrate.
+            pass
 
         await db.commit()
 
@@ -1198,14 +1216,15 @@ async def create_note(data: dict) -> str:
     tags = data.get("tags") or []
     if not isinstance(tags, list):
         tags = [str(tags)]
+    content_html = data.get("content_html")  # optional rich HTML for forwards
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
-            """INSERT INTO notes (id, content, title, source, source_chat,
-                                  source_author, source_message_id, tags, status,
-                                  created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?)""",
+            """INSERT INTO notes (id, content, content_html, title, source,
+                                  source_chat, source_author, source_message_id,
+                                  tags, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?)""",
             (
-                note_id, content, title, source,
+                note_id, content, content_html, title, source,
                 data.get("source_chat"), data.get("source_author"),
                 data.get("source_message_id"),
                 json.dumps(tags, ensure_ascii=False),

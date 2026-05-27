@@ -279,6 +279,8 @@ GBTN_SETTINGS_NOTIFY = "🔔 Bildirishnoma"
 GBTN_SETTINGS_BRIEFING = "⏰ Brifing vaqti"
 GBTN_SETTINGS_EVENING = "🌙 Kechki yakun (sozlash)"  # Bugun'dagi bilan to'qnashmasin
 GBTN_SETTINGS_REMINDER = "📲 Eslatma parametrlari"
+GBTN_SETTINGS_VOICE = "🎙 Ovoz tasdig'i"
+GBTN_SETTINGS_CREATE_CONFIRM = "✅ Yaratish tasdig'i"
 GBTN_SETTINGS_CALENDAR = "📅 Kalendar holati"
 
 
@@ -449,6 +451,8 @@ def settings_section_reply_keyboard() -> ReplyKeyboardMarkup:
              KeyboardButton(text=GBTN_SETTINGS_BRIEFING)],
             [KeyboardButton(text=GBTN_SETTINGS_EVENING),
              KeyboardButton(text=GBTN_SETTINGS_REMINDER)],
+            [KeyboardButton(text=GBTN_SETTINGS_VOICE),
+             KeyboardButton(text=GBTN_SETTINGS_CREATE_CONFIRM)],
             [KeyboardButton(text=GBTN_SETTINGS_CALENDAR)],
             [KeyboardButton(text=BTN_BACK_MAIN)],
         ],
@@ -472,7 +476,8 @@ _SECTION_LABELS: set[str] = (
        NBTN_NEW_TASK, NBTN_NEW_MEETING, NBTN_NEW_REMINDER, NBTN_NEW_VOICE, NBTN_NEW_POLISH,
        QBTN_SEARCH_TASKS, QBTN_SEARCH_MEETINGS, QBTN_SEARCH_CONTACTS, QBTN_SEARCH_ALL,
        GBTN_SETTINGS_NOTIFY, GBTN_SETTINGS_BRIEFING, GBTN_SETTINGS_EVENING,
-       GBTN_SETTINGS_REMINDER, GBTN_SETTINGS_CALENDAR,
+       GBTN_SETTINGS_REMINDER, GBTN_SETTINGS_VOICE, GBTN_SETTINGS_CREATE_CONFIRM,
+       GBTN_SETTINGS_CALENDAR,
        BTN_BACK_MAIN}
 )
 
@@ -500,7 +505,8 @@ def _label_to_section_state(label: str) -> State | None:
     if label in {QBTN_SEARCH_TASKS, QBTN_SEARCH_MEETINGS, QBTN_SEARCH_CONTACTS, QBTN_SEARCH_ALL}:
         return SectionFSM.in_search
     if label in {GBTN_SETTINGS_NOTIFY, GBTN_SETTINGS_BRIEFING, GBTN_SETTINGS_EVENING,
-                 GBTN_SETTINGS_REMINDER, GBTN_SETTINGS_CALENDAR}:
+                 GBTN_SETTINGS_REMINDER, GBTN_SETTINGS_VOICE, GBTN_SETTINGS_CREATE_CONFIRM,
+                 GBTN_SETTINGS_CALENDAR}:
         return SectionFSM.in_settings
     return None
 
@@ -2141,20 +2147,37 @@ def _format_deadline_short(iso) -> tuple[str, bool]:
 # ─────────────────────── SETTINGS ───────────────────────
 
 
+def _format_settings_summary(settings: dict) -> str:
+    """Human-readable settings overview shown when entering /settings."""
+    voice_status = (
+        "AVTO - tasdiqsiz"
+        if settings.get("voice_auto_confirm", True)
+        else "tasdiq so'raladi"
+    )
+    create_confirm_status = (
+        "tasdiq so'raladi"
+        if settings.get("confirm_create_actions", True)
+        else "tasdiqsiz yaratiladi"
+    )
+    return (
+        "⚙️ **SOZLAMALAR**\n\n"
+        f"🔔 Bildirishnomalar: {'yoqilgan' if settings.get('notifications_enabled', True) else 'oʻchirilgan'}\n"
+        f"⏰ Ertalab brifing: `{settings.get('morning_briefing_time', '08:00')}`\n"
+        f"🌙 Kechki yakun: `{settings.get('evening_summary_time', '18:00')}`\n"
+        f"📞 Uchrashuv eslatmasi: `{settings.get('meeting_reminder_min', 15)} daq oldin`\n"
+        f"📌 Vazifa eslatmasi: `{settings.get('task_reminder_hours', 2)} soat oldin`\n"
+        f"🎙 Ovoz transkripti: `{voice_status}`\n"
+        f"✅ Vazifa/uchrashuv yaratish: `{create_confirm_status}`\n\n"
+        "_Pastdagi tugmalardan parametr tanlang._"
+    )
+
+
 @router.message(Command("settings"))
 async def cmd_settings(message: Message, state: FSMContext | None = None) -> None:
     if state is not None:
         await state.set_state(SectionFSM.in_settings)
     settings = await database.get_settings()
-    text = (
-        "⚙️ **SOZLAMALAR**\n\n"
-        f"🔔 Bildirishnomalar: {'yoqilgan' if settings['notifications_enabled'] else 'oʻchirilgan'}\n"
-        f"⏰ Ertalab brifing: `{settings['morning_briefing_time']}`\n"
-        f"🌙 Kechki yakun: `{settings['evening_summary_time']}`\n"
-        f"📞 Uchrashuv eslatmasi: `{settings['meeting_reminder_min']} daq oldin`\n"
-        f"📌 Vazifa eslatmasi: `{settings['task_reminder_hours']} soat oldin`\n\n"
-        "_Pastdagi tugmalardan parametr tanlang._"
-    )
+    text = _format_settings_summary(settings)
     await message.answer(text, parse_mode="Markdown",
                          reply_markup=settings_section_reply_keyboard())
 
@@ -3420,8 +3443,20 @@ async def cb_nav_notes(query: CallbackQuery, state: FSMContext) -> None:
     await cmd_notes(query.message, state)
 
 
-def _format_note_detail(note: dict) -> str:
-    """Full-content card shown when a note is opened via noteopen:{id}."""
+def _html_escape(s: str) -> str:
+    """Minimal HTML escape for Telegram parse_mode=HTML. The allowed tag set
+    is small (b, i, u, s, code, pre, a, blockquote, tg-spoiler), so we only
+    need to neutralise &, <, > in user-supplied text."""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;"))
+
+
+def _format_note_detail(note: dict) -> tuple[str, str]:
+    """Full-content card shown when a note is opened via noteopen:{id}.
+    Returns (html_text, parse_mode). Uses Telegram's native <blockquote>
+    so forwarded content renders as a real quote bubble — vertical bar +
+    distinct background — and original bold/italic/links survive intact."""
     badge = _NOTES_SOURCE_BADGE.get(note.get("source", "manual"), "📝")
     when = _short_local_date(note.get("created_at"))
     status_uz = {
@@ -3429,30 +3464,43 @@ def _format_note_detail(note: dict) -> str:
         "processed": "⚙️ Qayta ishlangan",
         "archived": "📦 Arxiv",
     }.get(note.get("status"), note.get("status") or "—")
-    lines = [
-        f"📝 **{(note.get('title') or 'Qayd').strip()[:80]}**",
+
+    title = (note.get("title") or "Qayd").strip()[:80]
+    parts: list[str] = [
+        f"📝 <b>{_html_escape(title)}</b>",
         "",
-        f"📅 {when} · {badge}",
+        f"📅 {_html_escape(when)} · {_html_escape(badge)}",
     ]
     if note.get("source_chat"):
-        lines.append(f"💬 Chat: _{note['source_chat']}_")
+        parts.append(f"💬 Chat: <i>{_html_escape(note['source_chat'])}</i>")
     if note.get("source_author"):
-        lines.append(f"👤 Muallif: _{note['source_author']}_")
-    lines.append(f"🔖 Holat: {status_uz}")
+        parts.append(f"👤 Muallif: <i>{_html_escape(note['source_author'])}</i>")
+    parts.append(f"🔖 Holat: {_html_escape(status_uz)}")
     if note.get("converted_to_type") and note.get("converted_to_id"):
         link_label = "Vazifa" if note["converted_to_type"] == "task" else "Eslatma"
-        lines.append(f"🔗 {link_label}: `{note['converted_to_id']}`")
+        parts.append(
+            f"🔗 {link_label}: <code>{_html_escape(note['converted_to_id'])}</code>"
+        )
     tags = note.get("tags") or []
     if tags:
-        lines.append("🏷 " + ", ".join(f"#{t}" for t in tags[:8]))
-    lines.append("")
-    lines.append("━" * 20)
-    lines.append("")
-    content = (note.get("content") or "").strip()
-    if len(content) > 3000:
-        content = content[:3000] + "\n\n_…(qisqartirildi)_"
-    lines.append(_escape_markdown(content))
-    return "\n".join(lines)
+        parts.append("🏷 " + ", ".join(f"#{_html_escape(str(t))}" for t in tags[:8]))
+    parts.append("")
+
+    # Body: prefer content_html (original Telegram entities preserved) for
+    # forwards; fall back to plain content. Render inside a native
+    # <blockquote expandable> so long quotes can be collapsed.
+    html_body = note.get("content_html")
+    plain = (note.get("content") or "").strip()
+    if html_body and (note.get("source") == "forward" or html_body.strip()):
+        body = html_body.strip()
+    else:
+        body = _html_escape(plain)
+    # Hard cap: Telegram message limit is ~4096 chars including markup;
+    # blockquote'ning expandable variant uzun matnlarni o'rab qo'yadi.
+    if len(body) > 3000:
+        body = body[:3000] + "\n\n<i>…(qisqartirildi)</i>"
+    parts.append(f"<blockquote expandable>{body}</blockquote>")
+    return "\n".join(parts), "HTML"
 
 
 @router.callback_query(F.data.startswith("noteopen:"))
@@ -3463,10 +3511,11 @@ async def cb_note_open(query: CallbackQuery) -> None:
         await query.answer("Qayd topilmadi", show_alert=True)
         return
     await query.answer()
+    text, parse_mode = _format_note_detail(note)
     await _safe_answer(
         query.message,
-        _format_note_detail(note),
-        parse_mode="Markdown",
+        text,
+        parse_mode=parse_mode,
         reply_markup=note_detail_menu(note),
     )
 
@@ -3481,9 +3530,10 @@ async def cb_note_archive(query: CallbackQuery) -> None:
     await query.answer("📦 Arxivga ko'chirildi ✓")
     note = await database.get_note(nid)
     if note:
+        text, parse_mode = _format_note_detail(note)
         try:
             await query.message.edit_text(
-                _format_note_detail(note), parse_mode="Markdown",
+                text, parse_mode=parse_mode,
                 reply_markup=note_detail_menu(note),
             )
         except TelegramBadRequest:
@@ -3505,9 +3555,10 @@ async def cb_note_restore(query: CallbackQuery) -> None:
     await query.answer("📥 Inbox'ga qaytarildi ✓")
     note = await database.get_note(nid)
     if note:
+        text, parse_mode = _format_note_detail(note)
         try:
             await query.message.edit_text(
-                _format_note_detail(note), parse_mode="Markdown",
+                text, parse_mode=parse_mode,
                 reply_markup=note_detail_menu(note),
             )
         except TelegramBadRequest:
@@ -7350,8 +7401,19 @@ async def handle_forwarded_message(message: Message, state: FSMContext) -> None:
             "📎 Bo'sh forward — qayd yaratilmadi. Matn yoki izoh bo'lgan xabarni forward qiling."
         )
         return
+    # html_text preserves Telegram entities (bold, italic, code, links) as HTML
+    # tags. Used by _format_note_detail to render the forwarded text inside a
+    # native <blockquote> with original formatting intact.
+    html_content: str | None = None
+    try:
+        # aiogram 3 provides html_text for text and caption_html_text for media.
+        html_content = (getattr(message, "html_text", None)
+                         or getattr(message, "caption_html_text", None))
+    except Exception:
+        html_content = None
     nid = await database.create_note({
         "content": content,
+        "content_html": html_content,
         "source": "forward",
         "source_chat": chat_label,
         "source_author": author_label,
@@ -7953,7 +8015,7 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         return
 
     """Sozlamalar bo'limidagi reply tugmalari (state == in_settings)."""
-    label = message.text.strip()
+    label = _msg_text.strip()
     if label == GBTN_SETTINGS_NOTIFY:
         settings = await database.get_settings()
         new_val = not settings["notifications_enabled"]
@@ -7994,6 +8056,39 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         ])
         await message.answer(text, parse_mode="Markdown", reply_markup=kb)
         return
+    if label == GBTN_SETTINGS_VOICE:
+        settings = await database.get_settings()
+        new_val = not settings.get("voice_auto_confirm", True)
+        await database.set_setting("voice_auto_confirm", new_val)
+        if new_val:
+            text = (
+                "🎙 **Ovoz tasdig'i:** AVTO - tasdiqsiz ishlaydi ✓\n\n"
+                "Ovoz transkripti darhol qayta ishlanadi."
+            )
+        else:
+            text = (
+                "🎙 **Ovoz tasdig'i:** tasdiq so'raladi ✓\n\n"
+                "Har bir ovoz xabarida transkript ko'rsatiladi; "
+                "tasdiqlasangizgina davom etadi."
+            )
+        await message.answer(text, parse_mode="Markdown")
+        return
+    if label == GBTN_SETTINGS_CREATE_CONFIRM:
+        settings = await database.get_settings()
+        new_val = not settings.get("confirm_create_actions", True)
+        await database.set_setting("confirm_create_actions", new_val)
+        if new_val:
+            text = (
+                "✅ **Yaratish tasdig'i:** yoqildi ✓\n\n"
+                "Vazifa yoki uchrashuv yaratishdan oldin tasdiq so'raladi."
+            )
+        else:
+            text = (
+                "✅ **Yaratish tasdig'i:** o'chirildi ✓\n\n"
+                "Vazifa va uchrashuvlar tasdiqsiz yaratiladi."
+            )
+        await message.answer(text, parse_mode="Markdown")
+        return
     if label == GBTN_SETTINGS_CALENDAR:
         status = "yoqilgan" if config.ICLOUD_ENABLED else "oʻchirilgan"
         cal_name = config.ICLOUD_CALENDAR_NAME or "(default)"
@@ -8005,7 +8100,7 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         )
         await message.answer(text, parse_mode="Markdown")
         return
-    await _process_and_reply(message, message.text, state=state)
+    await _process_and_reply(message, _msg_text, state=state)
 
 
 @router.message(StateFilter(default_state), F.text)

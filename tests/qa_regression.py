@@ -604,6 +604,47 @@ def test_notes_section_fsm_present():
       callable(getattr(handlers, "note_detail_menu", None)))
 
 
+async def test_notes_html_blockquote_render():
+    """Forward'lar uchun content_html saqlanadi va detail view HTML +
+    <blockquote> ishlatadi. Plain qaydlar Markdown'siz HTML escape bilan."""
+    section("22. notes — HTML blockquote rendering (forward optimization)")
+    nid = await database.create_note({
+        "content": "Salom, byudjet tayyor",
+        "content_html": "Salom, <b>byudjet</b> tayyor",
+        "source": "forward",
+        "source_chat": "Marketing chati",
+        "source_author": "Aliya",
+    })
+    note = await database.get_note(nid)
+    text, parse_mode = handlers._format_note_detail(note)
+    t("notes.html", "parse_mode is HTML for forwarded note",
+      parse_mode == "HTML")
+    t("notes.html", "blockquote tag present",
+      "<blockquote" in text and "</blockquote>" in text)
+    t("notes.html", "expandable attribute used",
+      "blockquote expandable" in text)
+    t("notes.html", "original <b> formatting preserved",
+      "<b>byudjet</b>" in text)
+    t("notes.html", "content_html column persists in DB",
+      note["content_html"] == "Salom, <b>byudjet</b> tayyor")
+
+    # Plain note (no HTML) — must escape special chars
+    nid2 = await database.create_note({
+        "content": "Test <script>alert(1)</script> & more",
+        "source": "manual",
+    })
+    note2 = await database.get_note(nid2)
+    text2, _ = handlers._format_note_detail(note2)
+    t("notes.html", "XSS safety: <, >, & escaped in plain content",
+      "&lt;script&gt;" in text2 and "&amp;" in text2)
+
+    # cleanup
+    import aiosqlite
+    async with aiosqlite.connect(database.config.DATABASE_PATH) as db:
+        await db.execute("DELETE FROM notes WHERE id IN (?, ?)", (nid, nid2))
+        await db.commit()
+
+
 async def test_notes_source_validation():
     """create_note coerces unknown source values to 'manual' so a buggy
     caller can't insert garbage into the source column."""
@@ -735,6 +776,7 @@ async def main():
     await test_notes_crud_roundtrip()
     await test_notes_search()
     test_notes_section_fsm_present()
+    await test_notes_html_blockquote_render()
     await test_notes_source_validation()
 
     passed = sum(1 for _, ok, _ in _results if ok)
