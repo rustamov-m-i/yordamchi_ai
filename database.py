@@ -189,6 +189,33 @@ CREATE TABLE IF NOT EXISTS icloud_retry_queue (
 
 CREATE INDEX IF NOT EXISTS idx_retry_next ON icloud_retry_queue(next_attempt_at);
 
+-- Quick-capture inbox ("Qaydlar") — GTD-style notes waiting to be triaged.
+-- Sources: forward, /qayd command, voice via LLM, manual via section UI.
+-- Once converted to a task or reminder, status flips to 'processed' and
+-- converted_to_{id,type} link to the produced item. Archived notes stay
+-- in the table for full-text search but drop out of the inbox view.
+CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    title TEXT,
+    source TEXT NOT NULL,
+    source_chat TEXT,
+    source_author TEXT,
+    source_message_id INTEGER,
+    tags TEXT,
+    status TEXT CHECK(status IN ('inbox','processed','archived'))
+                 DEFAULT 'inbox' NOT NULL,
+    converted_to_id TEXT,
+    converted_to_type TEXT CHECK(converted_to_type IN ('task','reminder')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notes_status_created
+    ON notes(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_source
+    ON notes(source, created_at DESC);
+
 -- Executive planning sessions (one /plan invocation = one row)
 CREATE TABLE IF NOT EXISTS plans (
     id TEXT PRIMARY KEY,
@@ -1126,6 +1153,175 @@ def _row_to_reminder(row) -> dict:
     return dict(row)
 
 
+# ─────────────────────────────────────────── NOTES (Qaydlar) ───────────────────────────────────────────
+
+_NOTES_ALLOWED_STATUSES = ("inbox", "processed", "archived")
+_NOTES_ALLOWED_SOURCES = ("forward", "command", "voice", "manual", "llm")
+
+
+def _derive_title(content: str, max_len: int = 60) -> str:
+    """First non-empty line of content, trimmed to max_len. Used when the
+    caller doesn't supply an explicit title."""
+    first_line = next((ln.strip() for ln in (content or "").splitlines() if ln.strip()), "")
+    if not first_line:
+        return "Qayd"
+    if len(first_line) <= max_len:
+        return first_line
+    return first_line[: max_len - 1] + "…"
+
+
+def _row_to_note(row) -> dict:
+    d = dict(row)
+    if d.get("tags"):
+        try:
+            d["tags"] = json.loads(d["tags"])
+        except json.JSONDecodeError:
+            logger.warning("Corrupted JSON in notes.tags for id=%s — defaulting to []", d.get("id"))
+            d["tags"] = []
+    else:
+        d["tags"] = []
+    return d
+
+
+async def create_note(data: dict) -> str:
+    """Insert a new note row. Required: content. Everything else is optional
+    with sensible defaults. Returns the new note id."""
+    content = (data.get("content") or "").strip()
+    if not content:
+        return ""
+    note_id = new_id("n-")
+    now = now_iso()
+    source = data.get("source", "manual")
+    if source not in _NOTES_ALLOWED_SOURCES:
+        source = "manual"
+    title = (data.get("title") or "").strip() or _derive_title(content)
+    tags = data.get("tags") or []
+    if not isinstance(tags, list):
+        tags = [str(tags)]
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO notes (id, content, title, source, source_chat,
+                                  source_author, source_message_id, tags, status,
+                                  created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?)""",
+            (
+                note_id, content, title, source,
+                data.get("source_chat"), data.get("source_author"),
+                data.get("source_message_id"),
+                json.dumps(tags, ensure_ascii=False),
+                now, now,
+            ),
+        )
+        await db.commit()
+    return note_id
+
+
+async def get_note(note_id: str) -> Optional[dict]:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM notes WHERE id = ?", (note_id,))
+        row = await cur.fetchone()
+        return _row_to_note(row) if row else None
+
+
+async def list_notes(status: Optional[str] = "inbox", limit: int = 200) -> list[dict]:
+    """Return notes filtered by status (default 'inbox'), newest first.
+    Pass status=None to fetch all (used by search/global views)."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if status:
+            cur = await db.execute(
+                """SELECT * FROM notes WHERE status = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (status, limit),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT * FROM notes ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [_row_to_note(r) for r in await cur.fetchall()]
+
+
+async def count_notes_in_status(status: str) -> int:
+    """Cheap count for the daily briefing's inbox-pending line."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM notes WHERE status = ?", (status,),
+        )
+        row = await cur.fetchone()
+        return int(row[0] or 0)
+
+
+async def search_notes(query: str, limit: int = 30) -> list[dict]:
+    """Case-insensitive LIKE search across title + content. Excludes
+    archived notes from the default surface."""
+    q = f"%{query.strip().lower()}%"
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM notes
+               WHERE status != 'archived'
+                 AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ?)
+               ORDER BY created_at DESC LIMIT ?""",
+            (q, q, limit),
+        )
+        return [_row_to_note(r) for r in await cur.fetchall()]
+
+
+async def update_note(note_id: str, data: dict) -> bool:
+    """Patch a subset of note fields. Mainly used by conversion flows."""
+    allowed = {"content", "title", "tags", "status", "converted_to_id",
+               "converted_to_type"}
+    fields, values = [], []
+    for key, value in data.items():
+        if key not in allowed:
+            continue
+        if key == "tags":
+            if not isinstance(value, list):
+                value = [str(value)]
+            value = json.dumps(value, ensure_ascii=False)
+        if key == "status" and value not in _NOTES_ALLOWED_STATUSES:
+            continue
+        fields.append(f"{key} = ?")
+        values.append(value)
+    if not fields:
+        return False
+    fields.append("updated_at = ?")
+    values.append(now_iso())
+    values.append(note_id)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            f"UPDATE notes SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def archive_note(note_id: str) -> bool:
+    return await update_note(note_id, {"status": "archived"})
+
+
+async def delete_note(note_id: str) -> bool:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def mark_note_processed(note_id: str, converted_to_type: str,
+                                converted_to_id: str) -> bool:
+    """Flip status='processed' and record the link to the produced task/reminder."""
+    if converted_to_type not in ("task", "reminder"):
+        return False
+    return await update_note(note_id, {
+        "status": "processed",
+        "converted_to_id": converted_to_id,
+        "converted_to_type": converted_to_type,
+    })
+
+
 # ─────────────────────────────────────────── MEETINGS ───────────────────────────────────────────
 
 async def create_meeting(data: dict) -> str:
@@ -1387,8 +1583,18 @@ async def search_all(query: str, limit: int = 30) -> dict:
         )
         reminders = [_row_to_reminder(r) for r in await cur.fetchall()]
 
-    return {"tasks": tasks, "meetings": meetings, "contacts": contacts, "reminders": reminders,
-            "total": len(tasks) + len(meetings) + len(contacts) + len(reminders)}
+        cur = await db.execute(
+            """SELECT * FROM notes
+               WHERE status != 'archived'
+                 AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ?)
+               ORDER BY created_at DESC LIMIT ?""",
+            (q, q, limit),
+        )
+        notes = [_row_to_note(r) for r in await cur.fetchall()]
+
+    return {"tasks": tasks, "meetings": meetings, "contacts": contacts,
+            "reminders": reminders, "notes": notes,
+            "total": len(tasks) + len(meetings) + len(contacts) + len(reminders) + len(notes)}
 
 
 async def list_meetings_in_month(year: int, month: int) -> list[dict]:
@@ -1781,10 +1987,10 @@ DEFAULT_SETTINGS = {
     "quiet_hours_end": "07:00",
     # Voice: auto-process the transcript without an extra confirm tap.
     # Default ON — power users can re-enable confirmation via /settings.
-    "voice_auto_confirm": True,
+    "voice_auto_confirm": config.VOICE_AUTO_CONFIRM,
     # Confirm before creating tasks/meetings. Default ON for safety so a
     # mis-transcribed voice message can't quietly create wrong items.
-    "confirm_create_actions": True,
+    "confirm_create_actions": config.CONFIRM_CREATE_ACTIONS,
 }
 
 

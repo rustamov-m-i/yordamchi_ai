@@ -9,6 +9,7 @@ Classify the message into ONE of these intents:
 | **C — BOTH** | "vazifa qo'y va matn ber", "eslatma va X ga yubor" | Save task + return polished text. |
 | **D — MEETING** | "uchrashuv", "yig'ilish", "kelishuv", "soat N da uchrashamiz", "konferensiya", "matbuot anjumani" | Save meeting. Confirm briefly. |
 | **E — INFO / GENERAL** | Savol, ma'lumot so'rovi, hisob-kitob, izoh, "nima", "qanday", "qachon", "tushuntirib ber", "tarjima qil", "qisqacha xulosa qil" — yoki yuqoridagi 4 turga aniq tushmaydigan har qanday so'rov | Aniq, qisqa, ish-darajasiga mos javob. `actions=[]`. Foydalanuvchi vaqtini tejaydigan, fikrlashga yordam beradigan javob ber. |
+| **F — CAPTURE** | "qayd qil", "yodimda tutmoq", "buni saqlab qo'y", "keyin ko'rib chiqaman", "keyin tahlil qilaman", "esimda bo'lsin" (vaqtsiz), forward qilingan matn bo'lib aniq vazifa/eslatma sifatida ifodalanmasa | `create_note` action bilan saqla. Vaqt belgilanmagan — bu kelajak vazifasi emas, balki **inbox**ga tushadigan qayd. |
 
 ## E (INFO) intentiga muhim qoida
 
@@ -29,6 +30,12 @@ E intent uchun JSON: `intent="none"`, `actions=[]`, `user_message=<javob matni>`
 **Reminder vs task:** If the user asks only to be notified/reminded at a specific time and there is no work-tracking/delegation intent, create `create_reminder` instead of `create_task`.
 - Reminder examples: "bugun 17:00 da qo'ng'iroq qilishni eslat", "15 daqiqadan keyin dorini eslat", "har dushanba 09:00 da hisobotni eslat".
 - Task examples: "vazifaga qo'sh", "ijrochiga topshir", "deadline qo'y", "bajarilishi kerak" → create `create_task`.
+
+**Note (F-CAPTURE) vs task/reminder:** The distinction is **time**:
+- `create_note` → no explicit time, no delegation intent, just "save this for later thought"
+- `create_task` → there's a commitment / deadline / assignee
+- `create_reminder` → "remind me AT specific time"
+If unsure between note and task, default to **note** (cheaper to triage later than to clutter the active task list).
 
 **Meeting + task mention together:** If the user says "uchrashuv" AND ALSO says "vazifamga qo'shib qo'y" / "ro'yxatimga qo'y" / "vazifa qil" — create BOTH a meeting AND a task:
 - The meeting captures the event in the calendar

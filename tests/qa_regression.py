@@ -522,6 +522,99 @@ async def test_today_tasks_strict_deadline_filter():
         await db.commit()
 
 
+async def test_notes_crud_roundtrip():
+    """Phase: Qaydlar — create / list / archive / processed / delete roundtrip."""
+    section("18. notes — CRUD roundtrip")
+    nid = await database.create_note({
+        "content": "Test qayd matni\nIkkinchi qator",
+        "source": "command",
+    })
+    t("notes", "create_note returns id with n- prefix",
+      nid.startswith("n-"))
+    note = await database.get_note(nid)
+    t("notes", "title auto-derived from first line",
+      note["title"] == "Test qayd matni")
+    t("notes", "default status = inbox", note["status"] == "inbox")
+    t("notes", "tags default = []", note["tags"] == [])
+
+    inbox = await database.list_notes(status="inbox")
+    t("notes", "list_notes(inbox) includes the new note",
+      any(n["id"] == nid for n in inbox))
+
+    n_inbox = await database.count_notes_in_status("inbox")
+    t("notes", "count_notes_in_status('inbox') > 0", n_inbox >= 1)
+
+    await database.archive_note(nid)
+    archived = await database.get_note(nid)
+    t("notes", "archive_note flips status to archived",
+      archived["status"] == "archived")
+
+    await database.mark_note_processed(nid, "task", "t-fake")
+    processed = await database.get_note(nid)
+    t("notes", "mark_note_processed sets converted_to fields",
+      processed["status"] == "processed"
+      and processed["converted_to_type"] == "task"
+      and processed["converted_to_id"] == "t-fake")
+
+    await database.delete_note(nid)
+    t("notes", "delete_note removes the row",
+      (await database.get_note(nid)) is None)
+
+
+async def test_notes_search():
+    section("19. notes — search_notes excludes archived")
+    n_inbox = await database.create_note({
+        "content": "Marketing byudjet 2026 yaqinlashyapti",
+        "source": "manual",
+    })
+    n_archived = await database.create_note({
+        "content": "Eski byudjet qaydlari",
+        "source": "manual",
+    })
+    await database.archive_note(n_archived)
+    results = await database.search_notes("byudjet")
+    ids = {n["id"] for n in results}
+    t("notes.search", "inbox note matches", n_inbox in ids)
+    t("notes.search", "archived note excluded", n_archived not in ids)
+
+    # cleanup
+    import aiosqlite
+    async with aiosqlite.connect(database.config.DATABASE_PATH) as db:
+        await db.execute("DELETE FROM notes WHERE id IN (?, ?)",
+                          (n_inbox, n_archived))
+        await db.commit()
+
+
+def test_notes_section_fsm_present():
+    """Schema invariants: SectionFSM.in_notes + NoteCaptureFSM exist; filters
+    defined; render helper exposed."""
+    section("20. notes — FSM + filters + render helper present")
+    t("notes.section", "SectionFSM.in_notes defined",
+      hasattr(handlers.SectionFSM, "in_notes"))
+    t("notes.section", "NoteCaptureFSM.awaiting_text defined",
+      hasattr(handlers, "NoteCaptureFSM")
+      and hasattr(handlers.NoteCaptureFSM, "awaiting_text"))
+    t("notes.section", "_NOTES_SECTION_FILTERS has inbox/processed/archived",
+      set(handlers._NOTES_SECTION_FILTERS.values()) == {"inbox", "processed", "archived"})
+    t("notes.section", "_render_notes_for_filter callable",
+      callable(getattr(handlers, "_render_notes_for_filter", None)))
+    t("notes.section", "notes_section_reply_keyboard callable",
+      callable(getattr(handlers, "notes_section_reply_keyboard", None)))
+    t("notes.section", "note_detail_menu callable",
+      callable(getattr(handlers, "note_detail_menu", None)))
+
+
+async def test_notes_source_validation():
+    """create_note coerces unknown source values to 'manual' so a buggy
+    caller can't insert garbage into the source column."""
+    section("21. notes — source validation")
+    nid = await database.create_note({"content": "x", "source": "garbage_value"})
+    note = await database.get_note(nid)
+    t("notes.source", "unknown source coerced to 'manual'",
+      note["source"] == "manual", f"got source={note['source']!r}")
+    await database.delete_note(nid)
+
+
 def test_maybe_refresh_section_present():
     """Smoke check: the auto-refresh helper exists and is wired."""
     section("17. _maybe_refresh_section — auto-refresh helper")
@@ -639,6 +732,10 @@ async def main():
     test_destructive_action_types()
     await test_today_tasks_strict_deadline_filter()
     test_maybe_refresh_section_present()
+    await test_notes_crud_roundtrip()
+    await test_notes_search()
+    test_notes_section_fsm_present()
+    await test_notes_source_validation()
 
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)

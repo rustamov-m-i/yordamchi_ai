@@ -2,6 +2,17 @@
 
 Shaxsiy executive AI yordamchi. Faqat bir foydalanuvchi uchun. O'zbek tilida ovoz va matn orqali ishlaydi. Topshiriqlarni saqlaydi, uchrashuvlarni rejalashtiradi, kunlik briefinglar yuboradi va matnlarni rasmiy ko'rinishga keltiradi.
 
+## 📋 CHANGELOG — 2026-05-28
+
+**📥 Qaydlar (Inbox)** — GTD uslubidagi quick-capture qo'shildi:
+- `/notes` — qayta ishlanmagan qaydlar inbox'i (3 holat: Inbox / Ishlangan / Arxiv)
+- `/qayd <matn>` — tezkor qayd qo'shish
+- Boshqa chatdan xabarni forward qiling → avtomatik qayd (chat + author kontekst saqlanadi)
+- Voice: _"qayd qil: ..."_ — ovozdan ham mumkin
+- Har qayd uchun 5 ta amal: 🤖 Tahlil · 📝 Vazifaga · ⏰ Eslatmaga · 📦 Arxiv · 🗑 O'chir
+- Bugungi brifingda inbox count ko'rinadi
+- GlobalSearchFSM bilan birga ishlaydi
+
 ## Asosiy imkoniyatlar
 
 - **Voice & text input** — O'zbek tilida ovoz orqali (Whisper) yoki matn orqali topshiriq yuborish

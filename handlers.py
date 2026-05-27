@@ -185,6 +185,29 @@ _REMINDERS_SECTION_FILTERS = {
     RBTN_REMINDERS_ALL: "all",
 }
 
+# ── Qaydlar (Notes) section labels ──
+NBTN_NOTES_INBOX = "📥 Inbox"
+NBTN_NOTES_PROCESSED = "⚙️ Ishlangan"
+NBTN_NOTES_ARCHIVED = "📦 Arxiv"
+NBTN_NOTES_NEW = "➕ Yangi qayd"
+NBTN_NOTES_SEARCH = "🔎 Qayd qidirish"
+
+_NOTES_SECTION_FILTERS = {
+    NBTN_NOTES_INBOX:     "inbox",
+    NBTN_NOTES_PROCESSED: "processed",
+    NBTN_NOTES_ARCHIVED:  "archived",
+}
+
+# Per-note source labels (short, used in card meta line)
+_NOTES_SOURCE_BADGE = {
+    "forward": "🔁 forward",
+    "command": "⚡ buyruq",
+    "voice":   "🎙 ovoz",
+    "manual":  "✍️ qo'lda",
+    "llm":     "🤖 LLM",
+}
+_NOTES_PER_PAGE = 10
+
 
 class SectionFSM(StatesGroup):
     """Aktiv bo'limni eslab qolish — reply kbd labellari noyob emas,
@@ -201,6 +224,13 @@ class SectionFSM(StatesGroup):
     in_new = State()
     in_search = State()
     in_settings = State()
+    in_notes = State()
+
+
+class NoteCaptureFSM(StatesGroup):
+    """One-shot FSM for `/qayd` with no body or "➕ Yangi qayd" button —
+    next text/voice message becomes the note content."""
+    awaiting_text = State()
 
 
 # ── Statistika section labels ──
@@ -234,6 +264,7 @@ DBTN_TODAY_MEETINGS = "🤝 Bugungi uchrashuvlar"
 NBTN_NEW_TASK = "📝 Yangi vazifa"
 NBTN_NEW_MEETING = "🤝 Yangi uchrashuv"
 NBTN_NEW_REMINDER = "⏰ Yangi eslatma"
+NBTN_NEW_NOTE = "📥 Yangi qayd"
 NBTN_NEW_VOICE = "🎙 Ovozli vazifa"
 NBTN_NEW_POLISH = "✏️ Matn tahrirlash"
 
@@ -305,6 +336,22 @@ def reminders_section_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def notes_section_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply kbd Qaydlar bo'limida — Inbox / Ishlangan / Arxiv + amallar."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=NBTN_NOTES_INBOX),
+             KeyboardButton(text=NBTN_NOTES_PROCESSED),
+             KeyboardButton(text=NBTN_NOTES_ARCHIVED)],
+            [KeyboardButton(text=NBTN_NOTES_NEW),
+             KeyboardButton(text=NBTN_NOTES_SEARCH)],
+            [KeyboardButton(text=BTN_BACK_MAIN)],
+        ],
+        resize_keyboard=True, is_persistent=True,
+        input_field_placeholder="Qayd tanlang yoki yangisini yozing...",
+    )
+
+
 def stats_section_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply kbd Statistika bo'limida — davrlar va hisobotlar."""
     return ReplyKeyboardMarkup(
@@ -369,8 +416,9 @@ def new_section_reply_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=NBTN_NEW_TASK),
              KeyboardButton(text=NBTN_NEW_MEETING)],
             [KeyboardButton(text=NBTN_NEW_REMINDER),
-             KeyboardButton(text=NBTN_NEW_VOICE)],
-            [KeyboardButton(text=NBTN_NEW_POLISH)],
+             KeyboardButton(text=NBTN_NEW_NOTE)],
+            [KeyboardButton(text=NBTN_NEW_VOICE),
+             KeyboardButton(text=NBTN_NEW_POLISH)],
             [KeyboardButton(text=BTN_BACK_MAIN)],
         ],
         resize_keyboard=True, is_persistent=True,
@@ -1008,7 +1056,8 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     schedule_meeting are auto-upserted into the contacts table.
     """
     created_ids: dict[str, list[str]] = {
-        "task": [], "reminder": [], "meeting": [], "contact": [], "correction": []
+        "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
+        "note": [],
     }
 
     for action in actions:
@@ -1065,6 +1114,18 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
             elif atype == "save_correction":
                 corr_id = await database.save_correction(data)
                 created_ids["correction"].append(corr_id)
+            elif atype == "create_note":
+                # Quick-capture inbox. Source defaults to "llm" — Claude
+                # decided this was a note rather than a task/reminder.
+                if data.get("content"):
+                    nid = await database.create_note({
+                        "content": data.get("content"),
+                        "title": data.get("title"),
+                        "tags": data.get("tags") or [],
+                        "source": data.get("source") or "llm",
+                    })
+                    if nid:
+                        created_ids["note"].append(nid)
             elif atype == "none":
                 pass
             else:
@@ -1178,6 +1239,7 @@ async def _maybe_refresh_section(
     created_tasks = bool(ids_by_type.get("task"))
     created_meetings = bool(ids_by_type.get("meeting"))
     created_reminders = bool(ids_by_type.get("reminder"))
+    created_notes = bool(ids_by_type.get("note"))
 
     # Map current section → render call. Only fire when a matching item was
     # actually created, otherwise we'd spam the user with a redundant list.
@@ -1191,6 +1253,8 @@ async def _maybe_refresh_section(
             await _render_meetings_for_filter(message, "week")
         elif current == SectionFSM.in_reminders.state and created_reminders:
             await _render_reminders_for_filter(message, "upcoming")
+        elif current == SectionFSM.in_notes.state and created_notes:
+            await _render_notes_for_filter(message, "inbox")
     except Exception:
         logger.exception("Section auto-refresh failed (non-fatal)")
 
@@ -1612,12 +1676,17 @@ async def cmd_help(message: Message) -> None:
         "• `/tasks` — aktiv, bugungi, muhim, o'tgan, bajarilgan va takroriy vazifalar.\n\n"
         "**3. Eslatmalar**\n"
         "• `/reminders` — alohida eslatmalar, snooze, takrorlash va bajarildi nazorati.\n\n"
-        "**4. Uchrashuvlar**\n"
+        "**4. Qaydlar (Inbox)**\n"
+        "• `/notes` — qayta ishlanmagan qaydlar inbox'i (GTD uslubi).\n"
+        "• `/qayd <matn>` — tezkor qayd qo'shish.\n"
+        "• Boshqa chatdan xabarni forward qiling — avto qaydga aylanadi.\n"
+        "• Voice: _\"qayd qil: ...\"_ — ovozdan ham mumkin.\n\n"
+        "**5. Uchrashuvlar**\n"
         "• `/meetings` — uchrashuvlar, tayyorgarlik brifi va action itemlar.\n\n"
-        "**5. Natijalar**\n"
+        "**6. Natijalar**\n"
         "• `/stats` — KPI, deadline, delegatsiya, meeting va bot auditi.\n"
         "• Weekly/monthly report statistikadagi tugmalar orqali ochiladi.\n\n"
-        "**6. Tizim**\n"
+        "**7. Tizim**\n"
         "• `/settings` — bildirishnomalar, eslatmalar va kalendar holati.\n"
         "• `/help` — ushbu qo'llanma.\n\n"
         "**Avtomatik ishlaydigan funksiyalar**\n"
@@ -1694,6 +1763,13 @@ async def _build_briefing_text() -> str:
             f"{indent}{_muhimlik_emoji(priority)} Muhimlik: {muhimlik}",
         ]
 
+    # Inbox count — surfaces "you have N notes waiting to be triaged" so the
+    # principal doesn't forget to clear the GTD inbox.
+    try:
+        inbox_count = await database.count_notes_in_status("inbox")
+    except Exception:
+        inbox_count = 0
+
     lines: list[str] = [
         f"🗓 **BUGUN · {date_label_upper}**",
         "",
@@ -1701,8 +1777,10 @@ async def _build_briefing_text() -> str:
         "",
         f"**{len(today_tasks)}** ta vazifa  ·  **{len(done_today)}** ta yopildi",
         f"**{urgent_count}** ta shoshilinch  ·  **{len(overdue)}** ta muddati o'tgan",
-        "",
     ]
+    if inbox_count > 0:
+        lines.append(f"📥 **{inbox_count}** ta qayd inbox'da kutmoqda")
+    lines.append("")
 
     if best_task:
         lines.extend([DIVIDER, "", "⭐ **ENG MUHIM**", ""])
@@ -2975,6 +3053,167 @@ async def _render_reminders_for_filter(
     await _safe_answer(message, text, parse_mode="Markdown", reply_markup=kb)
 
 
+# ─────────────────────── NOTES (Qaydlar) RENDERING ───────────────────────
+
+def _format_notes_compact(notes: list[dict], label: str,
+                            inbox_count: int = 0, page: int = 1) -> str:
+    """One-screen compact list — card per note with source badge + preview."""
+    DIVIDER = "━" * 20
+    head = [f"📝 **QAYDLAR · {label.upper()}**", ""]
+    head.append(f"📥 Inbox: **{inbox_count}** ta qayta ishlanmagan")
+    head.append("")
+    head.append(DIVIDER)
+    head.append("")
+    if not notes:
+        head.append("_Hozircha bu bo'limda qaydlar yo'q._")
+        head.append("")
+        head.append("Tezkor qo'shish: `/qayd <matn>` yoki ovoz orqali "
+                     "_\"qayd qil: ...\"_.")
+        return "\n".join(head).rstrip()
+
+    per_page = _NOTES_PER_PAGE
+    total = len(notes)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    page_items = notes[start:start + per_page]
+
+    lines: list[str] = list(head)
+    for i, n in enumerate(page_items, start=start + 1):
+        title = (n.get("title") or _derive_note_title_fallback(n.get("content", "")))
+        badge = _NOTES_SOURCE_BADGE.get(n.get("source", "manual"), "📝")
+        when = _short_local_date(n.get("created_at"))
+        meta = f"   📅 {when} · {badge}"
+        if n.get("source_chat"):
+            meta += f" · _{n['source_chat']}_"
+        preview = (n.get("content") or "").strip().replace("\n", " ")
+        if len(preview) > 120:
+            preview = preview[:117] + "…"
+        lines.append(f"**{i}. {title[:70]}**")
+        lines.append(meta)
+        if preview and preview != title:
+            lines.append(f"   _{_escape_markdown(preview)}_")
+        lines.append("")
+    if total_pages > 1:
+        lines.append(f"_Sahifa {page}/{total_pages}_")
+    return "\n".join(lines).rstrip()
+
+
+def _derive_note_title_fallback(content: str) -> str:
+    """Mirror of database._derive_title for display use only."""
+    first = next((ln.strip() for ln in (content or "").splitlines() if ln.strip()), "")
+    if not first:
+        return "(bo'sh qayd)"
+    return first if len(first) <= 60 else first[:59] + "…"
+
+
+def _short_local_date(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso).astimezone(database.TZ)
+        return dt.strftime("%d-%m %H:%M")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def notes_compact_keyboard(notes: list[dict], current_filter: str = "inbox",
+                            page: int = 1) -> InlineKeyboardMarkup | None:
+    """Inline numbered keyboard + pagination — matches reminders pattern."""
+    per_page = _NOTES_PER_PAGE
+    total = len(notes)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    page_items = notes[start:start + per_page]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    nums = [
+        InlineKeyboardButton(text=str(start + i + 1), callback_data=f"noteopen:{n['id']}")
+        for i, n in enumerate(page_items)
+    ]
+    if nums:
+        for i in range(0, len(nums), 5):
+            rows.append(nums[i:i + 5])
+    # Filter pills
+    rows.append([
+        InlineKeyboardButton(text="📥 Inbox", callback_data="notesfilter:inbox"),
+        InlineKeyboardButton(text="⚙️ Ishlangan", callback_data="notesfilter:processed"),
+        InlineKeyboardButton(text="📦 Arxiv", callback_data="notesfilter:archived"),
+    ])
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 1:
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"notesfilter:{current_filter}:{page - 1}"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"notesfilter:{current_filter}:{page + 1}"))
+        if nav:
+            rows.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def note_detail_menu(note: dict) -> InlineKeyboardMarkup:
+    """Per-note action menu — Tahlil / Vazifaga / Eslatmaga / Arxiv / O'chir."""
+    nid = note["id"]
+    status = note.get("status", "inbox")
+    rows = []
+    # If already processed, expose Reopen instead of conversion actions.
+    if status == "processed":
+        rows.append([
+            InlineKeyboardButton(text="🔁 Inbox'ga qaytar",
+                                  callback_data=f"noterestore:{nid}"),
+        ])
+    elif status == "archived":
+        rows.append([
+            InlineKeyboardButton(text="🔁 Tiklash", callback_data=f"noterestore:{nid}"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(text="🤖 Tahlil qil", callback_data=f"noteanalyze:{nid}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="📝 Vazifaga", callback_data=f"notetotask:{nid}"),
+            InlineKeyboardButton(text="⏰ Eslatmaga", callback_data=f"notetorem:{nid}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(text="📦 Arxiv", callback_data=f"notearchive:{nid}"),
+            InlineKeyboardButton(text="🗑 O'chir", callback_data=f"notedelete:{nid}"),
+        ])
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Ro'yxatga",
+                              callback_data=f"notesfilter:{status if status != 'archived' else 'archived'}"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _load_notes_for_filter(filt: str) -> tuple[list[dict], str]:
+    label_map = {
+        "inbox": "Inbox",
+        "processed": "Qayta ishlangan",
+        "archived": "Arxiv",
+    }
+    if filt not in label_map:
+        filt = "inbox"
+    notes = await database.list_notes(status=filt, limit=200)
+    return notes, label_map[filt]
+
+
+async def _render_notes_for_filter(message: Message, filt: str = "inbox",
+                                     page: int = 1,
+                                     edit_existing: bool = False) -> None:
+    notes, label = await _load_notes_for_filter(filt)
+    inbox_count = await database.count_notes_in_status("inbox")
+    text = _format_notes_compact(notes, label, inbox_count=inbox_count, page=page)
+    kb = notes_compact_keyboard(notes, current_filter=filt, page=page)
+    if edit_existing:
+        try:
+            await message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+            return
+        except TelegramBadRequest:
+            pass
+    await _safe_answer(message, text, parse_mode="Markdown", reply_markup=kb)
+
+
 async def _compute_tasks_overview() -> dict:
     """Counts for the UMUMIY HOLAT block — stable across filters."""
     all_tasks = await database.list_tasks(limit=500)
@@ -3091,6 +3330,343 @@ async def cb_reminder_filter(query: CallbackQuery) -> None:
     page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
     await query.answer()
     await _render_reminders_for_filter(query.message, filt, page=page, edit_existing=True)
+
+
+# ─────────────────────── QAYDLAR — COMMANDS + CALLBACKS ───────────────────────
+
+
+@router.message(Command("notes"))
+@router.message(Command("qaydlar"))
+async def cmd_notes(message: Message, state: FSMContext | None = None) -> None:
+    """Qaydlar bo'limi — Inbox / Ishlangan / Arxiv. Default: Inbox."""
+    if state is not None:
+        await state.set_state(SectionFSM.in_notes)
+    await message.answer(
+        "📝 **QAYDLAR**", parse_mode="Markdown",
+        reply_markup=notes_section_reply_keyboard(),
+    )
+    await _render_notes_for_filter(message, "inbox")
+
+
+@router.callback_query(F.data.startswith("notesfilter:"))
+async def cb_notes_filter(query: CallbackQuery) -> None:
+    parts = query.data.split(":")
+    filt = parts[1] if len(parts) > 1 and parts[1] else "inbox"
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+    if filt not in ("inbox", "processed", "archived"):
+        filt = "inbox"
+    await query.answer()
+    await _render_notes_for_filter(query.message, filt, page=page, edit_existing=True)
+
+
+@router.message(Command("qayd"))
+async def cmd_qayd(message: Message, state: FSMContext | None = None) -> None:
+    """Tezkor qayd qo'shish. `/qayd <matn>` → darrov inbox'ga saqlaydi.
+    `/qayd` (bo'sh) → keyingi xabar qaydga aylanadi (one-shot FSM)."""
+    text = (message.text or "").removeprefix("/qayd").removeprefix("/qaydlar").strip()
+    if text:
+        nid = await database.create_note({
+            "content": text, "source": "command",
+        })
+        await _note_capture_reply(message, nid, "/qayd buyrug'i orqali")
+        await _maybe_refresh_section(message, state, {"note": [nid]})
+        return
+    # Empty body — enter one-shot FSM
+    if state is not None:
+        await state.set_state(NoteCaptureFSM.awaiting_text)
+    await message.answer(
+        "📝 **YANGI QAYD**\n\nMatn yoki ovoz yuboring — bot uni Inbox'ga saqlaydi.\n"
+        "Bekor qilish: /cancel",
+        parse_mode="Markdown",
+        reply_markup=single_back_keyboard("nav_notes"),
+    )
+
+
+@router.message(StateFilter(NoteCaptureFSM.awaiting_text), F.text | F.voice)
+async def handle_note_capture(message: Message, state: FSMContext) -> None:
+    """One-shot capture: next text/voice after /qayd or '➕ Yangi qayd' button."""
+    content = await _get_text_or_transcribe(message)
+    if not content:
+        return
+    content = content.strip()
+    if not content:
+        await message.answer("Bo'sh xabar — qayd yaratilmadi.")
+        return
+    await state.clear()
+    source = "voice" if message.voice else "manual"
+    nid = await database.create_note({"content": content, "source": source})
+    await _note_capture_reply(message, nid,
+                                "ovoz orqali" if source == "voice" else "qo'lda")
+    # Restore section if we were in one
+    await _maybe_refresh_section(message, state, {"note": [nid]})
+
+
+async def _note_capture_reply(message: Message, note_id: str, source_hint: str) -> None:
+    """Compact confirmation right after a note is captured."""
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📥 Inbox'ga", callback_data="notesfilter:inbox"),
+        InlineKeyboardButton(text="🤖 Hozir tahlil", callback_data=f"noteanalyze:{note_id}"),
+    ]])
+    await message.answer(
+        f"📝 **Qayd saqlandi** · `{note_id}`\n_Manba: {source_hint}_",
+        parse_mode="Markdown",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "nav_notes")
+async def cb_nav_notes(query: CallbackQuery, state: FSMContext) -> None:
+    await query.answer()
+    await cmd_notes(query.message, state)
+
+
+def _format_note_detail(note: dict) -> str:
+    """Full-content card shown when a note is opened via noteopen:{id}."""
+    badge = _NOTES_SOURCE_BADGE.get(note.get("source", "manual"), "📝")
+    when = _short_local_date(note.get("created_at"))
+    status_uz = {
+        "inbox": "📥 Inbox",
+        "processed": "⚙️ Qayta ishlangan",
+        "archived": "📦 Arxiv",
+    }.get(note.get("status"), note.get("status") or "—")
+    lines = [
+        f"📝 **{(note.get('title') or 'Qayd').strip()[:80]}**",
+        "",
+        f"📅 {when} · {badge}",
+    ]
+    if note.get("source_chat"):
+        lines.append(f"💬 Chat: _{note['source_chat']}_")
+    if note.get("source_author"):
+        lines.append(f"👤 Muallif: _{note['source_author']}_")
+    lines.append(f"🔖 Holat: {status_uz}")
+    if note.get("converted_to_type") and note.get("converted_to_id"):
+        link_label = "Vazifa" if note["converted_to_type"] == "task" else "Eslatma"
+        lines.append(f"🔗 {link_label}: `{note['converted_to_id']}`")
+    tags = note.get("tags") or []
+    if tags:
+        lines.append("🏷 " + ", ".join(f"#{t}" for t in tags[:8]))
+    lines.append("")
+    lines.append("━" * 20)
+    lines.append("")
+    content = (note.get("content") or "").strip()
+    if len(content) > 3000:
+        content = content[:3000] + "\n\n_…(qisqartirildi)_"
+    lines.append(_escape_markdown(content))
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith("noteopen:"))
+async def cb_note_open(query: CallbackQuery) -> None:
+    nid = query.data.split(":", 1)[1]
+    note = await database.get_note(nid)
+    if not note:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    await query.answer()
+    await _safe_answer(
+        query.message,
+        _format_note_detail(note),
+        parse_mode="Markdown",
+        reply_markup=note_detail_menu(note),
+    )
+
+
+@router.callback_query(F.data.startswith("notearchive:"))
+async def cb_note_archive(query: CallbackQuery) -> None:
+    nid = query.data.split(":", 1)[1]
+    ok = await database.archive_note(nid)
+    if not ok:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    await query.answer("📦 Arxivga ko'chirildi ✓")
+    note = await database.get_note(nid)
+    if note:
+        try:
+            await query.message.edit_text(
+                _format_note_detail(note), parse_mode="Markdown",
+                reply_markup=note_detail_menu(note),
+            )
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data.startswith("noterestore:"))
+async def cb_note_restore(query: CallbackQuery) -> None:
+    """Restore an archived or processed note back to inbox."""
+    nid = query.data.split(":", 1)[1]
+    ok = await database.update_note(nid, {
+        "status": "inbox",
+        "converted_to_id": None,
+        "converted_to_type": None,
+    })
+    if not ok:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    await query.answer("📥 Inbox'ga qaytarildi ✓")
+    note = await database.get_note(nid)
+    if note:
+        try:
+            await query.message.edit_text(
+                _format_note_detail(note), parse_mode="Markdown",
+                reply_markup=note_detail_menu(note),
+            )
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data.startswith("notedelete:"))
+async def cb_note_delete(query: CallbackQuery) -> None:
+    """Two-tap delete: first tap shows confirm, second tap (notedelconfirm:)
+    actually deletes. Matches the safety pattern used for task deletes."""
+    nid = query.data.split(":", 1)[1]
+    note = await database.get_note(nid)
+    if not note:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    await query.answer()
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🗑 Ha, o'chirilsin", callback_data=f"notedelconfirm:{nid}"),
+        InlineKeyboardButton(text="✕ Bekor", callback_data=f"noteopen:{nid}"),
+    ]])
+    title = (note.get("title") or "qayd")[:60]
+    await query.message.answer(
+        f"⚠️ **«{title}»** qaydi o'chirilsinmi?\nBu amalni qaytarib bo'lmaydi.",
+        parse_mode="Markdown",
+        reply_markup=confirm_kb,
+    )
+
+
+@router.callback_query(F.data.startswith("notedelconfirm:"))
+async def cb_note_delete_confirm(query: CallbackQuery) -> None:
+    nid = query.data.split(":", 1)[1]
+    ok = await database.delete_note(nid)
+    if not ok:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    await query.answer("🗑 O'chirildi ✓")
+    try:
+        await query.message.edit_text("🗑 Qayd o'chirildi.")
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("notetotask:"))
+async def cb_note_to_task(query: CallbackQuery) -> None:
+    """Convert a note straight into a task. Title = note.title, description =
+    note.content, deadline=NULL (user can edit afterwards), priority=P2,
+    tags include `qayd:{note_id}` for back-reference."""
+    nid = query.data.split(":", 1)[1]
+    note = await database.get_note(nid)
+    if not note:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    title = (note.get("title") or note.get("content", "Qayddan vazifa")).strip()[:200]
+    description = (note.get("content") or "").strip()
+    if description == title:
+        description = None
+    tags = list(note.get("tags") or []) + [f"qayd:{nid}"]
+    tid = await database.create_task({
+        "title": title,
+        "description": description,
+        "priority": "P2",
+        "status": "todo",
+        "tags": tags,
+        "source": "note",
+    })
+    await database.mark_note_processed(nid, "task", tid)
+    await query.answer("📝 Vazifa yaratildi ✓")
+    task = await database.get_task(tid)
+    if task:
+        await _safe_answer(
+            query.message,
+            "📝 **Qayd vazifaga aylantirildi**\n\n" + _format_task_card(task),
+            parse_mode="Markdown",
+            reply_markup=task_inline_actions(task),
+        )
+
+
+@router.callback_query(F.data.startswith("notetorem:"))
+async def cb_note_to_reminder(query: CallbackQuery, state: FSMContext) -> None:
+    """Convert a note into a reminder. We don't know the remind_at time, so
+    start the NewReminderFSM pre-filled with the note's content as title."""
+    nid = query.data.split(":", 1)[1]
+    note = await database.get_note(nid)
+    if not note:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    title = (note.get("title") or note.get("content", "Qayddan eslatma")).strip()[:200]
+    # Hop into the existing new-reminder flow with title pre-set; the user
+    # picks the time, and on submit we run mark_note_processed via a tag.
+    await state.set_state(NewReminderFSM.awaiting_time)
+    await state.update_data(
+        title=title,
+        from_note_id=nid,
+    )
+    await query.answer()
+    await query.message.answer(
+        f"⏰ **YANGI ESLATMA**\n\nMavzu: «{title[:60]}»\n\n"
+        "Eslatma vaqtini tanlang yoki yozing:\n"
+        "_Misol: «ertaga 14:00», «1 soatdan keyin»_",
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data.startswith("noteanalyze:"))
+async def cb_note_analyze(query: CallbackQuery) -> None:
+    """Send the note content to Claude (fast model) for a 2-line summary +
+    one concrete next-action suggestion. The suggested action then flows
+    through the existing create-confirm gate."""
+    nid = query.data.split(":", 1)[1]
+    note = await database.get_note(nid)
+    if not note:
+        await query.answer("Qayd topilmadi", show_alert=True)
+        return
+    await query.answer("🤖 Tahlil qilinmoqda...")
+    content = (note.get("content") or "").strip()
+    if not content:
+        await query.message.answer("Bo'sh qayd — tahlil qilish mumkin emas.")
+        return
+    typing = asyncio.create_task(_keep_typing(query.bot, query.message.chat.id))
+    try:
+        directive = (
+            "[INTERNAL] analyze_note\n\n"
+            "Quyidagi qayd matni — uni qisqa tahlil qiling:\n"
+            "  1. 1-2 satr xulosa (mavzu nima haqida)\n"
+            "  2. 1 ta aniq next-action taklif (vazifa yaratish kerakmi? "
+            "     eslatma kerakmi? hech narsa kerakmasmi?)\n"
+            "Agar action kerak deb topsangiz — javob ichiga create_task "
+            "yoki create_reminder action qo'shing. user_message qisqa "
+            "Uzbek xulosa bo'lsin."
+            f"\n\nQAYD:\n{content}"
+        )
+        response = await claude_service.process_message(
+            "", internal_directive=directive, complexity="fast",
+        )
+    finally:
+        typing.cancel()
+    text = (response.get("user_message") or "").strip() or "_Tahlil bo'sh._"
+    actions = response.get("actions", [])
+    destructive = [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
+    # Show analysis. If there are destructive actions, follow the standard
+    # confirm flow via _execute_actions (which respects the user's
+    # confirm_create_actions setting).
+    await _safe_answer(query.message, f"🤖 **Tahlil:**\n\n{text}", parse_mode="Markdown")
+    if destructive:
+        # We don't have FSMContext in this callback — the user explicitly asked
+        # for "tahlil qil", so auto-execute the suggested action without the
+        # standard confirm gate. Surface the preview so the action is visible.
+        preview = _format_create_preview(destructive)
+        try:
+            ids_by_type = await _execute_actions(actions)
+            await query.message.answer(preview + "\n\n✓ Yaratildi.",
+                                          parse_mode="Markdown")
+            # Mark the source note as processed if a task or reminder was created.
+            for kind, key in (("task", "task"), ("reminder", "reminder")):
+                if ids_by_type.get(key):
+                    await database.mark_note_processed(nid, kind, ids_by_type[key][0])
+                    break
+        except Exception:
+            logger.exception("Note analyze auto-execute failed")
 
 
 @router.message(Command("recurring"))
@@ -6712,6 +7288,84 @@ async def _download_voice(message: Message, bot: Bot) -> bytes | None:
     return bytes(audio_io)
 
 
+def _forward_signal(message: Message) -> tuple[str | None, str | None]:
+    """Extract (source_chat_label, author_label) from a Telegram forward.
+    Returns (None, None) if the message isn't a forward.
+
+    aiogram 3 unified forward metadata into `message.forward_origin`
+    (MessageOrigin variants). Older clients/updates still populate the
+    legacy `forward_from` / `forward_from_chat` attributes — check both."""
+    chat_label: str | None = None
+    author_label: str | None = None
+
+    origin = getattr(message, "forward_origin", None)
+    if origin is not None:
+        # Try the union variants we care about.
+        chat = getattr(origin, "chat", None)
+        if chat is not None:
+            chat_label = getattr(chat, "title", None) or getattr(chat, "username", None)
+        sender_user = getattr(origin, "sender_user", None)
+        if sender_user is not None:
+            author_label = " ".join(filter(None, [
+                getattr(sender_user, "first_name", None),
+                getattr(sender_user, "last_name", None),
+            ])).strip() or None
+        sender_name = getattr(origin, "sender_user_name", None)
+        if sender_name and not author_label:
+            author_label = sender_name
+
+    # Legacy fields (still set by some clients)
+    legacy_chat = getattr(message, "forward_from_chat", None)
+    if legacy_chat and not chat_label:
+        chat_label = getattr(legacy_chat, "title", None) or getattr(legacy_chat, "username", None)
+    legacy_user = getattr(message, "forward_from", None)
+    if legacy_user and not author_label:
+        author_label = " ".join(filter(None, [
+            getattr(legacy_user, "first_name", None),
+            getattr(legacy_user, "last_name", None),
+        ])).strip() or None
+    legacy_name = getattr(message, "forward_sender_name", None)
+    if legacy_name and not author_label:
+        author_label = legacy_name
+
+    if chat_label or author_label or origin or legacy_chat or legacy_user or legacy_name:
+        return chat_label, author_label
+    return None, None
+
+
+@router.message(
+    StateFilter(default_state),
+    F.forward_origin | F.forward_from | F.forward_from_chat | F.forward_sender_name,
+)
+async def handle_forwarded_message(message: Message, state: FSMContext) -> None:
+    """Auto-capture: any forwarded message in default_state becomes a note.
+
+    Empty forwards (stickers without caption, etc.) are rejected with a
+    short explanation. Otherwise we save the text/caption with provenance
+    metadata and confirm with two quick-actions (Inbox / Tahlil)."""
+    chat_label, author_label = _forward_signal(message)
+    content = (message.text or message.caption or "").strip()
+    if not content:
+        await message.answer(
+            "📎 Bo'sh forward — qayd yaratilmadi. Matn yoki izoh bo'lgan xabarni forward qiling."
+        )
+        return
+    nid = await database.create_note({
+        "content": content,
+        "source": "forward",
+        "source_chat": chat_label,
+        "source_author": author_label,
+        "source_message_id": message.message_id,
+    })
+    source_hint = "forward"
+    if chat_label:
+        source_hint = f"forward · {chat_label}"
+    elif author_label:
+        source_hint = f"forward · {author_label}"
+    await _note_capture_reply(message, nid, source_hint)
+    await _maybe_refresh_section(message, state, {"note": [nid]})
+
+
 @router.message(StateFilter(default_state), F.voice)
 async def handle_voice(message: Message, bot: Bot, state: FSMContext) -> None:
     """Free-form ovoz handler: transkripsiya → auto-process (default) yoki
@@ -7187,6 +7841,16 @@ async def handle_new_section_button(message: Message, state: FSMContext) -> None
     if label == NBTN_NEW_REMINDER:
         await _newreminder_start(message, state)
         return
+    if label == NBTN_NEW_NOTE:
+        # Enter the one-shot capture FSM — next text/voice becomes a note.
+        await state.set_state(NoteCaptureFSM.awaiting_text)
+        await _safe_answer(
+            message,
+            "📥 **YANGI QAYD**\n\nMatn yoki ovoz yuboring — bot uni Inbox'ga saqlaydi.\n"
+            "Bekor qilish: /cancel",
+            parse_mode="Markdown",
+        )
+        return
     if label in prompts:
         await _safe_answer(message, prompts[label], parse_mode="Markdown")
         return
@@ -7244,6 +7908,42 @@ async def handle_search_section_button(message: Message, state: FSMContext) -> N
         return
     await _safe_answer(message, "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(parts),
                        parse_mode="Markdown")
+
+
+@router.message(StateFilter(SectionFSM.in_notes), F.text | F.voice)
+async def handle_notes_section_button(message: Message, state: FSMContext) -> None:
+    """Reply-keyboard tugmalari Qaydlar bo'limida. Inbox/Ishlangan/Arxiv —
+    filter; '➕ Yangi qayd' → one-shot capture FSM; '🔎 Qidirish' → search
+    flow; matn fall-through Claude'ga, voice ham."""
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+    label = message.text.strip()
+    if label in _NOTES_SECTION_FILTERS:
+        await _render_notes_for_filter(message, _NOTES_SECTION_FILTERS[label])
+        return
+    if label == NBTN_NOTES_NEW:
+        await state.set_state(NoteCaptureFSM.awaiting_text)
+        await _safe_answer(
+            message,
+            "📥 **YANGI QAYD**\n\nMatn yoki ovoz yuboring — bot uni Inbox'ga saqlaydi.\n"
+            "Bekor qilish: /cancel",
+            parse_mode="Markdown",
+        )
+        return
+    if label == NBTN_NOTES_SEARCH:
+        # Reuse the global search FSM but pre-flag a notes-only view via
+        # a hint in state.data; the existing flow handles the rest.
+        await state.set_state(GlobalSearchFSM.awaiting_query)
+        await state.update_data(_search_scope="notes")
+        await _safe_answer(
+            message,
+            "🔎 **QAYD QIDIRISH**\n\nKalit so'z yoki ibora yuboring.",
+            parse_mode="Markdown",
+        )
+        return
+    # Fall-through: free text/voice → Claude (might create a note via LLM).
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_settings), F.text | F.voice)

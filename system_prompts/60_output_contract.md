@@ -32,6 +32,7 @@ You MUST respond with EXACTLY ONE valid JSON object. No markdown code fences. No
 | `cancel_meeting` | `id` |
 | `save_contact` | `name`, `role?`, `formality_level?` (1-5), `preferred_channel?` |
 | `save_correction` | `context`, `correction`, `reason` |
+| `create_note` | `content`, `title?`, `tags?`, `source?` (forward/voice/command/manual/llm — default "llm") |
 | `none` | (empty data — used for polish-only or info responses) |
 
 ### Button callback patterns

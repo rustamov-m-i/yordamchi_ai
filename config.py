@@ -32,6 +32,13 @@ def _int(key: str, required: bool = True, default: int = 0) -> int:
         sys.exit(1)
 
 
+def _bool(key: str, default: bool = True) -> bool:
+    raw = os.getenv(key, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
 TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")
 PRINCIPAL_USER_ID: int = _int("PRINCIPAL_USER_ID")
 
@@ -47,6 +54,8 @@ CLAUDE_MODEL_COMPLEX: str = os.getenv("CLAUDE_MODEL_COMPLEX", "claude-opus-4-7")
 
 OPENAI_API_KEY: str = _require("OPENAI_API_KEY")
 WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-1").strip()
+VOICE_AUTO_CONFIRM: bool = _bool("VOICE_AUTO_CONFIRM", True)
+CONFIRM_CREATE_ACTIONS: bool = _bool("CONFIRM_CREATE_ACTIONS", True)
 
 # Aisha AI STT — primary Uzbek-native voice provider (pay-per-minute, ~425 UZS/min).
 # Data stays in Uzbekistan (banking-compliance win). Supports uz/ru/en.

@@ -142,3 +142,28 @@ User: "Bugun obhavo qanday?"
   "user_message": "Ob-havo ma'lumotlariga real-time kirishim yo'q. Iltimos, ob-havo ilovasini ishlatib ko'ring (Yandex.Pogoda yoki AccuWeather)."
 }
 ```
+
+### Example 10 — CAPTURE (F intent: qaydga saqlash)
+
+User: "Bu xabarni keyin ko'rib chiqaman, qayd qil: marketing chatida Q2 byudjet bo'yicha munozara, hali yakuniy raqamlar yo'q"
+
+```json
+{
+  "intent": "none",
+  "actions": [
+    {
+      "type": "create_note",
+      "data": {
+        "content": "Marketing chatida Q2 byudjet bo'yicha munozara, hali yakuniy raqamlar yo'q",
+        "source": "llm",
+        "tags": ["byudjet", "marketing"]
+      }
+    }
+  ],
+  "user_message": "📝 Qayd saqlandi. /notes orqali keyin tahlil qilishingiz mumkin."
+}
+```
+
+**Note:** `create_note` HECH QACHON `create_task` bilan birga bo'lmaydi —
+qayd o'zi vazifa emas, balki **kelajakda vazifaga aylanishi mumkin**
+bo'lgan inbox ma'lumot.

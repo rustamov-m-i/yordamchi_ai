@@ -41,6 +41,8 @@ async def _register_bot_commands(bot: Bot) -> None:
         BotCommand(command="today", description="📅 Bugungi briefing"),
         BotCommand(command="tasks", description="📌 Vazifalar"),
         BotCommand(command="reminders", description="⏰ Eslatmalar"),
+        BotCommand(command="notes", description="📝 Qaydlar (Inbox)"),
+        BotCommand(command="qayd", description="📥 Tezkor qayd qo'shish"),
         BotCommand(command="team", description="👥 Ijrochilar paneli"),
         BotCommand(command="risks", description="🚨 Risklar paneli"),
         BotCommand(command="new", description="➕ Yangi vazifa"),
