@@ -573,9 +573,12 @@ async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50) -> 
 
 
 async def list_today_tasks() -> list[dict]:
-    """Tasks whose deadline falls within today's date range only.
-    Excludes overdue (yesterday and earlier), future, and undated tasks.
-    """
+    """STRICT today filter: only tasks whose deadline falls within today's date
+    range. Excludes overdue (yesterday and earlier), future, and undated tasks.
+
+    Design choice: undated tasks (created today without an explicit deadline)
+    appear in /tasks (Aktiv) but NOT in /today — /today is reserved for items
+    that the principal explicitly committed to TODAY."""
     today = datetime.now(TZ).date()
     start_of_day = TZ.localize(datetime.combine(today, datetime.min.time())).isoformat()
     end_of_day = TZ.localize(datetime.combine(today, datetime.max.time())).isoformat()
@@ -1776,6 +1779,12 @@ DEFAULT_SETTINGS = {
     "quiet_hours_enabled": False,
     "quiet_hours_start": "22:00",
     "quiet_hours_end": "07:00",
+    # Voice: auto-process the transcript without an extra confirm tap.
+    # Default ON — power users can re-enable confirmation via /settings.
+    "voice_auto_confirm": True,
+    # Confirm before creating tasks/meetings. Default ON for safety so a
+    # mis-transcribed voice message can't quietly create wrong items.
+    "confirm_create_actions": True,
 }
 
 

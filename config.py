@@ -48,7 +48,15 @@ CLAUDE_MODEL_COMPLEX: str = os.getenv("CLAUDE_MODEL_COMPLEX", "claude-opus-4-7")
 OPENAI_API_KEY: str = _require("OPENAI_API_KEY")
 WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-1").strip()
 
-# Muxlisa.uz STT — Uzbek-native, primary voice provider
+# Aisha AI STT — primary Uzbek-native voice provider (pay-per-minute, ~425 UZS/min).
+# Data stays in Uzbekistan (banking-compliance win). Supports uz/ru/en.
+# Endpoint: POST /api/v1/stt/post/ (sync, suits short Telegram voice messages).
+# Auth: X-Api-Key header.
+AISHA_API_KEY: str = os.getenv("AISHA_API_KEY", "").strip()
+AISHA_STT_URL: str = os.getenv("AISHA_STT_URL", "https://back.aisha.group/api/v1/stt/post/").strip()
+
+# Muxlisa.uz STT — legacy provider, retained as secondary fallback for the
+# transition period. Remove MUXLISA_API_KEY from .env to fully decommission.
 MUXLISA_API_KEY: str = os.getenv("MUXLISA_API_KEY", "").strip()
 MUXLISA_STT_URL: str = os.getenv("MUXLISA_STT_URL", "https://service.muxlisa.uz/api/v2/stt").strip()
 

@@ -427,6 +427,152 @@ async def test_pending_actions_idempotency():
         await db.commit()
 
 
+def test_voice_and_create_confirm_settings():
+    """Phase: voice auto + create-confirm settings present with safe defaults."""
+    section("13. settings — voice_auto_confirm + confirm_create_actions defaults")
+    assert "voice_auto_confirm" in database.DEFAULT_SETTINGS
+    assert "confirm_create_actions" in database.DEFAULT_SETTINGS
+    t("settings", "voice_auto_confirm default = True (auto)",
+      database.DEFAULT_SETTINGS["voice_auto_confirm"] is True)
+    t("settings", "confirm_create_actions default = True (safer)",
+      database.DEFAULT_SETTINGS["confirm_create_actions"] is True)
+
+
+def test_create_action_preview_format():
+    """Phase: _format_create_preview renders task + meeting cards correctly."""
+    section("14. _format_create_preview — task + meeting rendering")
+    actions = [
+        {"type": "create_task", "data": {
+            "title": "Marketing rejasi tayyorlash",
+            "assignee": "Bekzod",
+            "deadline": "2030-01-01T15:00:00+05:00",
+            "priority": "P1",
+        }},
+        {"type": "schedule_meeting", "data": {
+            "title": "Q2 review",
+            "participants": ["Bekzod", "Alisher"],
+            "datetime_start": "2030-01-02T10:00:00+05:00",
+            "location_or_link": "Bosh ofis",
+        }},
+        {"type": "save_contact", "data": {"name": "Should be skipped"}},
+    ]
+    preview = handlers._format_create_preview(
+        [a for a in actions if a["type"] in handlers._DESTRUCTIVE_ACTION_TYPES]
+    )
+    t("preview", "header present", "TASDIQLAYSIZMI" in preview)
+    t("preview", "task title in preview", "Marketing rejasi" in preview)
+    t("preview", "task assignee in preview", "Bekzod" in preview)
+    t("preview", "meeting title in preview", "Q2 review" in preview)
+    t("preview", "meeting participants in preview",
+      "Bekzod" in preview and "Alisher" in preview)
+    t("preview", "non-destructive action excluded",
+      "Should be skipped" not in preview)
+
+
+async def test_today_tasks_strict_deadline_filter():
+    """Strict /today semantics: only tasks whose DEADLINE is in today's range
+    appear. Deadlinesiz vazifa /today da ko'rinmaydi — design choice for
+    a clean "what did I commit to today" panel. They still appear in /tasks."""
+    section("16. list_today_tasks — strict: faqat bugungi deadline")
+    import aiosqlite
+
+    # (1) Bugungi deadline → ro'yxatda bo'lishi shart.
+    today_iso = (datetime.now(database.TZ)
+                 .replace(hour=15, minute=0, second=0, microsecond=0)
+                 .isoformat())
+    tid_today = await database.create_task({
+        "title": "QA — bugungi deadline'li vazifa",
+        "priority": "P1",
+        "status": "todo",
+        "deadline": today_iso,
+    })
+
+    # (2) Deadlinesiz vazifa → /today da KO'RINMASLIGI kerak.
+    tid_undated = await database.create_task({
+        "title": "QA — deadlinesiz vazifa",
+        "priority": "P2",
+        "status": "todo",
+    })
+
+    # (3) Ertangi deadline → /today da yo'q.
+    tomorrow_iso = ((datetime.now(database.TZ) + timedelta(days=1))
+                    .replace(hour=10, minute=0, second=0, microsecond=0)
+                    .isoformat())
+    tid_tomorrow = await database.create_task({
+        "title": "QA — ertangi vazifa",
+        "priority": "P1",
+        "status": "todo",
+        "deadline": tomorrow_iso,
+    })
+
+    today_ids = {row["id"] for row in await database.list_today_tasks()}
+    t("today_tasks", "bugungi deadline'li vazifa /today da bor",
+      tid_today in today_ids)
+    t("today_tasks", "deadlinesiz vazifa /today da YO'Q (strict)",
+      tid_undated not in today_ids)
+    t("today_tasks", "ertangi deadline'li vazifa /today da yo'q",
+      tid_tomorrow not in today_ids)
+
+    # cleanup
+    async with aiosqlite.connect(database.config.DATABASE_PATH) as db:
+        await db.execute(
+            "DELETE FROM tasks WHERE id IN (?, ?, ?)",
+            (tid_today, tid_undated, tid_tomorrow),
+        )
+        await db.commit()
+
+
+def test_maybe_refresh_section_present():
+    """Smoke check: the auto-refresh helper exists and is wired."""
+    section("17. _maybe_refresh_section — auto-refresh helper")
+    t("refresh", "_maybe_refresh_section function exists",
+      hasattr(handlers, "_maybe_refresh_section")
+      and callable(handlers._maybe_refresh_section))
+
+
+def test_destructive_action_types():
+    """The set must contain exactly the operations that mutate the user's
+    primary objects (tasks, meetings). update/cancel/save_contact are
+    intentionally NOT here because they target existing items or are safe."""
+    section("15. _DESTRUCTIVE_ACTION_TYPES — scope")
+    expected = {"create_task", "schedule_meeting"}
+    actual = handlers._DESTRUCTIVE_ACTION_TYPES
+    t("destructive", "exactly create_task + schedule_meeting",
+      actual == expected, f"got={actual}")
+
+
+async def test_aisha_provider_chain():
+    """Aisha integration regression — verifies the provider chain wiring
+    (Aisha → Muxlisa → Whisper) without actually calling the network.
+
+    Covers:
+      - config.AISHA_API_KEY and AISHA_STT_URL exist and have sensible defaults
+      - voice_service._transcribe_aisha is exposed and callable
+      - transcribe() preflight (size/silence) doesn't depend on Aisha being up
+    """
+    section("12. voice_service — Aisha provider chain")
+    import voice_service
+
+    t("aisha", "config.AISHA_STT_URL set to back.aisha.group default",
+      "back.aisha.group" in config.AISHA_STT_URL,
+      f"url={config.AISHA_STT_URL!r}")
+    t("aisha", "_transcribe_aisha helper present",
+      hasattr(voice_service, "_transcribe_aisha")
+      and callable(voice_service._transcribe_aisha))
+    t("aisha", "AISHA_TIMEOUT > 0",
+      getattr(voice_service, "AISHA_TIMEOUT", 0) > 0,
+      f"timeout={voice_service.AISHA_TIMEOUT}s")
+
+    # Aisha response parser: simulate a v1 sync response shape via duck typing.
+    # We can't easily mock httpx here, so we just verify the function exists
+    # and the public transcribe() entry point still short-circuits on tiny audio
+    # without crashing when AISHA_API_KEY is set/unset.
+    tiny = b"\x00" * 50  # below silence threshold
+    result = await voice_service.transcribe(tiny, filename="qa.ogg", language="uz")
+    t("aisha", "tiny audio still skipped (silence path independent of provider)",
+      result is None)
+
+
 async def test_silence_detection():
     """Voice service should short-circuit on suspiciously small audio
     payloads instead of paying for an STT round-trip."""
@@ -487,6 +633,12 @@ async def main():
     await test_spawn_background_logs_exceptions()
     await test_pending_actions_idempotency()
     await test_silence_detection()
+    await test_aisha_provider_chain()
+    test_voice_and_create_confirm_settings()
+    test_create_action_preview_format()
+    test_destructive_action_types()
+    await test_today_tasks_strict_deadline_filter()
+    test_maybe_refresh_section_present()
 
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)

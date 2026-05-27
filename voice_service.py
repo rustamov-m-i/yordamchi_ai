@@ -1,20 +1,28 @@
 """Voice transcription.
 
-Primary backend: **Muxlisa.uz** — Uzbek-native STT, significantly more accurate for Uzbek
-than OpenAI Whisper. Data stays inside Uzbekistan (banking-compliance win).
+Provider chain (first one with a configured API key wins, with the next as
+fallback on failure):
 
-Fallback backend: OpenAI Whisper (auto-detect + Uzbek primer). Used only if Muxlisa is
-unreachable or returns an error.
+  1. **Aisha AI** (primary)  — Uzbek-native, pay-per-minute (~425 UZS/min, 2026).
+     Data stays in Uzbekistan. 90%+ claimed accuracy. Speaker diarization
+     available. Endpoint is `POST /api/v1/stt/post/` (sync — best for short
+     Telegram voice messages; v2 is async for long-form audio).
+       Auth header: `X-Api-Key: <key>`
+       Multipart fields: audio, language (uz/ru/en)
+       Response: {"transcript": "...", "status": "SUCCESS", "duration": ...}
 
-API contract (Muxlisa v2):
-  POST https://service.muxlisa.uz/api/v2/stt
-  Header: x-api-key: <key>
-  Body (multipart/form-data):
-    audio: <file bytes>
-    language: "uz"
-  Response: {"text": "<transcript>"}
+  2. **Muxlisa.uz** (legacy secondary) — kept on the chain for the transition
+     period. Remove MUXLISA_API_KEY from .env to fully decommission. Uses a
+     pinned cert because its endpoint is signed by a private CA.
+       Auth header: `x-api-key: <key>`
+       Multipart fields: audio, language
+       Response: {"text": "..."}
+
+  3. **OpenAI Whisper** (final fallback) — auto-detect + Uzbek primer. Used
+     only if both Uzbek-native providers fail.
 """
 
+import asyncio
 import hashlib
 import io
 import logging
@@ -35,6 +43,7 @@ import database
 logger = logging.getLogger(__name__)
 
 MAX_AUDIO_BYTES = 5 * 1024 * 1024  # 5 MB hard limit
+AISHA_TIMEOUT = 45.0
 MUXLISA_TIMEOUT = 45.0
 WHISPER_TIMEOUT = 45.0
 
@@ -109,10 +118,11 @@ _UZBEK_PRIMER = (
     "Agrobank, ertaga, vazifa, deadline, prioritet, marketing, byudjet."
 )
 
-# Post-correction config — Muxlisa often misrecognizes proper nouns, banking terms,
-# and Russian/English loanwords. We fix these with a cheap Claude pass after the
-# Muxlisa response. If the correction fails for any reason we return the original
-# transcript unchanged — voice messages must never be lost to this enhancement.
+# Post-correction config — every STT provider (Aisha, Muxlisa, Whisper) misses
+# proper nouns, banking terms, and Russian/English loanwords occasionally. We fix
+# these with a cheap Claude pass after the STT response. If correction fails for
+# any reason we return the original transcript unchanged — voice messages must
+# never be lost to this enhancement.
 _CORRECTION_MODEL = "claude-haiku-4-5"
 _CORRECTION_TIMEOUT = 15.0
 _CORRECTION_MIN_LEN = 5  # skip for "ha", "yo'q", etc.
@@ -138,7 +148,8 @@ _anthropic_client = AsyncAnthropic(
 
 
 async def _correct_transcript(text: str) -> str:
-    """Post-correct a Muxlisa transcript using Claude + contacts/glossary.
+    """Post-correct an STT transcript using Claude + contacts/glossary.
+    Works the same for any provider (Aisha, Muxlisa, Whisper).
 
     Returns the original text unchanged on any failure, so a broken correction
     pass never causes a voice message to be lost.
@@ -154,11 +165,26 @@ async def _correct_transcript(text: str) -> str:
 
         prompt = (
             "Sen o'zbek tilidagi STT (speech-to-text) chiqishini post-korrektor'sisan.\n"
-            "Muxlisa STT ayrim ismlarni, bank atamalarini va rus/ingliz so'zlarini xato eshitishi mumkin.\n\n"
-            "VAZIFA: matnda glossary bilan mos keladigan ANIQ xato eshitilgan so'zlarni tuzating.\n"
+            "STT provayderi ayrim ismlarni, bank atamalarini va rus/ingliz so'zlarini xato\n"
+            "eshitishi mumkin, hamda raqam/vaqtlarni so'z bilan yozadi.\n\n"
+            "VAZIFA:\n"
+            "1) Glossary bilan mos keladigan ANIQ xato eshitilgan so'zlarni tuzating.\n"
+            "2) RAQAMLARNI SO'ZDAN SONGA o'tkazing:\n"
+            "   • Soat vaqtlari → HH:MM formatiga: «soat o'n bir yarim» → «soat 11:30»,\n"
+            "     «soat ikkida» → «soat 14:00» (ish vaqti — kunduzi PM ko'rinishida),\n"
+            "     «soat to'qqiz yarim» → «soat 09:30», «yarim soatdan keyin» → «30 daqiqadan keyin»\n"
+            "   • Davomiylik → raqam + birlik: «o'n daqiqa» → «10 daqiqa»,\n"
+            "     «uch soat» → «3 soat», «ikki kun» → «2 kun», «bir hafta» → «1 hafta»\n"
+            "   • Sanalar → DD-oy yoki DD-MM ga: «yigirma ikkinchi may» → «22-may»,\n"
+            "     «o'ttizinchi sentabr» → «30-sentyabr», «to'qqizinchi» → «9-» (kontekstga qarab)\n"
+            "   • Sonlar (3+ raqamli) → songa: «bir million besh yuz ming» → «1,500,000»,\n"
+            "     «o'ttiz besh» → «35», «uchta» → «3 ta», «o'ninchi vazifa» → «10-vazifa»\n"
+            "3) Soat vaqtini aniqlash: agar so'zlovchi «kunduzi/peshindan keyin/kechqurun»\n"
+            "   demasa, soat 7-11 ertalab → AM, 12 keyin → PM (24h: 13:00-23:59).\n"
+            "   Misol: «soat uchda uchrashuv» (ish kontekstda) → «soat 15:00 da uchrashuv».\n\n"
             "QOIDALAR:\n"
             "- Boshqa so'zlarga tegma. Mazmunni saqla.\n"
-            "- Tinish belgilarini o'zgartirma.\n"
+            "- Tinish belgilarini o'zgartirma (vergullar, nuqta — o'rni o'rnida).\n"
             "- Glossary so'zi matnda yo'q bo'lsa — uni zo'rlab kiritma.\n"
             "- Faqat tuzatilgan matnni qaytar (izoh, prefiks, qo'shtirnoq yo'q).\n\n"
             f"GLOSSARY:\n"
@@ -201,16 +227,17 @@ async def _correct_transcript(text: str) -> str:
 async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg", language: Optional[str] = "uz") -> Optional[str]:
     """Transcribe audio. Returns transcript string or None on failure.
 
-    Order of attempts:
-      1. Muxlisa.uz (if MUXLISA_API_KEY is set) — Uzbek-native, best accuracy.
-      2. OpenAI Whisper with Uzbek primer (fallback).
+    Provider chain (each only used if its API key is configured):
+      1. Aisha AI       — primary, Uzbek-native, data in UZ.
+      2. Muxlisa.uz     — legacy fallback during migration period.
+      3. OpenAI Whisper — final fallback with Uzbek primer.
     """
     if not audio_bytes:
         return None
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         logger.warning("Audio rejected: %d bytes > %d MB limit", len(audio_bytes), MAX_AUDIO_BYTES // (1024 * 1024))
         await database.log_llm_call(
-            "muxlisa", "stt-v2", "voice_transcribe",
+            "stt", "preflight", "voice_transcribe",
             None, len(audio_bytes), None, None, error="size_limit",
         )
         return None
@@ -220,17 +247,37 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg", language: 
     if len(audio_bytes) < _SILENCE_BYTES_THRESHOLD:
         logger.info("Audio skipped: %d bytes below silence threshold", len(audio_bytes))
         await database.log_llm_call(
-            "muxlisa", "stt-v2", "voice_transcribe",
+            "stt", "preflight", "voice_transcribe",
             None, len(audio_bytes), None, None, error="silence_skip",
         )
         return None
 
     audio_hash = hashlib.sha256(audio_bytes).hexdigest()[:16]
+    lang = language or "uz"
 
-    # ── Attempt 1: Muxlisa ──
+    # ── Attempt 1: Aisha (primary) ──
+    if config.AISHA_API_KEY:
+        try:
+            transcript = await _transcribe_aisha(audio_bytes, filename, lang)
+            if transcript is not None:
+                await database.log_llm_call(
+                    "aisha", "stt-v1", "voice_transcribe",
+                    audio_hash, len(audio_bytes), None, len(transcript),
+                )
+                if transcript:
+                    transcript = await _correct_transcript(transcript)
+                return transcript or None
+        except Exception as e:
+            logger.warning("Aisha STT failed (%s: %s) — trying next provider", type(e).__name__, e)
+            await database.log_llm_call(
+                "aisha", "stt-v1", "voice_transcribe",
+                audio_hash, len(audio_bytes), None, None, error=type(e).__name__,
+            )
+
+    # ── Attempt 2: Muxlisa (legacy secondary) ──
     if config.MUXLISA_API_KEY:
         try:
-            transcript = await _transcribe_muxlisa(audio_bytes, filename, language or "uz")
+            transcript = await _transcribe_muxlisa(audio_bytes, filename, lang)
             if transcript is not None:
                 await database.log_llm_call(
                     "muxlisa", "stt-v2", "voice_transcribe",
@@ -246,9 +293,71 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg", language: 
                 audio_hash, len(audio_bytes), None, None, error=type(e).__name__,
             )
 
-    # ── Attempt 2: OpenAI Whisper fallback ──
+    # ── Attempt 3: OpenAI Whisper fallback ──
     transcript = await _transcribe_whisper(audio_bytes, filename, audio_hash)
     return transcript
+
+
+async def _transcribe_aisha(audio_bytes: bytes, filename: str, language: str) -> Optional[str]:
+    """Single Aisha STT call (v1 sync endpoint). Raises on network/HTTP error,
+    returns text on success.
+
+    v1 is synchronous and ideal for short Telegram voice messages (<60s).
+    For long-form audio (>1 min) Aisha recommends v2 (async with polling)."""
+    max_attempts = 4
+    transient_statuses = {429, 500, 502, 503, 504}
+
+    async with httpx.AsyncClient(timeout=AISHA_TIMEOUT, verify=_CA_BUNDLE) as client:
+        files = {"audio": (filename, audio_bytes, "audio/ogg")}
+        # language defaults to uz on Aisha; pass explicitly anyway so a future
+        # Russian-dominant deployment doesn't silently auto-detect wrong.
+        data = {"language": language}
+        headers = {"X-Api-Key": config.AISHA_API_KEY}
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = await client.post(config.AISHA_STT_URL, files=files, data=data, headers=headers)
+                if resp.status_code != 200:
+                    if resp.status_code in transient_statuses and attempt < max_attempts:
+                        logger.warning(
+                            "Aisha transient HTTP %s on attempt %d; retrying",
+                            resp.status_code, attempt,
+                        )
+                        await asyncio.sleep(0.75 * attempt)
+                        continue
+                    raise httpx.HTTPStatusError(
+                        f"Aisha returned {resp.status_code}: {resp.text[:200]}",
+                        request=resp.request,
+                        response=resp,
+                    )
+
+                try:
+                    payload = resp.json()
+                except Exception:
+                    raise ValueError(f"Aisha non-JSON response: {resp.text[:200]}")
+
+                status = (payload.get("status") or "").upper()
+                # Treat empty status as success (some endpoints omit it on sync replies).
+                if status and status not in ("SUCCESS", "DONE", "OK"):
+                    raise RuntimeError(
+                        f"Aisha status={status} error={payload.get('error') or payload.get('message') or 'unknown'}"
+                    )
+
+                # Aisha v1 returns the result under "transcript". Defensive fallback to
+                # "text" in case the v1/v2 schemas diverge in a future update.
+                text = (payload.get("transcript") or payload.get("text") or "").strip()
+                logger.info("Aisha transcript: %d chars (duration=%.1fs)",
+                             len(text), float(payload.get("duration") or 0))
+                return text
+            except (httpx.TransportError, httpx.HTTPStatusError) as e:
+                if attempt < max_attempts and isinstance(e, httpx.TransportError):
+                    logger.warning(
+                        "Aisha transport error on attempt %d: %s; retrying",
+                        attempt, type(e).__name__,
+                    )
+                    await asyncio.sleep(1 * attempt)
+                    continue
+                raise
 
 
 async def _transcribe_muxlisa(audio_bytes: bytes, filename: str, language: str) -> Optional[str]:

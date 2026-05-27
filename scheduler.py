@@ -17,6 +17,7 @@ import calendar_service
 import claude_service
 import config
 import database
+from typing import Optional
 
 # Errors that mean "this iCloud operation will never succeed without manual
 # intervention" — auth failure, deleted calendar, etc. We mark these dead
@@ -26,10 +27,10 @@ _ICLOUD_PERMANENT_ERRORS = (AuthorizationError, NotFoundError, PermissionError)
 logger = logging.getLogger(__name__)
 
 # Singleton instance — used by handlers to register one-shot reminders when meetings are scheduled.
-_instance: "YordamchiScheduler | None" = None
+_instance: Optional["YordamchiScheduler"] = None
 
 
-def get_scheduler() -> "YordamchiScheduler | None":
+def get_scheduler() -> Optional["YordamchiScheduler"]:
     return _instance
 
 
@@ -303,7 +304,7 @@ class YordamchiScheduler:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
 
-    async def _send(self, text: str, reply_markup: InlineKeyboardMarkup | None = None,
+    async def _send(self, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None,
                      bypass_quiet_hours: bool = False) -> None:
         try:
             settings = await database.get_settings()
@@ -365,7 +366,7 @@ class YordamchiScheduler:
         if text:
             await self._send(text)
 
-    async def _fire_meeting_reminder(self, meeting_id: str, lead_minutes: int | None = None) -> None:
+    async def _fire_meeting_reminder(self, meeting_id: str, lead_minutes: Optional[int] = None) -> None:
         """Single-meeting reminder. Scheduled at create-time.
         Claims the reminder slot BEFORE sending — if a parallel sweep already
         claimed it (e.g. multi-instance bot), we silently skip instead of

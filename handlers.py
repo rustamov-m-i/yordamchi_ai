@@ -577,6 +577,13 @@ class VoiceConfirmFSM(StatesGroup):
     awaiting_revision = State()
 
 
+class CreateActionConfirmFSM(StatesGroup):
+    """Tasdiq state — yangi vazifa/uchrashuv yaratishdan oldin foydalanuvchi
+    "Tasdiqlayman/Bekor qilish" bossin uchun. Claude'ning to'liq javobi
+    state.data['pending_response']'da saqlanadi; tasdiqdan keyin bajariladi."""
+    awaiting = State()
+
+
 class GlobalSearchFSM(StatesGroup):
     """Global search across tasks + meetings."""
     awaiting_query = State()
@@ -715,11 +722,19 @@ def settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
     qh_end = settings.get("quiet_hours_end", "07:00")
     quiet_label = (f"🌙 Sukunat: {qh_start}–{qh_end}" if quiet_on
                     else "🌙 Sukunat: o'chiq")
+    voice_auto = settings.get("voice_auto_confirm", True)
+    voice_label = ("🎙 Ovoz: AVTO (tasdiqsiz)" if voice_auto
+                    else "🎙 Ovoz: tasdiq so'rash")
+    confirm_create = settings.get("confirm_create_actions", True)
+    create_label = ("⚠️ Yaratish tasdig'i: YOQ" if confirm_create
+                     else "⚠️ Yaratish tasdig'i: O'CHIQ")
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=notif_label, callback_data="setting:notifications_toggle")],
         [InlineKeyboardButton(text=f"⏰ Brifing vaqti: {morning_time}", callback_data="setting:briefing_time")],
         [InlineKeyboardButton(text=f"🌙 Kechki yakun: {evening_time}", callback_data="setting:evening_time")],
         [InlineKeyboardButton(text=quiet_label, callback_data="setting:quiet_hours")],
+        [InlineKeyboardButton(text=voice_label, callback_data="setting:voice_auto_toggle")],
+        [InlineKeyboardButton(text=create_label, callback_data="setting:confirm_create_toggle")],
         [InlineKeyboardButton(text="📲 Eslatma parametrlari", callback_data="setting:reminders")],
         [InlineKeyboardButton(text="📅 Kalendar holati", callback_data="setting:calendar")],
         [back_button()],
@@ -1136,9 +1151,98 @@ _STREAM_EDIT_MIN_INTERVAL_SEC = 1.2  # Telegram message-edit rate limit headroom
 _STREAM_EDIT_MIN_DELTA_CHARS = 24    # don't spam edits for tiny additions
 
 
-async def _process_and_reply(message: Message, user_text: str) -> None:
+_DESTRUCTIVE_ACTION_TYPES = {"create_task", "schedule_meeting"}
+
+
+async def _maybe_refresh_section(
+    message: Message,
+    state: "FSMContext | None",
+    ids_by_type: dict[str, list[str]],
+) -> None:
+    """When the user is currently inside a section view (`/tasks`, `/meetings`,
+    `/reminders`, `/today`) and an item of the matching type was just created,
+    send a fresh section render so the new item is visible immediately.
+
+    Without this, the previously-rendered section list (an old Telegram
+    message) shows stale data and the user thinks the create silently
+    failed — a real reported bug."""
+    if state is None or not ids_by_type:
+        return
+    try:
+        current = await state.get_state()
+    except Exception:
+        return
+    if not current:
+        return
+
+    created_tasks = bool(ids_by_type.get("task"))
+    created_meetings = bool(ids_by_type.get("meeting"))
+    created_reminders = bool(ids_by_type.get("reminder"))
+
+    # Map current section → render call. Only fire when a matching item was
+    # actually created, otherwise we'd spam the user with a redundant list.
+    try:
+        if current == SectionFSM.in_tasks.state and created_tasks:
+            await _render_tasks_for_filter(message, "active")
+        elif current == SectionFSM.in_today.state and (created_tasks or created_meetings):
+            # /today shows both — re-render via cmd_today.
+            await cmd_today(message)
+        elif current == SectionFSM.in_meetings.state and created_meetings:
+            await _render_meetings_for_filter(message, "week")
+        elif current == SectionFSM.in_reminders.state and created_reminders:
+            await _render_reminders_for_filter(message, "upcoming")
+    except Exception:
+        logger.exception("Section auto-refresh failed (non-fatal)")
+
+
+def _format_create_preview(actions: list[dict]) -> str:
+    """Render a confirm-prompt preview for create_task / schedule_meeting actions.
+    Shown to the user before the destructive action is executed when the
+    `confirm_create_actions` setting is on (default)."""
+    lines = ["⚠️ **TASDIQLAYSIZMI?**", ""]
+    for a in actions:
+        t = a.get("type")
+        d = a.get("data", {}) or {}
+        if t == "create_task":
+            title = (d.get("title") or "—").strip()
+            assignee = (d.get("assignee") or "belgilanmagan").strip()
+            deadline_label, _ = _format_deadline_short(d.get("deadline"))
+            priority = d.get("priority", "P2")
+            pri_label = _PRIORITY_LABEL_UZ.get(priority, priority)
+            lines.append("📝 **Yangi vazifa**")
+            lines.append(f"   {title}")
+            lines.append(f"   👤 Ijrochi: {assignee}")
+            lines.append(f"   ⏳ Muddat: {deadline_label}")
+            lines.append(f"   🔺 Ustuvorlik: {pri_label}")
+            lines.append("")
+        elif t == "schedule_meeting":
+            title = (d.get("title") or "—").strip()
+            participants = ", ".join(d.get("participants", []) or []) or "belgilanmagan"
+            location = (d.get("location_or_link") or "belgilanmagan").strip()
+            start = d.get("datetime_start", "—")
+            try:
+                dt = datetime.fromisoformat(start).astimezone(database.TZ)
+                start_label = dt.strftime("%d-%m %H:%M")
+            except (ValueError, TypeError):
+                start_label = start
+            lines.append("🤝 **Yangi uchrashuv**")
+            lines.append(f"   {title}")
+            lines.append(f"   🕐 Vaqt: {start_label}")
+            lines.append(f"   👥 Ishtirokchilar: {participants}")
+            lines.append(f"   📍 Joy: {location}")
+            lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+async def _process_and_reply(message: Message, user_text: str, state: "FSMContext | None" = None) -> None:
     """Send user_text to Claude (streaming), edit a progress message as the
     reply arrives, then attach action buttons once parsing completes.
+
+    If `state` is supplied AND the user has `confirm_create_actions` enabled
+    (default), any create_task / schedule_meeting actions in Claude's response
+    are deferred: a preview + Tasdiq/Bekor prompt is shown, and execution
+    happens only after the user confirms. This protects against mis-transcribed
+    voice messages silently creating wrong items.
 
     Wrapped in a pending_actions row so:
       - a redelivered Telegram update doesn't double-process (UNIQUE update_id),
@@ -1213,7 +1317,49 @@ async def _process_and_reply(message: Message, user_text: str) -> None:
             await database.complete_pending_action(pending_id)
             return
 
-        ids_by_type = await _execute_actions(final_response.get("actions", []))
+        # ── Tasdiq qatlami — yangi vazifa/uchrashuv yaratishdan oldin ──
+        # Voice/text orqali kelgan so'rovda Claude noto'g'ri tushunishi mumkin,
+        # shuning uchun create_task / schedule_meeting bajarilishidan oldin
+        # foydalanuvchidan tasdiq olamiz (default ON; /settings dan o'chirish mumkin).
+        actions = final_response.get("actions", [])
+        destructive = [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
+        if state is not None and destructive:
+            try:
+                _settings = await database.get_settings()
+            except Exception:
+                _settings = {}
+            if _settings.get("confirm_create_actions", True):
+                preview = _format_create_preview(destructive)
+                confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✓ Tasdiqlayman", callback_data="acts_confirm"),
+                    InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
+                ]])
+                # Remember the prior section state so cb_actions_confirm can
+                # restore it and re-render the section after the deferred execute.
+                try:
+                    prior_state = await state.get_state()
+                except Exception:
+                    prior_state = None
+                await state.set_state(CreateActionConfirmFSM.awaiting)
+                await state.update_data(
+                    pending_response=final_response,
+                    _prior_section=prior_state,
+                )
+                if progress_msg is not None:
+                    try:
+                        await progress_msg.edit_text(
+                            preview, parse_mode="Markdown", reply_markup=confirm_kb
+                        )
+                    except TelegramBadRequest:
+                        await _safe_answer(message, preview,
+                                            reply_markup=confirm_kb, parse_mode="Markdown")
+                else:
+                    await _safe_answer(message, preview,
+                                        reply_markup=confirm_kb, parse_mode="Markdown")
+                await database.complete_pending_action(pending_id)
+                return
+
+        ids_by_type = await _execute_actions(actions)
         keyboard = _build_keyboard(final_response.get("buttons", []), ids_by_type)
         if keyboard:
             keyboard = _append_back_row(keyboard)
@@ -1229,6 +1375,9 @@ async def _process_and_reply(message: Message, user_text: str) -> None:
         else:
             await _safe_answer(message, text, reply_markup=keyboard, parse_mode="Markdown")
         await database.complete_pending_action(pending_id)
+        # If the user is currently inside a section view (/tasks, /meetings,
+        # /reminders, /today), re-render it with the new item visible.
+        await _maybe_refresh_section(message, state, ids_by_type)
     except Exception as e:
         logger.exception("_process_and_reply failed for pending=%s", pending_id)
         await database.fail_pending_action(pending_id, f"{type(e).__name__}: {e}")
@@ -2061,6 +2210,37 @@ async def _apply_reminder_settings_live() -> None:
 async def cb_setting_calendar(query: CallbackQuery) -> None:
     await query.answer()
     await cmd_calendar(query.message)
+
+
+@router.callback_query(F.data == "setting:voice_auto_toggle")
+async def cb_setting_voice_auto_toggle(query: CallbackQuery) -> None:
+    """Flip the voice_auto_confirm setting between AUTO and confirm-prompt mode."""
+    settings = await database.get_settings()
+    new_val = not settings.get("voice_auto_confirm", True)
+    await database.set_setting("voice_auto_confirm", new_val)
+    label = "AVTO — tasdiqsiz" if new_val else "Tasdiq so'raladi"
+    await query.answer(f"Ovoz: {label} ✓")
+    settings["voice_auto_confirm"] = new_val
+    try:
+        await query.message.edit_reply_markup(reply_markup=settings_keyboard(settings))
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == "setting:confirm_create_toggle")
+async def cb_setting_confirm_create_toggle(query: CallbackQuery) -> None:
+    """Flip the confirm_create_actions setting. When ON (default), the bot
+    asks for confirmation before creating any task or meeting."""
+    settings = await database.get_settings()
+    new_val = not settings.get("confirm_create_actions", True)
+    await database.set_setting("confirm_create_actions", new_val)
+    label = "yoqildi (xavfsizroq)" if new_val else "o'chirildi (tezroq)"
+    await query.answer(f"Yaratish tasdig'i {label} ✓")
+    settings["confirm_create_actions"] = new_val
+    try:
+        await query.message.edit_reply_markup(reply_markup=settings_keyboard(settings))
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(F.data == "setting:quiet_hours")
@@ -6534,7 +6714,8 @@ async def _download_voice(message: Message, bot: Bot) -> bytes | None:
 
 @router.message(StateFilter(default_state), F.voice)
 async def handle_voice(message: Message, bot: Bot, state: FSMContext) -> None:
-    """Free-form ovoz handler: transkripsiya → tasdiqlash so'rovi.
+    """Free-form ovoz handler: transkripsiya → auto-process (default) yoki
+    confirm prompt (agar foydalanuvchi /settings da yoqib qo'ygan bo'lsa).
 
     Faqat FSM state'siz holatda ishga tushadi. Boshqa FSM state aktiv bo'lsa
     (MeetingRescheduleFSM, MeetingEditFSM, MeetingProtocolFSM va boshqalar),
@@ -6550,7 +6731,21 @@ async def handle_voice(message: Message, bot: Bot, state: FSMContext) -> None:
         await message.answer("Ovozni o'qiy olmadim. Iltimos, qaytadan urinib ko'ring yoki matn yozing.")
         return
 
-    await _send_voice_confirm_prompt(message, state, transcript)
+    # Variant A+B: respect the voice_auto_confirm setting.
+    settings = await database.get_settings()
+    if settings.get("voice_auto_confirm", True):
+        # Default — show the transcript first (so the user sees what was heard)
+        # then immediately dispatch to Claude without an extra tap. Any
+        # destructive action (create_task / schedule_meeting) still gets a
+        # confirm prompt downstream via confirm_create_actions.
+        await message.answer(
+            f"_🎙 Tushundim:_ {_escape_markdown(transcript[:400])}",
+            parse_mode="Markdown",
+        )
+        await _process_and_reply(message, transcript, state=state)
+    else:
+        # Legacy flow — explicit confirm/edit/cancel buttons before processing.
+        await _send_voice_confirm_prompt(message, state, transcript)
 
 
 @router.callback_query(F.data == "voice_ok")
@@ -6567,7 +6762,7 @@ async def cb_voice_ok(query: CallbackQuery, state: FSMContext) -> None:
         await query.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:
         pass
-    await _process_and_reply(query.message, transcript)
+    await _process_and_reply(query.message, transcript, state=state)
 
 
 @router.callback_query(F.data == "voice_cancel")
@@ -6578,6 +6773,64 @@ async def cb_voice_cancel(query: CallbackQuery, state: FSMContext) -> None:
         await query.message.edit_text(
             "✕ Bekor qilindi. Yangi xabar yuboring.",
             reply_markup=None,
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == "acts_confirm")
+async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
+    """User tapped ✓ on a create-action preview — execute the deferred Claude
+    response now, send the original user_message reply, AND restore the prior
+    section state so the section auto-refresh sees the new item."""
+    data = await state.get_data()
+    response = data.get("pending_response")
+    prior_state = data.get("_prior_section")
+    await state.clear()
+    if not response or not isinstance(response, dict):
+        await query.answer("Tasdiqlash vaqti o'tdi — yangi so'rov yuboring.",
+                            show_alert=True)
+        return
+    await query.answer("✓ Tasdiqlandi")
+    # Strip the confirm keyboard so it can't be re-tapped while we execute.
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    try:
+        ids_by_type = await _execute_actions(response.get("actions", []))
+    except Exception:
+        logger.exception("Deferred _execute_actions failed after confirm")
+        await query.message.answer(
+            "❌ Yaratishda xato yuz berdi. Logni tekshiring (/diagnostics)."
+        )
+        return
+    keyboard = _build_keyboard(response.get("buttons", []), ids_by_type)
+    if keyboard:
+        keyboard = _append_back_row(keyboard)
+    text = (response.get("user_message") or "").strip() or "✓ Yaratildi"
+    await _safe_answer(query.message, text,
+                        parse_mode="Markdown", reply_markup=keyboard)
+    # Restore prior section state and auto-refresh the section list so the
+    # new item is visible (otherwise the user sees a stale list higher in
+    # the chat and thinks the create failed).
+    if prior_state and isinstance(prior_state, str):
+        try:
+            await state.set_state(prior_state)
+        except Exception:
+            logger.debug("Could not restore prior state %r", prior_state)
+    await _maybe_refresh_section(query.message, state, ids_by_type)
+
+
+@router.callback_query(F.data == "acts_cancel")
+async def cb_actions_cancel(query: CallbackQuery, state: FSMContext) -> None:
+    """User tapped ✕ on a create-action preview — drop the deferred response."""
+    await state.clear()
+    await query.answer("✕ Bekor qilindi")
+    try:
+        await query.message.edit_text(
+            "✕ **Yaratish bekor qilindi.**\n\nYangi xabar yuboring.",
+            parse_mode="Markdown",
         )
     except TelegramBadRequest:
         pass
@@ -6643,7 +6896,7 @@ async def handle_voice_action(message: Message, bot: Bot, state: FSMContext) -> 
         await state.clear()
         if transcript:
             await message.answer("✓ Tasdiqlandi")
-            await _process_and_reply(message, transcript)
+            await _process_and_reply(message, transcript, state=state)
         return
     if intent == "cancel":
         await state.clear()
@@ -6752,7 +7005,7 @@ async def handle_tasks_section_button(message: Message, state: FSMContext) -> No
         )
         return
     # Boshqa matn — Claude'ga yuborish (section state'da ham erkin xabar mumkin)
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_reminders), F.text | F.voice)
@@ -6777,7 +7030,7 @@ async def handle_reminders_section_button(message: Message, state: FSMContext) -
             parse_mode="Markdown",
         )
         return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_meetings), F.text | F.voice)
@@ -6801,7 +7054,7 @@ async def handle_meetings_section_button(message: Message, state: FSMContext) ->
         return
     if label == MBTN_MEETINGS_SEARCH:
         await cmd_search(message); return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_stats), F.text | F.voice)
@@ -6831,7 +7084,7 @@ async def handle_stats_section_button(message: Message, state: FSMContext) -> No
         await _safe_answer(message, _format_executive_report(stats, "Oxirgi 30 kun"),
                             parse_mode="Markdown", reply_markup=_report_keyboard(30))
         return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_team), F.text | F.voice)
@@ -6859,7 +7112,7 @@ async def handle_team_section_button(message: Message, state: FSMContext) -> Non
             parse_mode="Markdown",
         )
         return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_risks), F.text | F.voice)
@@ -6872,7 +7125,7 @@ async def handle_risks_section_button(message: Message, state: FSMContext) -> No
     label = message.text.strip()
     if label == RBTN_RISKS_REFRESH:
         await _render_risks_panel(message); return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_today), F.text | F.voice)
@@ -6910,7 +7163,7 @@ async def handle_today_section_button(message: Message, state: FSMContext) -> No
         return
     if label == DBTN_TODAY_MEETINGS:
         await cmd_meetings(message, state); return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_new), F.text | F.voice)
@@ -6937,7 +7190,7 @@ async def handle_new_section_button(message: Message, state: FSMContext) -> None
     if label in prompts:
         await _safe_answer(message, prompts[label], parse_mode="Markdown")
         return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(SectionFSM.in_search), F.text | F.voice)
@@ -7052,16 +7305,16 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         )
         await message.answer(text, parse_mode="Markdown")
         return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 @router.message(StateFilter(default_state), F.text)
-async def handle_text(message: Message) -> None:
+async def handle_text(message: Message, state: FSMContext) -> None:
     """Free-form text (faqat FSM state'siz holatda). Aktiv state'da
     o'sha state'ning maxsus handler'i tomonidan qabul qilinadi."""
     if message.text.startswith("/"):
         return
-    await _process_and_reply(message, message.text)
+    await _process_and_reply(message, message.text, state=state)
 
 
 # ─────────────────────── CALLBACK HANDLERS ───────────────────────
@@ -8799,7 +9052,7 @@ async def handle_voice_fallback(message: Message, bot: Bot, state: FSMContext) -
         # Voice arrived inside an FSM state that didn't claim it. Best UX:
         # treat the transcript as a free-form message to Claude (same as
         # text would in a section state's fall-through branch).
-        await _process_and_reply(message, transcript)
+        await _process_and_reply(message, transcript, state=state)
 
 
 @router.message(F.photo | F.document | F.video | F.video_note | F.sticker | F.animation | F.audio)
