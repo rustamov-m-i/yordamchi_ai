@@ -50,7 +50,6 @@ async def _register_bot_commands(bot: Bot) -> None:
         BotCommand(command="stats", description="📊 Statistika"),
         BotCommand(command="search", description="🔍 Qidiruv"),
         BotCommand(command="plan", description="🎯 Executive reja"),
-        BotCommand(command="insights", description="💡 Tavsiyalar"),
         BotCommand(command="settings", description="⚙️ Sozlamalar"),
         BotCommand(command="calendar", description="📆 iCloud kalendar"),
         BotCommand(command="delegations", description="👥 Delegatsiyalar trekeri"),

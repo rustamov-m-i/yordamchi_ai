@@ -236,18 +236,6 @@ CREATE TABLE IF NOT EXISTS plans (
 
 CREATE INDEX IF NOT EXISTS idx_plans_created ON plans(created_at DESC);
 
--- Proactive insights/suggestions that the bot surfaced
-CREATE TABLE IF NOT EXISTS insights_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,
-    insight_type TEXT NOT NULL,           -- stale_tasks, overload, missing_deadline, follow_up, etc.
-    payload TEXT,                          -- JSON: details about what triggered
-    user_action TEXT,                      -- accepted | dismissed | ignored | NULL=pending
-    acted_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_insights_ts ON insights_log(ts DESC);
-
 -- Idempotency / crash-recovery queue for in-flight user message handling.
 -- Pattern: enqueue BEFORE Claude call (state=pending) → mark in_progress →
 -- complete on success → fail on exception. On bot restart, stuck rows
@@ -1818,19 +1806,6 @@ async def executive_stats(days: int = 7) -> dict:
         )
         llm_by_provider = [dict(r) for r in await cur.fetchall()]
 
-        cur = await db.execute(
-            """SELECT COUNT(*) AS total,
-                      SUM(CASE WHEN user_action = 'accepted' THEN 1 ELSE 0 END) AS accepted,
-                      SUM(CASE WHEN user_action = 'dismissed' THEN 1 ELSE 0 END) AS dismissed
-               FROM insights_log WHERE ts >= ?""",
-            (start.isoformat(),),
-        )
-        row = await cur.fetchone()
-        # Aggregate queries normally return one row even on empty input, but
-        # guard against fetchone()→None (e.g. closed cursor) so the executive
-        # dashboard doesn't crash with TypeError on dict(None).
-        insight_row = dict(row) if row else {"total": 0, "accepted": 0, "dismissed": 0}
-
     completion_rate = round((tasks_done / tasks_created) * 100, 1) if tasks_created else 0.0
 
     durations = []
@@ -1906,11 +1881,6 @@ async def executive_stats(days: int = 7) -> dict:
             "providers": llm_by_provider,
             "calls": sum(r["calls"] for r in llm_by_provider),
             "cost": round(sum(float(r["cost"] or 0) for r in llm_by_provider), 4),
-        },
-        "insights": {
-            "total": int(insight_row.get("total") or 0),
-            "accepted": int(insight_row.get("accepted") or 0),
-            "dismissed": int(insight_row.get("dismissed") or 0),
         },
         "risk_score": risk_score,
     }
@@ -2207,55 +2177,6 @@ async def mark_plan_followup_asked(plan_id: str) -> None:
             (now_iso(), plan_id),
         )
         await db.commit()
-
-
-# ─────────────────────────────────────────── INSIGHTS ───────────────────────────────────────────
-
-async def log_insight(insight_type: str, payload: dict) -> int:
-    """Record a proactive insight the bot surfaced. Returns the row id."""
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute(
-            """INSERT INTO insights_log (ts, insight_type, payload)
-               VALUES (?, ?, ?)""",
-            (now_iso(), insight_type, json.dumps(payload, ensure_ascii=False)),
-        )
-        await db.commit()
-        return cur.lastrowid
-
-
-async def mark_insight_action(insight_id: int, action: str) -> None:
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        await db.execute(
-            "UPDATE insights_log SET user_action = ?, acted_at = ? WHERE id = ?",
-            (action, now_iso(), insight_id),
-        )
-        await db.commit()
-
-
-async def recent_insight_pattern(insight_type: str, hours: int = 24) -> int:
-    """How many times we've surfaced this insight type recently — used to avoid repeats."""
-    cutoff = (datetime.now(TZ) - timedelta(hours=hours)).isoformat()
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM insights_log WHERE insight_type = ? AND ts >= ?",
-            (insight_type, cutoff),
-        )
-        return (await cur.fetchone())[0]
-
-
-async def insight_acceptance_rate(insight_type: str) -> float:
-    """How often the principal acts on this insight type. Used for learning."""
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute(
-            """SELECT
-                  COUNT(*) FILTER (WHERE user_action = 'accepted') AS accepted,
-                  COUNT(*) FILTER (WHERE user_action IS NOT NULL) AS responded
-               FROM insights_log WHERE insight_type = ?""",
-            (insight_type,),
-        )
-        row = await cur.fetchone()
-        accepted, responded = row[0] or 0, row[1] or 0
-        return (accepted / responded) if responded else 0.5  # neutral when no data
 
 
 # ─────────────────────────────────────────── PENDING ACTIONS (idempotency) ───────────────────────────────────────────

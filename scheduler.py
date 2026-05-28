@@ -153,14 +153,6 @@ class YordamchiScheduler:
             replace_existing=True,
             next_run_time=datetime.now(database.TZ) + timedelta(minutes=5),
         )
-        # Proactive insights — every 4 hours during work hours, only push when there's something
-        self.scheduler.add_job(
-            self._proactive_insight_sweep,
-            IntervalTrigger(hours=4),
-            id="proactive_insights",
-            replace_existing=True,
-            next_run_time=datetime.now(database.TZ) + timedelta(hours=1),
-        )
         # Hourly conversation_history trim. claude_service.process_message already
         # trims on each call, but during long silences (overnight, weekends) the
         # table can drift; this guarantees an upper bound regardless of activity.
@@ -450,29 +442,6 @@ class YordamchiScheduler:
                 logger.info("iCloud cache primed (calendar: %s)", getattr(cal, "name", "?"))
         except Exception:
             logger.exception("iCloud cache prime failed (non-fatal)")
-
-    async def _proactive_insight_sweep(self) -> None:
-        """Check for noteworthy patterns and push an insight if found.
-
-        Only fires push during 09:00–20:00 local time. Pushes at most 2 insights per sweep.
-        """
-        now = datetime.now(database.TZ)
-        if not (9 <= now.hour <= 20):
-            return
-        try:
-            from handlers import _generate_proactive_insights
-            insights = await _generate_proactive_insights(limit=2)
-            if not insights:
-                return
-
-            text = "💡 **Yangi tavsiyalar**\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            for i, ins in enumerate(insights, 1):
-                text += f"**{i}. {ins['title']}**\n{ins['body']}\n\n"
-                await database.log_insight(ins["type"], ins["payload"])
-            text += "_Toʻliq roʻyxat: /insights_"
-            await self._send(text)
-        except Exception:
-            logger.exception("Proactive insight sweep failed")
 
     async def _trim_history_sweep(self) -> None:
         """Bound conversation_history regardless of LLM activity. Without this
