@@ -745,6 +745,90 @@ def test_trim_history_scheduler_method():
       hasattr(cls, "_trim_history_sweep"))
 
 
+def test_status_emoji_lockdown():
+    """Faza 1: _STATUS_EMOJI['todo'] must be ⏳ (pending) — NOT 📍 (location).
+    Catches regression of the semantic bug where 'todo' status was rendered as a
+    location pin in task list badges.
+    """
+    section("23. Faza 1 — _STATUS_EMOJI[todo] is ⏳ (not 📍)")
+    se = handlers._STATUS_EMOJI
+    t("icons", "todo == ⏳",          se.get("todo") == "⏳",         f"got={se.get('todo')!r}")
+    t("icons", "in_progress == 🔄",   se.get("in_progress") == "🔄")
+    t("icons", "blocked == ⚠️",       se.get("blocked") == "⚠️")
+    t("icons", "done == ✅",          se.get("done") == "✅")
+    t("icons", "cancelled == ❌",     se.get("cancelled") == "❌")
+    t("icons", "no stray 📍 in dict", "📍" not in se.values())
+
+
+def test_priority_palette_unified():
+    """Faza 1: _PRIORITY_BADGE is the single global priority palette.
+    The old `bugun_badge` dict (P1=🟡, P2=⚪) was inconsistent with this and is
+    now removed — Bugun panel uses _PRIORITY_BADGE.
+    """
+    section("24. Faza 1 — _PRIORITY_BADGE is the single source")
+    pb = handlers._PRIORITY_BADGE
+    t("icons", "P0 == 🔴", pb.get("P0") == "🔴")
+    t("icons", "P1 == 🟠", pb.get("P1") == "🟠")
+    t("icons", "P2 == 🔵", pb.get("P2") == "🔵")
+    t("icons", "P3 == ⚪", pb.get("P3") == "⚪")
+    # No leftover `bugun_badge` module-level (it was inside a function, but if
+    # someone re-introduces it as global we want to catch it).
+    t("icons", "no module-level bugun_badge",
+      not hasattr(handlers, "bugun_badge"))
+
+
+def test_dead_handlers_removed():
+    """Faza 1: 4 dead callback handlers were removed because no button referenced
+    them. Re-introducing them is a code smell; this test catches accidental revival.
+    """
+    section("25. Faza 1 — dead handlers stay deleted")
+    for name in ("cb_cockpit_plan", "cb_copy", "cb_share",
+                 "cb_view_tasks", "_extract_polished_text"):
+        t("dead", f"{name} not in handlers",
+          not hasattr(handlers, name))
+
+
+def test_icon_hygiene():
+    """Faza 2: ✓ → ✅, 🔎 → 🔍, 🔥 → ⚡ unified across handlers.py source.
+    Reads the source file (not just object attrs) because most icon literals
+    live inline in button text / message strings, not in named constants.
+    """
+    section("26. Faza 2 — no legacy icons (✓ 🔎 🔥) in handlers.py")
+    src = (ROOT / "handlers.py").read_text(encoding="utf-8")
+    t("icons", "no bare ✓ in source",  "✓" not in src,
+      f"found {src.count('✓')} occurrences" if "✓" in src else "")
+    t("icons", "no bare 🔎 in source",  "🔎" not in src,
+      f"found {src.count('🔎')} occurrences" if "🔎" in src else "")
+    t("icons", "no bare 🔥 in source",  "🔥" not in src,
+      f"found {src.count('🔥')} occurrences" if "🔥" in src else "")
+    # Affirm the replacements made it in
+    t("icons", "✅ present",  "✅" in src)
+    t("icons", "🔍 present",  "🔍" in src)
+    t("icons", "⚡ present",  "⚡" in src)
+
+
+def test_icons_module_palette():
+    """Faza 2: icons.py exposes a canonical palette for new code."""
+    section("27. Faza 2 — icons.py palette source-of-truth")
+    import icons as ic_mod
+    t("icons", "ICONS class exists", hasattr(ic_mod, "ICONS"))
+    expected = {
+        "CONFIRM": "✅", "CANCEL": "✕", "ADD": "➕", "EDIT": "✏️",
+        "DELETE": "🗑", "SEARCH": "🔍", "BACK": "⬅️", "REFRESH": "🔄",
+        "SETTINGS": "⚙️", "URGENT": "⚡",
+        "P0_URGENT": "🔴", "P1_IMPORTANT": "🟠",
+        "P2_PLANNED": "🔵", "P3_LOW": "⚪",
+    }
+    for attr, want in expected.items():
+        got = getattr(ic_mod.ICONS, attr, None)
+        t("icons", f"ICONS.{attr} == {want}", got == want, f"got={got!r}")
+    # STATUS_EMOJI + PRIORITY_BADGE convenience dicts present
+    t("icons", "STATUS_EMOJI dict exposes 'todo' == ⏳",
+      ic_mod.STATUS_EMOJI.get("todo") == "⏳")
+    t("icons", "PRIORITY_BADGE dict exposes 'P0' == 🔴",
+      ic_mod.PRIORITY_BADGE.get("P0") == "🔴")
+
+
 async def main():
     config.ensure_paths()
     await database.init()
@@ -778,6 +862,12 @@ async def main():
     test_notes_section_fsm_present()
     await test_notes_html_blockquote_render()
     await test_notes_source_validation()
+    # Faza 1-2-3 lockdown
+    test_status_emoji_lockdown()
+    test_priority_palette_unified()
+    test_dead_handlers_removed()
+    test_icon_hygiene()
+    test_icons_module_palette()
 
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)
