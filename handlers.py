@@ -485,31 +485,6 @@ _SECTION_LABELS: set[str] = (
 # Bot restart'dan keyin section labellarni state'ga avtomatik tiklash
 # (E1 edge case). Foydalanuvchi cache'dagi section reply kbd dan tugma
 # bossa, mos state'ga o'rnatamiz va to'g'ri handler ishlay oladi.
-def _label_to_section_state(label: str) -> State | None:
-    if label in _TASKS_SECTION_FILTERS or label in {TBTN_TASKS_NEW, TBTN_TASKS_SEARCH}:
-        return SectionFSM.in_tasks
-    if label in _REMINDERS_SECTION_FILTERS or label in {RBTN_REMINDERS_NEW, RBTN_REMINDERS_SEARCH}:
-        return SectionFSM.in_reminders
-    if label in _MEETINGS_SECTION_FILTERS or label in {MBTN_MEETINGS_NEW, MBTN_MEETINGS_SEARCH}:
-        return SectionFSM.in_meetings
-    if label in _STATS_SECTION_PERIODS or label in {SBTN_STATS_REPORT_WEEK, SBTN_STATS_REPORT_MONTH}:
-        return SectionFSM.in_stats
-    if label in {YBTN_TEAM_REFRESH, YBTN_TEAM_UNASSIGNED, YBTN_TEAM_REASSIGN}:
-        return SectionFSM.in_team
-    if label == RBTN_RISKS_REFRESH:
-        return SectionFSM.in_risks  # Risks va Team da bir xil — kontekst yo'qolsa Team default
-    if label in {DBTN_TODAY_EVENING, DBTN_TODAY_ALL_TASKS, DBTN_TODAY_NEW_TASK, DBTN_TODAY_MEETINGS}:
-        return SectionFSM.in_today
-    if label in {NBTN_NEW_TASK, NBTN_NEW_MEETING, NBTN_NEW_REMINDER, NBTN_NEW_VOICE, NBTN_NEW_POLISH}:
-        return SectionFSM.in_new
-    if label in {QBTN_SEARCH_TASKS, QBTN_SEARCH_MEETINGS, QBTN_SEARCH_CONTACTS, QBTN_SEARCH_ALL}:
-        return SectionFSM.in_search
-    if label in {GBTN_SETTINGS_NOTIFY, GBTN_SETTINGS_BRIEFING, GBTN_SETTINGS_EVENING,
-                 GBTN_SETTINGS_REMINDER, GBTN_SETTINGS_VOICE, GBTN_SETTINGS_CREATE_CONFIRM,
-                 GBTN_SETTINGS_CALENDAR}:
-        return SectionFSM.in_settings
-    return None
-
 
 def back_button(callback_data: str = "nav_cockpit", text: str = "⬅️ Orqaga") -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=callback_data)
@@ -1878,39 +1853,7 @@ def _parse_dt_safe(value: str | None) -> datetime | None:
         return None
 
 
-def _brief_time_label(value: str | None) -> str:
-    dt = _parse_dt_safe(value)
-    if dt:
-        now = datetime.now(database.TZ)
-        if dt.date() == now.date():
-            return dt.strftime("%H:%M")
-    label, _ = _format_deadline_short(value)
-    return label
 
-
-def _brief_status_label(status: str | None) -> str:
-    return {
-        "todo": "Aktiv",
-        "in_progress": "Jarayonda",
-        "blocked": "To'silgan",
-        "done": "Bajarilgan",
-        "cancelled": "Bekor qilingan",
-    }.get(status or "todo", status or "Aktiv")
-
-
-def _build_today_attention(tasks: list[dict], overdue: list[dict], missing_assignee: list[dict]) -> list[str]:
-    attention = []
-    if overdue:
-        attention.append(f"• {len(overdue)} ta vazifaning muddati o'tgan.")
-    if missing_assignee:
-        attention.append(f"• {len(missing_assignee)} ta vazifada ijrochi belgilanmagan.")
-    due_today = [t for t in tasks if t.get("deadline")]
-    if due_today:
-        attention.append(f"• {len(due_today)} ta vazifa bugun yopilishi kerak.")
-    no_deadline = [t for t in tasks if not t.get("deadline")]
-    if no_deadline:
-        attention.append(f"• {len(no_deadline)} ta vazifada muddat belgilanmagan.")
-    return attention
 
 
 def _today_inline_keyboard(today_tasks: list[dict] | None = None) -> InlineKeyboardMarkup | None:
@@ -1931,42 +1874,6 @@ def _today_inline_keyboard(today_tasks: list[dict] | None = None) -> InlineKeybo
         rows.append(nums[i:i + 5])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
-
-async def _generate_briefing_tip(top: list[dict], overdue: list[dict],
-                                  meetings: list[dict], now: datetime) -> str:
-    """One-shot Claude call: 1-2 line concrete tip. Falls back to a heuristic if Claude fails."""
-    summary = []
-    if overdue:
-        summary.append(f"Overdue tasks: {[t['title'] for t in overdue[:3]]}")
-    if top:
-        summary.append(f"Top priorities: {[t['title'] for t in top[:3]]}")
-    if meetings:
-        upcoming_meetings = [
-            m for m in meetings
-            if (datetime.fromisoformat(m['datetime_start']).astimezone(database.TZ) if m.get('datetime_start') else now) > now
-        ]
-        if upcoming_meetings:
-            summary.append(f"Upcoming meetings: {[m['title'] for m in upcoming_meetings[:2]]}")
-
-    directive = (
-        f"[INTERNAL] briefing_tip\n\n"
-        f"Current time: {now.strftime('%H:%M')} ({now.strftime('%A')})\n"
-        + "\n".join(summary)
-        + "\n\nProduce a ONE-OR-TWO-LINE actionable tip in O'zbek (lotin yozuvi). "
-        "Be specific: name one task and one concrete action. No greetings, no padding. "
-        "If everything looks calm, say so. Output ONLY the tip text in user_message."
-    )
-    try:
-        response = await claude_service.process_message("", internal_directive=directive)
-        tip = (response.get("user_message") or "").strip()
-        return tip[:300]
-    except Exception:
-        # Fallback heuristic
-        if overdue:
-            return f"Eng kechikkan vazifani yoping: «{_truncate(overdue[0]['title'], 50)}»."
-        if top:
-            return f"Hozir «{_truncate(top[0]['title'], 50)}» bilan boshlang."
-        return "Bugun bo'shroq. Reja qiling yoki nafas oling."
 
 
 @router.message(Command("today"))
@@ -2001,26 +1908,6 @@ async def cmd_today(message: Message, state: FSMContext | None = None) -> None:
 async def cmd_briefing(message: Message, state: FSMContext | None = None) -> None:
     await cmd_today(message, state)
 
-
-@router.callback_query(F.data == "today:evening")
-async def cb_today_evening(query: CallbackQuery) -> None:
-    """On-demand evening summary preview — runs the same internal directive
-    the 18:00 scheduler uses, without altering the chat's existing Bugun view.
-    """
-    await query.answer("Tayyorlanmoqda...")
-    typing_task = asyncio.create_task(_keep_typing(query.bot, query.message.chat.id))
-    try:
-        response = await claude_service.process_message(
-            "", internal_directive="[INTERNAL] generate_evening_summary"
-        )
-    finally:
-        typing_task.cancel()
-    text = (response.get("user_message") or "").strip()
-    if not text:
-        await _safe_answer(query.message, "Hozircha yakun chiqarib bo'lmadi.", parse_mode="Markdown")
-        return
-    await _safe_answer(query.message, text, parse_mode="Markdown",
-                       reply_markup=single_back_keyboard("nav_cockpit"))
 
 
 _PRIORITY_BADGE = {"P0": "🔴", "P1": "🟠", "P2": "🔵", "P3": "⚪"}
@@ -2061,12 +1948,6 @@ _STATUS_EMOJI = {"todo": "📍", "in_progress": "🔄", "blocked": "⚠️", "do
 _NUMBER_GLYPH = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥", 7: "⑦", 8: "⑧", 9: "⑨", 10: "⑩"}
 _SEP = "━" * 25
 
-
-def _priority_display(p: str) -> str:
-    """Render priority as emoji + Uzbek name (e.g. '🔴 Shoshilinch')."""
-    badge = _PRIORITY_BADGE.get(p, "🔵")
-    name = _PRIORITY_LABEL_UZ.get(p, "Rejadagi")
-    return f"{badge} {name}"
 
 
 async def compute_risk_score() -> dict:
@@ -2592,57 +2473,10 @@ def _format_recurrence_label(rule: str | None) -> str:
     return labels.get(rule or "", rule or "—")
 
 
-def _priority_label(priority: str | None) -> str:
-    labels = {
-        "P0": "🔴 Shoshilinch",
-        "P1": "🟠 Muhim",
-        "P2": "🔵 Rejadagi",
-        "P3": "⚪ Past ustuvorlik",
-    }
-    return labels.get(priority or "P2", priority or "P2")
-
 
 _TASKS_PER_PAGE = 10
 
 
-def _task_status_icon(task: dict) -> str:
-    """Status icon per spec priority:
-    done → ✅, urgent/overdue → 🔴, important → 🟠, today → 🟡, else → ⚪.
-    Done check comes first so completed tasks don't show as urgent.
-    """
-    if task.get("status") == "done":
-        return "✅"
-    priority = task.get("priority", "P2")
-    deadline = task.get("deadline")
-    is_overdue = False
-    is_today = False
-    if deadline:
-        try:
-            dt = datetime.fromisoformat(deadline).astimezone(database.TZ)
-            now = datetime.now(database.TZ)
-            is_overdue = dt < now
-            is_today = (not is_overdue) and dt.date() == now.date()
-        except (ValueError, TypeError):
-            pass
-    if is_overdue or priority == "P0":
-        return "🔴"
-    if priority == "P1":
-        return "🟠"
-    if is_today:
-        return "🟡"
-    return "⚪"
-
-
-def _task_muhimlik_chip(task: dict) -> str:
-    """Right-side priority/status chip for list view."""
-    if task.get("status") == "done":
-        return "✅ Yopilgan"
-    return {
-        "P0": "🔥 Shoshilinch",
-        "P1": "⭐ Muhim",
-        "P2": "🔹 Rejadagi",
-        "P3": "🔹 Past ustuvorlik",
-    }.get(task.get("priority", "P2"), "🔹 Rejadagi")
 
 
 def _task_deadline_chip(task: dict) -> str:
@@ -3740,17 +3574,6 @@ async def cb_task_filter(query: CallbackQuery) -> None:
     await _render_tasks_for_filter(query.message, filt, page=page, edit_existing=True)
 
 
-@router.callback_query(F.data == "task_search")
-async def cb_task_search(query: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(TaskSearchFSM.awaiting_query)
-    await query.answer()
-    await query.message.edit_text(
-        "🔎 **Vazifa qidirish**\n\n"
-        "Sarlavha, tavsif, teg yoki ijrochi bo'yicha so'z yuboring.",
-        parse_mode="Markdown",
-        reply_markup=single_back_keyboard("taskfilter:active"),
-    )
-
 
 @router.message(StateFilter(TaskSearchFSM.awaiting_query), F.text | F.voice)
 async def handle_task_search(message: Message, state: FSMContext) -> None:
@@ -4339,17 +4162,6 @@ async def cb_meeting_open(query: CallbackQuery) -> None:
         await _safe_answer(query.message, text, parse_mode="Markdown", reply_markup=meeting_inline_actions(meeting))
 
 
-@router.callback_query(F.data == "meeting_search")
-async def cb_meeting_search(query: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(MeetingSearchFSM.awaiting_query)
-    await query.answer()
-    await query.message.edit_text(
-        "🔎 **Uchrashuv qidirish**\n\n"
-        "Mavzu, agenda, ishtirokchi yoki manzil bo'yicha so'z yuboring.",
-        parse_mode="Markdown",
-        reply_markup=single_back_keyboard("meetingfilter:week"),
-    )
-
 
 @router.message(StateFilter(MeetingSearchFSM.awaiting_query), F.text | F.voice)
 async def handle_meeting_search(message: Message, state: FSMContext) -> None:
@@ -4751,14 +4563,6 @@ def _report_keyboard(days: int) -> InlineKeyboardMarkup:
     ])
 
 
-def _trend_line(trend: list[dict], key: str) -> str:
-    max_value = max([int(item.get(key) or 0) for item in trend] + [1])
-    cells = []
-    for item in trend:
-        value = int(item.get(key) or 0)
-        cells.append(str(min(9, round(value / max_value * 9))) if value else "0")
-    return " ".join(cells)
-
 
 def _format_uzs_amount(usd: float) -> str:
     # Approximate display rate; keeps stats readable without calling an FX API.
@@ -5078,14 +4882,6 @@ async def cb_plan_tasks(query: CallbackQuery) -> None:
         msg = msg or "Bajariladigan vazifa topilmadi"
     await query.message.answer(msg, parse_mode="Markdown", reply_markup=tasks_compact_keyboard([]))
 
-
-@router.callback_query(F.data.startswith("plan_dismiss:"))
-async def cb_plan_dismiss(query: CallbackQuery) -> None:
-    await query.answer()
-    try:
-        await query.message.edit_reply_markup(reply_markup=single_back_keyboard())
-    except Exception:
-        pass
 
 
 @router.message(Command("stats"))
@@ -5496,83 +5292,7 @@ async def cb_team_refresh(query: CallbackQuery) -> None:
     await _render_team_panel(query.message)
 
 
-@router.callback_query(F.data == "team:back")
-async def cb_team_back(query: CallbackQuery, state: FSMContext) -> None:
-    await query.answer()
-    await state.clear()
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-    await _restore_main_keyboard(query.message)
 
-
-@router.callback_query(F.data == "team:unassigned")
-async def cb_team_unassigned(query: CallbackQuery) -> None:
-    """Show all unassigned tasks with quick-assign drill-downs."""
-    await query.answer()
-    candidates = await database.list_unassigned_tasks(limit=15)
-    text, kb = _risks_sublist(
-        title_line="👤 **IJROCHISIZ VAZIFALAR**",
-        tasks=candidates,
-        callback_prefix="set_assignee",
-        empty_msg="✅ Hozircha ijrochisiz vazifa yo'q.",
-    )
-    await _safe_answer(query.message, text, parse_mode="Markdown", reply_markup=kb)
-
-
-@router.callback_query(F.data == "team:reassign")
-async def cb_team_reassign(query: CallbackQuery) -> None:
-    """Show top overloaded assignees' active tasks for quick reassignment."""
-    await query.answer()
-    loads = await database.assignee_load_map()
-    overloaded = sorted(
-        [d for n, d in loads.items() if n != "belgilanmagan" and d["active"] >= _ASSIGNEE_OVERLOAD],
-        key=lambda d: -d["active"],
-    )
-    if not overloaded:
-        await _safe_answer(
-            query.message,
-            "✅ **Qayta taqsimlash kerak emas**\n\n"
-            "Hech bir ijrochi ortiqcha yuklanmagan. Jamoa yuklamasi muvozanatda.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Jamoa", callback_data="team:refresh")],
-            ]),
-        )
-        return
-
-    target = overloaded[0]
-    profile = await database.assignee_profile(target["name"])
-    tasks = profile.get("tasks", [])[:10]
-
-    lines = [
-        f"🔄 **QAYTA TAQSIMLASH** — {target['name']}",
-        _SEP,
-        "",
-        f"Bu ijrochida **{target['active']} ta aktiv vazifa** bor (ortiqcha yuklangan).",
-        "",
-        "Qaysi vazifani boshqa ijrochiga ko'chirmoqchisiz?",
-        "",
-    ]
-    nums: list[InlineKeyboardButton] = []
-    for i, t in enumerate(tasks, start=1):
-        badge = _PRIORITY_BADGE.get(t.get("priority"), "🔵")
-        title = (t.get("title") or "—").strip()
-        dl_label, _ovd = _format_deadline_short(t.get("deadline"))
-        lines.append(f"**{i}. {badge} {title}**")
-        lines.append(f"   ⏰ {dl_label}")
-        lines.append("")
-        nums.append(InlineKeyboardButton(text=str(i), callback_data=f"set_assignee:{t['id']}"))
-
-    grid = [nums[i:i + 5] for i in range(0, len(nums), 5)]
-    grid.append([InlineKeyboardButton(text="⬅️ Jamoa", callback_data="team:refresh")])
-
-    await _safe_answer(
-        query.message, "\n".join(lines).rstrip(),
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=grid),
-    )
 
 
 @router.callback_query(F.data.startswith("team:reassign_one:"))
@@ -5851,16 +5571,6 @@ async def cb_risks_refresh(query: CallbackQuery) -> None:
         pass
     await _render_risks_panel(query.message)
 
-
-@router.callback_query(F.data == "risks_back")
-async def cb_risks_back(query: CallbackQuery, state: FSMContext) -> None:
-    await query.answer()
-    await state.clear()
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-    await _restore_main_keyboard(query.message)
 
 
 @router.callback_query(F.data == "risks_assign")
@@ -7210,28 +6920,8 @@ async def cb_cockpit_risks(query: CallbackQuery) -> None:
     await cmd_risks(query.message)
 
 
-@router.callback_query(F.data == "cockpit_new")
-async def cb_cockpit_new(query: CallbackQuery) -> None:
-    await query.answer()
-    await cmd_new(query.message)
 
 
-@router.callback_query(F.data == "cockpit_settings")
-async def cb_cockpit_settings(query: CallbackQuery) -> None:
-    await query.answer()
-    await cmd_settings(query.message)
-
-
-@router.callback_query(F.data == "cockpit_insights")
-async def cb_cockpit_insights(query: CallbackQuery) -> None:
-    await query.answer()
-    await cmd_insights(query.message)
-
-
-@router.callback_query(F.data == "cockpit_today")
-async def cb_cockpit_today(query: CallbackQuery) -> None:
-    await query.answer()
-    await cmd_today(query.message)
 
 
 @router.callback_query(F.data == "cockpit_stats")
@@ -7637,9 +7327,6 @@ _REPLY_BUTTON_LABELS: set[str] = {
     BTN_NEW, BTN_STATS, BTN_SEARCH, BTN_MEETINGS, BTN_SETTINGS,
 }
 
-
-def _all_reply_button_labels() -> set[str]:
-    return _REPLY_BUTTON_LABELS | set(_LEGACY_BTN_TASKS) | _SECTION_LABELS
 
 
 async def _restore_main_keyboard(message: Message) -> None:
@@ -8150,18 +7837,6 @@ async def cb_nav_settings(query: CallbackQuery, state: FSMContext) -> None:
     await cmd_settings(query.message)
 
 
-@router.callback_query(F.data == "nav_tasks")
-async def cb_nav_tasks(query: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await query.answer()
-    await _render_tasks_for_filter(query.message, "active", edit_existing=True)
-
-
-@router.callback_query(F.data == "nav_reminders")
-async def cb_nav_reminders(query: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await query.answer()
-    await _render_reminders_for_filter(query.message, "upcoming", edit_existing=True)
 
 
 @router.callback_query(F.data == "nav_meetings")
@@ -8170,17 +7845,6 @@ async def cb_nav_meetings(query: CallbackQuery, state: FSMContext) -> None:
     await query.answer()
     await _render_meetings_for_filter(query.message, "week", edit_existing=True)
 
-
-@router.callback_query(F.data == "nav_stats")
-async def cb_nav_stats(query: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await query.answer()
-    stats = await database.executive_stats(days=7)
-    text = _format_stats_dashboard(stats, "Oxirgi 7 kun")
-    try:
-        await query.message.edit_text(text, parse_mode="Markdown", reply_markup=_stats_period_keyboard(7))
-    except TelegramBadRequest:
-        await _safe_answer(query.message, text, parse_mode="Markdown", reply_markup=_stats_period_keyboard(7))
 
 
 @router.callback_query(F.data.startswith("confirm:"))
@@ -8438,58 +8102,6 @@ async def cb_mark_important(query: CallbackQuery) -> None:
             pass
 
 
-@router.callback_query(F.data.startswith("snooze:"))
-async def cb_snooze(query: CallbackQuery) -> None:
-    """Snooze a task — move its deadline forward by 24h. Keeps priority."""
-    tid = query.data.split(":", 1)[1]
-    task = await database.get_task(tid)
-    if not task:
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    current_deadline = task.get("deadline")
-    if current_deadline:
-        try:
-            new_dt = datetime.fromisoformat(current_deadline) + timedelta(days=1)
-        except (ValueError, TypeError):
-            new_dt = datetime.now(database.TZ) + timedelta(days=1)
-    else:
-        new_dt = datetime.now(database.TZ) + timedelta(days=1)
-    await database.update_task(tid, {"deadline": new_dt.isoformat()})
-    await query.answer(f"Eslatma ko'chirildi → {new_dt.strftime('%d-%m %H:%M')} ✓")
-    updated = await database.get_task(tid)
-    if updated:
-        try:
-            await query.message.edit_text(_format_task_card(updated), parse_mode="Markdown",
-                                          reply_markup=task_inline_actions(updated))
-        except Exception:
-            pass
-
-
-@router.callback_query(F.data.startswith("move:"))
-async def cb_move(query: CallbackQuery) -> None:
-    """Move a task to next week. For more flexible moves, user sends a text instruction."""
-    tid = query.data.split(":", 1)[1]
-    task = await database.get_task(tid)
-    if not task:
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    current_deadline = task.get("deadline")
-    if current_deadline:
-        try:
-            new_dt = datetime.fromisoformat(current_deadline) + timedelta(days=7)
-        except (ValueError, TypeError):
-            new_dt = datetime.now(database.TZ) + timedelta(days=7)
-    else:
-        new_dt = datetime.now(database.TZ) + timedelta(days=7)
-    await database.update_task(tid, {"deadline": new_dt.isoformat()})
-    await query.answer("Vazifa keyingi haftaga ko'chirildi ✓")
-    updated = await database.get_task(tid)
-    if updated:
-        try:
-            await query.message.edit_text(_format_task_card(updated), parse_mode="Markdown",
-                                          reply_markup=task_inline_actions(updated))
-        except Exception:
-            pass
 
 
 def _reschedule_presets_keyboard(mid: str) -> InlineKeyboardMarkup:
@@ -9365,16 +8977,6 @@ async def cb_reopen(query: CallbackQuery) -> None:
     else:
         await query.answer()
 
-
-@router.callback_query(F.data.startswith("note:"))
-async def cb_meeting_note(query: CallbackQuery) -> None:
-    target_id = query.data.split(":", 1)[1] if ":" in query.data else ""
-    await query.answer()
-    await query.message.answer(
-        f"📝 Uchrashuv `{target_id}` uchun eslatma yozing — keyingi xabaringizni shu uchrashuvga "
-        f"bog'layman.",
-        parse_mode="Markdown",
-    )
 
 
 @router.callback_query(F.data.startswith("edit:"))
