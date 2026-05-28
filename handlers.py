@@ -1717,13 +1717,9 @@ async def _build_briefing_text() -> str:
             "_Kun boshida 1-2 ta muhim vazifani rejalashtiring._",
         ])
 
-    # Bugun page uses a softer badge palette than other panels (per design spec):
-    # 🟡 for Muhim (not 🟠), ⚪ for Rejadagi (not 🔵).
-    bugun_badge = {"P0": "🔴", "P1": "🟡", "P2": "⚪", "P3": "⚪"}
-
     def _muhimlik_emoji(priority: str) -> str:
-        # 🔥 only for Shoshilinch (P0); 🔹 for everything else
-        return "🔥" if priority == "P0" else "🔹"
+        # ⚡ only for Shoshilinch (P0); 🔹 for everything else
+        return "⚡" if priority == "P0" else "🔹"
 
     def _task_card(task: dict, prefix: str = "") -> list[str]:
         """One task card: title with priority badge + 3 detail lines.
@@ -1732,7 +1728,7 @@ async def _build_briefing_text() -> str:
         """
         title = (task.get("title") or "—").strip()
         priority = task.get("priority", "P2")
-        badge = bugun_badge.get(priority, "⚪")
+        badge = _PRIORITY_BADGE.get(priority, "⚪")
         muhimlik = _PRIORITY_LABEL_UZ.get(priority, "Rejadagi")
         assignee = (task.get("assignee") or "belgilanmagan").strip()
         muddat = _muddat_label(task.get("deadline"))
@@ -1944,7 +1940,7 @@ def _muddat_label(iso) -> str:
     return dt.strftime("%d-%m, %H:%M")
 _STATUS_LABEL_UZ = {"todo": "Aktiv", "in_progress": "Jarayonda",
                     "blocked": "Toʻsilgan", "done": "Bajarildi", "cancelled": "Bekor qilingan"}
-_STATUS_EMOJI = {"todo": "📍", "in_progress": "🔄", "blocked": "⚠️", "done": "✅", "cancelled": "❌"}
+_STATUS_EMOJI = {"todo": "⏳", "in_progress": "🔄", "blocked": "⚠️", "done": "✅", "cancelled": "❌"}
 _NUMBER_GLYPH = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥", 7: "⑦", 8: "⑧", 9: "⑨", 10: "⑩"}
 _SEP = "━" * 25
 
@@ -6784,12 +6780,6 @@ async def cb_cockpit_stats(query: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data == "cockpit_plan")
-async def cb_cockpit_plan(query: CallbackQuery, state: FSMContext) -> None:
-    await query.answer()
-    await cmd_plan(query.message, state)
-
-
 @router.callback_query(F.data == "cockpit_delegations")
 async def cb_cockpit_delegations(query: CallbackQuery) -> None:
     await query.answer()
@@ -9137,46 +9127,6 @@ def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
             ],
         ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-@router.callback_query(F.data == "copy")
-async def cb_copy(query: CallbackQuery) -> None:
-    await query.answer("Matnni uzun bosib nusxa oling.")
-
-
-@router.callback_query(F.data == "share")
-async def cb_share(query: CallbackQuery) -> None:
-    """Resend the polished text as a clean, forward-ready standalone message."""
-    original = query.message
-    body = original.text or original.caption or ""
-    polished = _extract_polished_text(body)
-    if not polished:
-        await query.answer("Matn topilmadi", show_alert=True)
-        return
-    await query.answer("Xabar tayyor. Uni Telegram Forward bilan yuboring.")
-    await query.message.answer(polished)
-
-
-def _extract_polished_text(text: str) -> str:
-    """Strip the surrounding 'Tahrirlangan matn:' wrapper to get just the body."""
-    if not text:
-        return ""
-    # Look for the content between ─── separators
-    import re
-    m = re.search(r"───+\s*\n?(.+?)\n?───+", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    # No separator → strip the header line if present
-    lines = text.split("\n")
-    if lines and ("Tahrirlangan" in lines[0] or "Polish" in lines[0]):
-        return "\n".join(lines[1:]).strip()
-    return text.strip()
-
-
-@router.callback_query(F.data == "view_tasks")
-async def cb_view_tasks(query: CallbackQuery) -> None:
-    await query.answer()
-    await cmd_tasks(query.message)
 
 
 @router.callback_query()
