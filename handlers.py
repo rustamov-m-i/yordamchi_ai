@@ -144,7 +144,7 @@ TBTN_TASKS_IMPORTANT = "Muhim"
 TBTN_TASKS_DONE = "Bajarilgan"
 TBTN_TASKS_ALL = "Barchasi"
 TBTN_TASKS_NEW = "➕ Yangi vazifa"
-TBTN_TASKS_SEARCH = "🔎 Vazifa qidirish"
+TBTN_TASKS_SEARCH = "🔍 Vazifa qidirish"
 
 _TASKS_SECTION_FILTERS = {
     TBTN_TASKS_ACTIVE:   "active",
@@ -161,7 +161,7 @@ MBTN_MEETINGS_TOMORROW = "Ertaga"
 MBTN_MEETINGS_ALL = "Barchasi"
 MBTN_MEETINGS_PAST = "O'tgan"
 MBTN_MEETINGS_NEW = "➕ Yangi uchrashuv"
-MBTN_MEETINGS_SEARCH = "🔎 Uchrashuv qidirish"
+MBTN_MEETINGS_SEARCH = "🔍 Uchrashuv qidirish"
 
 _MEETINGS_SECTION_FILTERS = {
     MBTN_MEETINGS_WEEK:     "week",
@@ -176,7 +176,7 @@ RBTN_REMINDERS_UPCOMING = "⏭ Keyingi"
 RBTN_REMINDERS_SENT = "📤 Yuborilgan"
 RBTN_REMINDERS_ALL = "🗂 Barchasi"
 RBTN_REMINDERS_NEW = "➕ Yangi eslatma"
-RBTN_REMINDERS_SEARCH = "🔎 Eslatma qidirish"
+RBTN_REMINDERS_SEARCH = "🔍 Eslatma qidirish"
 
 _REMINDERS_SECTION_FILTERS = {
     RBTN_REMINDERS_TODAY: "today",
@@ -190,7 +190,7 @@ NBTN_NOTES_INBOX = "📥 Inbox"
 NBTN_NOTES_PROCESSED = "⚙️ Ishlangan"
 NBTN_NOTES_ARCHIVED = "📦 Arxiv"
 NBTN_NOTES_NEW = "➕ Yangi qayd"
-NBTN_NOTES_SEARCH = "🔎 Qayd qidirish"
+NBTN_NOTES_SEARCH = "🔍 Qayd qidirish"
 
 _NOTES_SECTION_FILTERS = {
     NBTN_NOTES_INBOX:     "inbox",
@@ -1376,7 +1376,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
             if _settings.get("confirm_create_actions", True):
                 preview = _format_create_preview(destructive)
                 confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="✓ Tasdiqlayman", callback_data="acts_confirm"),
+                    InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="acts_confirm"),
                     InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
                 ]])
                 # Remember the prior section state so cb_actions_confirm can
@@ -1409,7 +1409,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
         if keyboard:
             keyboard = _append_back_row(keyboard)
 
-        text = (final_response.get("user_message") or "").strip() or "✓"
+        text = (final_response.get("user_message") or "").strip() or "✅"
         if progress_msg is not None:
             # Finalize the same message we've been editing — single chat bubble.
             try:
@@ -1512,13 +1512,13 @@ async def cmd_backup(message: Message) -> None:
         typing_task.cancel()
 
     kb_size = size / 1024
-    ok_mark = "✓" if integrity == "ok" else f"⚠️ {integrity}"
+    ok_mark = "✅" if integrity == "ok" else f"⚠️ {integrity}"
     await _safe_answer(
         message,
         f"💾 **Backup yaratildi**\n\n"
         f"📁 `{backup_path.name}`\n"
         f"📦 Hajmi: {kb_size:,.0f} KB\n"
-        f"🔎 Integrity: {ok_mark}\n\n"
+        f"🔍 Integrity: {ok_mark}\n\n"
         f"_To'liq yo'l: `{backup_path}`_\n"
         f"_Avtomatik kunlik backup GCS'ga ham olinadi (DEPLOY.md)._",
         parse_mode="Markdown",
@@ -1594,7 +1594,7 @@ async def cmd_diagnostics(message: Message) -> None:
     # Pending actions
     try:
         stuck = await database.list_stuck_pending_actions(stuck_after_minutes=5)
-        lines.append(f"⏳ Stuck pending_actions: {len(stuck)}" if stuck else "⏳ Stuck pending_actions: 0 ✓")
+        lines.append(f"⏳ Stuck pending_actions: {len(stuck)}" if stuck else "⏳ Stuck pending_actions: 0 ✅")
     except Exception:
         lines.append("⏳ Stuck pending_actions: tekshirib bo'lmadi")
 
@@ -1618,7 +1618,7 @@ async def cmd_diagnostics(message: Message) -> None:
         remain = claude_service._circuit_open_until - __import__("time").time()
         lines.append(f"⚠️ Claude circuit OPEN ({remain:.0f}s qoldi)")
     else:
-        lines.append("✓ Claude circuit closed")
+        lines.append("✅ Claude circuit closed")
 
     # Scheduler
     sched = scheduler_module.get_scheduler()
@@ -2064,7 +2064,7 @@ async def cb_setting_notif(query: CallbackQuery) -> None:
     settings = await database.get_settings()
     new_val = not settings["notifications_enabled"]
     await database.set_setting("notifications_enabled", new_val)
-    await query.answer(f"Bildirishnomalar {'yoqildi' if new_val else 'oʻchirildi'} ✓")
+    await query.answer(f"Bildirishnomalar {'yoqildi' if new_val else 'oʻchirildi'} ✅")
     settings["notifications_enabled"] = new_val
     try:
         await query.message.edit_reply_markup(reply_markup=settings_keyboard(settings))
@@ -2088,7 +2088,7 @@ async def cb_brief_time(query: CallbackQuery) -> None:
     new_time = query.data.removeprefix("brieftime:")
     await database.set_setting("morning_briefing_time", new_time)
     await _reschedule_briefings_live()
-    await query.answer(f"Brifing: {new_time} ✓ (kuchga kirdi)")
+    await query.answer(f"Brifing: {new_time} ✅ (kuchga kirdi)")
     try:
         await query.message.delete()
     except Exception:
@@ -2112,7 +2112,7 @@ async def cb_evening_time(query: CallbackQuery) -> None:
     new_time = query.data.removeprefix("eveningtime:")
     await database.set_setting("evening_summary_time", new_time)
     await _reschedule_briefings_live()
-    await query.answer(f"Kechki yakun: {new_time} ✓ (kuchga kirdi)")
+    await query.answer(f"Kechki yakun: {new_time} ✅ (kuchga kirdi)")
     try:
         await query.message.delete()
     except Exception:
@@ -2160,7 +2160,7 @@ async def cb_meet_remind(query: CallbackQuery) -> None:
         return
     await database.set_setting("meeting_reminder_min", mins)
     await _apply_reminder_settings_live()
-    await query.answer(f"Uchrashuv eslatmasi: {mins} daq oldin ✓")
+    await query.answer(f"Uchrashuv eslatmasi: {mins} daq oldin ✅")
 
 
 @router.callback_query(F.data.startswith("taskremind:"))
@@ -2171,7 +2171,7 @@ async def cb_task_remind(query: CallbackQuery) -> None:
         return
     await database.set_setting("task_reminder_hours", hrs)
     await _apply_reminder_settings_live()
-    await query.answer(f"Vazifa eslatmasi: {hrs} soat oldin ✓")
+    await query.answer(f"Vazifa eslatmasi: {hrs} soat oldin ✅")
 
 
 async def _apply_reminder_settings_live() -> None:
@@ -2197,7 +2197,7 @@ async def cb_setting_voice_auto_toggle(query: CallbackQuery) -> None:
     new_val = not settings.get("voice_auto_confirm", True)
     await database.set_setting("voice_auto_confirm", new_val)
     label = "AVTO — tasdiqsiz" if new_val else "Tasdiq so'raladi"
-    await query.answer(f"Ovoz: {label} ✓")
+    await query.answer(f"Ovoz: {label} ✅")
     settings["voice_auto_confirm"] = new_val
     try:
         await query.message.edit_reply_markup(reply_markup=settings_keyboard(settings))
@@ -2213,7 +2213,7 @@ async def cb_setting_confirm_create_toggle(query: CallbackQuery) -> None:
     new_val = not settings.get("confirm_create_actions", True)
     await database.set_setting("confirm_create_actions", new_val)
     label = "yoqildi (xavfsizroq)" if new_val else "o'chirildi (tezroq)"
-    await query.answer(f"Yaratish tasdig'i {label} ✓")
+    await query.answer(f"Yaratish tasdig'i {label} ✅")
     settings["confirm_create_actions"] = new_val
     try:
         await query.message.edit_reply_markup(reply_markup=settings_keyboard(settings))
@@ -2256,7 +2256,7 @@ async def cb_quiet_toggle(query: CallbackQuery) -> None:
     new_val = not settings.get("quiet_hours_enabled", False)
     await database.set_setting("quiet_hours_enabled", new_val)
     label = "yoqildi" if new_val else "o'chirildi"
-    await query.answer(f"Sukunat {label} ✓")
+    await query.answer(f"Sukunat {label} ✅")
     try:
         await query.message.delete()
     except TelegramBadRequest:
@@ -2292,7 +2292,7 @@ async def cb_quiet_set_time(query: CallbackQuery) -> None:
     new_time = f"{hh}:{mm}"
     key = "quiet_hours_start" if which == "start" else "quiet_hours_end"
     await database.set_setting(key, new_time)
-    await query.answer(f"Saqlandi: {new_time} ✓")
+    await query.answer(f"Saqlandi: {new_time} ✅")
     try:
         await query.message.delete()
     except TelegramBadRequest:
@@ -2508,7 +2508,7 @@ def _format_tasks_compact(
     Icon palette (from prior design):
       📋 page · 📌 stats · ⏳ unfinished · ✅ done
       Per-task badge: 🔴 overdue/urgent · 🟠 important · 🟡 today · ⚪ routine · ✅ done
-      Detail line icons: 👤 ijrochi · ⏳ muddat · 🔥/⭐/🔹/✅ muhimlik
+      Detail line icons: 👤 ijrochi · ⏳ muddat · ⚡/⭐/🔹/✅ muhimlik
 
     Spacing rules: 2 blank lines around dividers, 1 blank between items,
     1 blank between task title and its detail block, 6-space indent for details.
@@ -2585,7 +2585,7 @@ def _format_tasks_compact(
         return "⚪"
 
     def _muhimlik_icon(priority: str) -> str:
-        return {"P0": "🔥", "P1": "⭐", "P2": "🔹", "P3": "🔹"}.get(priority, "🔹")
+        return {"P0": "⚡", "P1": "⭐", "P2": "🔹", "P3": "🔹"}.get(priority, "🔹")
 
     def _task_card_lines(task: dict, num: int) -> list[str]:
         """Render one unfinished task as a 5-line card (title, blank, 3 details)."""
@@ -3357,7 +3357,7 @@ async def cb_note_archive(query: CallbackQuery) -> None:
     if not ok:
         await query.answer("Qayd topilmadi", show_alert=True)
         return
-    await query.answer("📦 Arxivga ko'chirildi ✓")
+    await query.answer("📦 Arxivga ko'chirildi ✅")
     note = await database.get_note(nid)
     if note:
         text, parse_mode = _format_note_detail(note)
@@ -3382,7 +3382,7 @@ async def cb_note_restore(query: CallbackQuery) -> None:
     if not ok:
         await query.answer("Qayd topilmadi", show_alert=True)
         return
-    await query.answer("📥 Inbox'ga qaytarildi ✓")
+    await query.answer("📥 Inbox'ga qaytarildi ✅")
     note = await database.get_note(nid)
     if note:
         text, parse_mode = _format_note_detail(note)
@@ -3424,7 +3424,7 @@ async def cb_note_delete_confirm(query: CallbackQuery) -> None:
     if not ok:
         await query.answer("Qayd topilmadi", show_alert=True)
         return
-    await query.answer("🗑 O'chirildi ✓")
+    await query.answer("🗑 O'chirildi ✅")
     try:
         await query.message.edit_text("🗑 Qayd o'chirildi.")
     except TelegramBadRequest:
@@ -3455,7 +3455,7 @@ async def cb_note_to_task(query: CallbackQuery) -> None:
         "source": "note",
     })
     await database.mark_note_processed(nid, "task", tid)
-    await query.answer("📝 Vazifa yaratildi ✓")
+    await query.answer("📝 Vazifa yaratildi ✅")
     task = await database.get_task(tid)
     if task:
         await _safe_answer(
@@ -3539,7 +3539,7 @@ async def cb_note_analyze(query: CallbackQuery) -> None:
         preview = _format_create_preview(destructive)
         try:
             ids_by_type = await _execute_actions(actions)
-            await query.message.answer(preview + "\n\n✓ Yaratildi.",
+            await query.message.answer(preview + "\n\n✅ Yaratildi.",
                                           parse_mode="Markdown")
             # Mark the source note as processed if a task or reminder was created.
             for kind, key in (("task", "task"), ("reminder", "reminder")):
@@ -3641,7 +3641,7 @@ async def cb_reminder_done(query: CallbackQuery) -> None:
     if not ok:
         await query.answer("Eslatma topilmadi", show_alert=True)
         return
-    await query.answer("Bajarildi ✓")
+    await query.answer("Bajarildi ✅")
     reminder = await database.get_reminder(rid)
     if reminder:
         try:
@@ -3671,7 +3671,7 @@ async def cb_reminder_snooze(query: CallbackQuery) -> None:
         return
     reminder = await database.get_reminder(rid)
     label = _reminder_time_chip(reminder or {"remind_at": remind_at})
-    await query.answer(f"Keyingi eslatma: {label} ✓")
+    await query.answer(f"Keyingi eslatma: {label} ✅")
     if reminder:
         try:
             await query.message.edit_text(
@@ -3690,7 +3690,7 @@ async def cb_reminder_delete(query: CallbackQuery) -> None:
     if not ok:
         await query.answer("Eslatma topilmadi", show_alert=True)
         return
-    await query.answer("O'chirildi ✓")
+    await query.answer("O'chirildi ✅")
     try:
         await query.message.edit_text("🗑 Eslatma o'chirildi.", reply_markup=single_back_keyboard("remfilter:upcoming", "⬅️ Ro'yxatga"))
     except TelegramBadRequest:
@@ -3760,7 +3760,7 @@ async def handle_reminder_edit_value(message: Message, state: FSMContext) -> Non
     reminder = await database.get_reminder(rid)
     await _safe_answer(
         message,
-        "✓ Saqlandi\n\n" + _format_reminder_card(reminder),
+        "✅ Saqlandi\n\n" + _format_reminder_card(reminder),
         parse_mode="Markdown",
         reply_markup=reminder_detail_menu(reminder),
     )
@@ -3915,7 +3915,7 @@ def _format_meetings_compact(
 ) -> str:
     """Meetings screen — Vazifalar uslubidagi block-stil.
 
-    Ikonkalar: 🤝 sahifa · 📌 stats · 🔥 eng yaqin · 📅 ro'yxat
+    Ikonkalar: 🤝 sahifa · 📌 stats · ⚡ eng yaqin · 📅 ro'yxat
                 ⏰ vaqt · 👥 ishtirokchilar · 📍 manzil
     Bot uslubi: divider atrofida 1 bo'sh qator, item orasida 1 bo'sh qator,
                 detal blok 6 ta probel indent, qiymat 12-ustunda.
@@ -3985,7 +3985,7 @@ def _format_meetings_compact(
     # ENG YAQIN — surface the next upcoming meeting (only on page 1, only if non-past filter)
     next_meeting = stats.get("next_meeting") if stats else None
     if page == 1 and next_meeting:
-        lines.append("🔥 **ENG YAQIN**")
+        lines.append("⚡ **ENG YAQIN**")
         lines.append("")
         lines.extend(_meeting_card_pop(next_meeting))
         lines.extend(["", DIVIDER, ""])
@@ -4687,7 +4687,7 @@ async def _run_planning_session(message: Message, situation: str) -> None:
 async def cb_plan_accept(query: CallbackQuery) -> None:
     plan_id = query.data.split(":", 1)[1]
     await database.mark_plan_accepted(plan_id)
-    await query.answer("Reja qabul qilindi ✓ 2 kun ichida qanday o'tganini so'rayman.")
+    await query.answer("Reja qabul qilindi ✅ 2 kun ichida qanday o'tganini so'rayman.")
     try:
         await query.message.edit_reply_markup(reply_markup=single_back_keyboard())
     except Exception:
@@ -4899,7 +4899,7 @@ def _format_assignees_overview(loads: dict, unassigned_count: int) -> tuple[str,
     Ikonkalar (oldingi paletadan):
       👥 sahifa · 📌 stats · ⚠️ diqqat · 💡 tavsiya
     Detal qator (har ijrochi uchun) ikonkalari:
-      📊 Aktiv · ⚡ Yuklama · 🔥/⭐/⏰ holat · 📅 keyingi muddat
+      📊 Aktiv · ⚡ Yuklama · ⚡/⭐/⏰ holat · 📅 keyingi muddat
     Spacing: divider atrofida 1 bo'sh qator, item orasida 1 bo'sh qator,
     detal blok 6 ta probel indent.
     """
@@ -4960,7 +4960,7 @@ def _format_assignees_overview(loads: dict, unassigned_count: int) -> tuple[str,
         ]
         # Selective signal lines — only render if non-zero
         if d.get("urgent"):
-            block.append(f"      🔥 Shoshilinch:     {d['urgent']} ta")
+            block.append(f"      ⚡ Shoshilinch:     {d['urgent']} ta")
         if d.get("important"):
             block.append(f"      ⭐ Muhim:           {d['important']} ta")
         if d.get("overdue"):
@@ -5039,7 +5039,7 @@ def _format_assignee_profile(profile: dict) -> str:
         f"      ✅ Bajarilgan:      {profile['completed']} ta",
         f"      📈 Bajarilish:      {profile['completion_rate']}%",
         f"      ⏰ O'tgan:          {profile['overdue']} ta",
-        f"      🔥 Shoshilinch:     {profile['urgent']} ta",
+        f"      ⚡ Shoshilinch:     {profile['urgent']} ta",
         f"      ⭐ Muhim:           {profile['important']} ta",
     ]
     if profile.get("avg_closing_hours"):
@@ -5694,7 +5694,7 @@ def _newtask_assignee_kb() -> InlineKeyboardMarkup:
 def _newtask_confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✓ Tasdiqlash", callback_data="newtask:confirm"),
+            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data="newtask:confirm"),
             InlineKeyboardButton(text="✕ Bekor qilish", callback_data="newtask:cancel"),
         ],
     ])
@@ -6013,7 +6013,7 @@ def _newreminder_repeat_kb() -> InlineKeyboardMarkup:
 def _newreminder_confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✓ Saqlash", callback_data="newrem:confirm"),
+            InlineKeyboardButton(text="✅ Saqlash", callback_data="newrem:confirm"),
             InlineKeyboardButton(text="✕ Bekor qilish", callback_data="newrem:cancel"),
         ],
     ])
@@ -6612,13 +6612,13 @@ def _build_cockpit_panel(signals: dict) -> str:
         deadline_label = _format_top_task_deadline(top.get("deadline"), now)
         status_label = _top_task_status(top, now)
         blocks.append([
-            "🔥 **ENG MUHIM**",
+            "⚡ **ENG MUHIM**",
             "",
             title,
             "",
             f"      ⏰ Muddat:        {deadline_label}",
             f"      👤 Ijrochi:        {assignee}",
-            f"      🔥 Holat:          {status_label}",
+            f"      ⚡ Holat:          {status_label}",
         ])
 
     # ── Block 5: Jamoa yuklamasi ──
@@ -6839,7 +6839,7 @@ async def _send_voice_confirm_prompt(message: Message, state: FSMContext, transc
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✓ Tasdiqlayman", callback_data="voice_ok"),
+            InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="voice_ok"),
             InlineKeyboardButton(text="✏️ Tahrirlayman", callback_data="voice_edit"),
         ],
         [InlineKeyboardButton(text="✕ Bekor qilish", callback_data="voice_cancel")],
@@ -7000,7 +7000,7 @@ async def cb_voice_ok(query: CallbackQuery, state: FSMContext) -> None:
     if not transcript:
         await query.answer("Matn topilmadi", show_alert=True)
         return
-    await query.answer("✓ Tasdiqlandi")
+    await query.answer("✅ Tasdiqlandi")
     try:
         await query.message.edit_reply_markup(reply_markup=None)
     except TelegramBadRequest:
@@ -7023,7 +7023,7 @@ async def cb_voice_cancel(query: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "acts_confirm")
 async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
-    """User tapped ✓ on a create-action preview — execute the deferred Claude
+    """User tapped ✅ on a create-action preview — execute the deferred Claude
     response now, send the original user_message reply, AND restore the prior
     section state so the section auto-refresh sees the new item."""
     data = await state.get_data()
@@ -7034,7 +7034,7 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
         await query.answer("Tasdiqlash vaqti o'tdi — yangi so'rov yuboring.",
                             show_alert=True)
         return
-    await query.answer("✓ Tasdiqlandi")
+    await query.answer("✅ Tasdiqlandi")
     # Strip the confirm keyboard so it can't be re-tapped while we execute.
     try:
         await query.message.edit_reply_markup(reply_markup=None)
@@ -7051,7 +7051,7 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
     keyboard = _build_keyboard(response.get("buttons", []), ids_by_type)
     if keyboard:
         keyboard = _append_back_row(keyboard)
-    text = (response.get("user_message") or "").strip() or "✓ Yaratildi"
+    text = (response.get("user_message") or "").strip() or "✅ Yaratildi"
     await _safe_answer(query.message, text,
                         parse_mode="Markdown", reply_markup=keyboard)
     # Restore prior section state and auto-refresh the section list so the
@@ -7138,7 +7138,7 @@ async def handle_voice_action(message: Message, bot: Bot, state: FSMContext) -> 
     if intent == "confirm":
         await state.clear()
         if transcript:
-            await message.answer("✓ Tasdiqlandi")
+            await message.answer("✅ Tasdiqlandi")
             await _process_and_reply(message, transcript, state=state)
         return
     if intent == "cancel":
@@ -7239,7 +7239,7 @@ async def handle_tasks_section_button(message: Message, state: FSMContext) -> No
         await state.set_state(TaskSearchFSM.awaiting_query)
         await _safe_answer(
             message,
-            "🔎 **VAZIFA QIDIRISH**\n\n"
+            "🔍 **VAZIFA QIDIRISH**\n\n"
             "Sarlavha, tavsif, teg yoki ijrochi bo'yicha so'z yuboring.",
             parse_mode="Markdown",
         )
@@ -7266,7 +7266,7 @@ async def handle_reminders_section_button(message: Message, state: FSMContext) -
         await state.set_state(ReminderSearchFSM.awaiting_query)
         await _safe_answer(
             message,
-            "🔎 **ESLATMA QIDIRISH**\n\nQidiruv so'zini yuboring.",
+            "🔍 **ESLATMA QIDIRISH**\n\nQidiruv so'zini yuboring.",
             parse_mode="Markdown",
         )
         return
@@ -7468,7 +7468,7 @@ async def handle_search_section_button(message: Message, state: FSMContext) -> N
             "all": "🗂 Hammasi",
         }[scope_map[label]]
         await message.answer(
-            f"✓ Scope: **{scope_label}**\n\nQidiruv so'zini yuboring.",
+            f"✅ Scope: **{scope_label}**\n\nQidiruv so'zini yuboring.",
             parse_mode="Markdown",
         )
         return
@@ -7499,7 +7499,7 @@ async def handle_search_section_button(message: Message, state: FSMContext) -> N
 @router.message(StateFilter(SectionFSM.in_notes), F.text | F.voice)
 async def handle_notes_section_button(message: Message, state: FSMContext) -> None:
     """Reply-keyboard tugmalari Qaydlar bo'limida. Inbox/Ishlangan/Arxiv —
-    filter; '➕ Yangi qayd' → one-shot capture FSM; '🔎 Qidirish' → search
+    filter; '➕ Yangi qayd' → one-shot capture FSM; '🔍 Qidirish' → search
     flow; matn fall-through Claude'ga, voice ham."""
     _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
     if _msg_text is None:
@@ -7524,7 +7524,7 @@ async def handle_notes_section_button(message: Message, state: FSMContext) -> No
         await state.update_data(_search_scope="notes")
         await _safe_answer(
             message,
-            "🔎 **QAYD QIDIRISH**\n\nKalit so'z yoki ibora yuboring.",
+            "🔍 **QAYD QIDIRISH**\n\nKalit so'z yoki ibora yuboring.",
             parse_mode="Markdown",
         )
         return
@@ -7545,7 +7545,7 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         new_val = not settings["notifications_enabled"]
         await database.set_setting("notifications_enabled", new_val)
         await message.answer(
-            f"🔔 Bildirishnomalar: **{'yoqildi ✓' if new_val else 'oʻchirildi ✕'}**",
+            f"🔔 Bildirishnomalar: **{'yoqildi ✅' if new_val else 'oʻchirildi ❌'}**",
             parse_mode="Markdown",
         )
         return
@@ -7586,12 +7586,12 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         await database.set_setting("voice_auto_confirm", new_val)
         if new_val:
             text = (
-                "🎙 **Ovoz tasdig'i:** AVTO - tasdiqsiz ishlaydi ✓\n\n"
+                "🎙 **Ovoz tasdig'i:** AVTO - tasdiqsiz ishlaydi ✅\n\n"
                 "Ovoz transkripti darhol qayta ishlanadi."
             )
         else:
             text = (
-                "🎙 **Ovoz tasdig'i:** tasdiq so'raladi ✓\n\n"
+                "🎙 **Ovoz tasdig'i:** tasdiq so'raladi ✅\n\n"
                 "Har bir ovoz xabarida transkript ko'rsatiladi; "
                 "tasdiqlasangizgina davom etadi."
             )
@@ -7603,12 +7603,12 @@ async def handle_settings_section_button(message: Message, state: FSMContext) ->
         await database.set_setting("confirm_create_actions", new_val)
         if new_val:
             text = (
-                "✅ **Yaratish tasdig'i:** yoqildi ✓\n\n"
+                "✅ **Yaratish tasdig'i:** yoqildi ✅\n\n"
                 "Vazifa yoki uchrashuv yaratishdan oldin tasdiq so'raladi."
             )
         else:
             text = (
-                "✅ **Yaratish tasdig'i:** o'chirildi ✓\n\n"
+                "✅ **Yaratish tasdig'i:** o'chirildi ✅\n\n"
                 "Vazifa va uchrashuvlar tasdiqsiz yaratiladi."
             )
         await message.answer(text, parse_mode="Markdown")
@@ -7686,7 +7686,7 @@ async def cb_nav_meetings(query: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("confirm:"))
 async def cb_confirm(query: CallbackQuery) -> None:
-    await query.answer("Tasdiqlandi ✓")
+    await query.answer("Tasdiqlandi ✅")
     try:
         await query.message.edit_reply_markup(reply_markup=single_back_keyboard())
     except Exception:
@@ -7711,7 +7711,7 @@ async def cb_task_del_confirm(query: CallbackQuery) -> None:
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✓ Ha, o'chir", callback_data=f"task_del_do:{tid}"),
+            InlineKeyboardButton(text="✅ Ha, o'chir", callback_data=f"task_del_do:{tid}"),
             InlineKeyboardButton(text="⬅️ Yo'q", callback_data=f"taskopen:{tid}"),
         ],
     ])
@@ -7726,7 +7726,7 @@ async def cb_task_del_do(query: CallbackQuery) -> None:
     """Execute task deletion after confirmation."""
     tid = query.data.split(":", 1)[1]
     await database.delete_task(tid)
-    await query.answer("✓ Vazifa o'chirildi")
+    await query.answer("✅ Vazifa o'chirildi")
     try:
         await query.message.edit_text(
             "🗑 Vazifa o'chirildi.",
@@ -7776,7 +7776,7 @@ async def cb_complete(query: CallbackQuery) -> None:
         await query.answer()
         return
     await database.complete_task(target_id)
-    await query.answer("Bajarildi ✓")
+    await query.answer("Bajarildi ✅")
     # Cardni vizual yangilash — foydalanuvchi yangi statusni darrov ko'rsin.
     # Plus add an "Undo" button so a fat-finger tap can be reversed within
     # the next minute without hunting through the task detail menu.
@@ -7815,7 +7815,7 @@ async def cb_uncomplete(query: CallbackQuery) -> None:
     if not ok:
         await query.answer("Vazifa topilmadi", show_alert=True)
         return
-    await query.answer("↶ Yana aktiv ✓")
+    await query.answer("↶ Yana aktiv ✅")
     task = await database.get_task(target_id)
     if task:
         try:
@@ -7874,7 +7874,7 @@ async def cb_clear_assignee(query: CallbackQuery, state: FSMContext) -> None:
     tid = query.data.split(":", 1)[1]
     await state.clear()
     await database.update_task(tid, {"assignee": None}, source="edit")
-    await query.answer("Ijrochi tozalandi ✓")
+    await query.answer("Ijrochi tozalandi ✅")
     task = await database.get_task(tid)
     if task:
         try:
@@ -7906,7 +7906,7 @@ async def handle_assignee_input(message: Message, state: FSMContext) -> None:
     task = await database.get_task(tid)
     if task:
         await _safe_answer(
-            message, f"✓ Ijrochi: **{name}**\n\n" + _format_task_card(task),
+            message, f"✅ Ijrochi: **{name}**\n\n" + _format_task_card(task),
             parse_mode="Markdown",
             reply_markup=_task_card_kb_with_back(task),
         )
@@ -8114,7 +8114,7 @@ async def cb_resched_preset(query: CallbackQuery) -> None:
         await query.answer("Uchrashuv topilmadi", show_alert=True)
         return
     label = _meeting_time_label(updated.get("datetime_start") or "", with_past_marker=False)
-    await query.answer(f"✓ Vaqt {label} ga ko'chirildi")
+    await query.answer(f"✅ Vaqt {label} ga ko'chirildi")
     try:
         await query.message.edit_text(
             _format_meeting_card(updated, show_date=True),
@@ -8203,7 +8203,7 @@ async def handle_resched_manual(message: Message, state: FSMContext, bot: Bot) -
     label = _meeting_time_label(updated.get("datetime_start") or "", with_past_marker=False)
     await _safe_answer(
         message,
-        f"✓ Vaqt **{label}** ga ko'chirildi.\n\n" + _format_meeting_card(updated, show_date=True),
+        f"✅ Vaqt **{label}** ga ko'chirildi.\n\n" + _format_meeting_card(updated, show_date=True),
         parse_mode="Markdown",
         reply_markup=meeting_inline_actions(updated),
     )
@@ -8381,7 +8381,7 @@ async def handle_meeting_edit_value(message: Message, state: FSMContext, bot: Bo
         return
     await _safe_answer(
         message,
-        "✓ Yangilandi.\n\n" + _format_meeting_card(updated, show_date=True),
+        "✅ Yangilandi.\n\n" + _format_meeting_card(updated, show_date=True),
         parse_mode="Markdown",
         reply_markup=meeting_inline_actions(updated),
     )
@@ -8414,7 +8414,7 @@ async def cb_meeting_duration(query: CallbackQuery) -> None:
     if config.ICLOUD_ENABLED:
         _spawn_background(_resync_meeting_to_icloud(mid), name=f"icloud_resync:{mid}")
     updated = await database.get_meeting(mid)
-    await query.answer(f"✓ Davomiylik {minutes} daq ga o'zgartirildi")
+    await query.answer(f"✅ Davomiylik {minutes} daq ga o'zgartirildi")
     if updated:
         try:
             await query.message.edit_text(_format_meeting_card(updated, show_date=True),
@@ -8580,9 +8580,9 @@ async def handle_protocol_notes(message: Message, state: FSMContext, bot: Bot) -
     )
 
     pending_count = sum(1 for a in pending_actions if a.get("type") == "create_task")
-    confirm_label = "✓ Tasdiqlash"
+    confirm_label = "✅ Tasdiqlash"
     if pending_count:
-        confirm_label = f"✓ Tasdiqlash ({pending_count} ta vazifa)"
+        confirm_label = f"✅ Tasdiqlash ({pending_count} ta vazifa)"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -8613,8 +8613,8 @@ async def cb_protocol_confirm(query: CallbackQuery, state: FSMContext) -> None:
     })
     created = await _execute_actions(pending_actions)
     n_tasks = len(created.get("task", []))
-    await query.answer(f"✓ Saqlandi · {n_tasks} ta vazifa yaratildi" if n_tasks
-                       else "✓ Bayonnoma saqlandi")
+    await query.answer(f"✅ Saqlandi · {n_tasks} ta vazifa yaratildi" if n_tasks
+                       else "✅ Bayonnoma saqlandi")
     meeting = await database.get_meeting(mid)
     if meeting:
         try:
@@ -8707,7 +8707,7 @@ async def handle_protocol_revision(message: Message, state: FSMContext, bot: Bot
     )
 
     pending_count = sum(1 for a in pending_actions if a.get("type") == "create_task")
-    confirm_label = f"✓ Tasdiqlash ({pending_count} ta vazifa)" if pending_count else "✓ Tasdiqlash"
+    confirm_label = f"✅ Tasdiqlash ({pending_count} ta vazifa)" if pending_count else "✅ Tasdiqlash"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -8754,7 +8754,7 @@ async def cb_meeting_cancel_confirm(query: CallbackQuery) -> None:
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✓ Ha, bekor", callback_data=f"mcanc_do:{mid}"),
+            InlineKeyboardButton(text="✅ Ha, bekor", callback_data=f"mcanc_do:{mid}"),
             InlineKeyboardButton(text="⬅️ Yo'q", callback_data=f"meetingopen:{mid}"),
         ],
     ])
@@ -8786,7 +8786,7 @@ async def cb_meeting_cancel_do(query: CallbackQuery) -> None:
             await asyncio.to_thread(calendar_service.delete_meeting, mid)
         except Exception:
             logger.exception("iCloud meeting delete failed (will retry)")
-    await query.answer("✓ Uchrashuv bekor qilindi")
+    await query.answer("✅ Uchrashuv bekor qilindi")
     try:
         await query.message.edit_text(
             "✕ Uchrashuv bekor qilindi.\n\nKalendar bilan sinxronlanmoqda...",
@@ -8913,7 +8913,7 @@ async def cb_set_field(query: CallbackQuery) -> None:
         value_uz = _STATUS_LABEL_UZ.get(update_val, update_val)
     else:
         value_uz = update_val
-    await query.answer(f"{field_uz} → {value_uz} ✓")
+    await query.answer(f"{field_uz} → {value_uz} ✅")
     task = await database.get_task(tid)
     if task:
         text = _format_task_card(task)
@@ -8945,7 +8945,7 @@ async def cb_deadline_preset(query: CallbackQuery) -> None:
 
     if new_dt:
         await database.update_task(tid, {"deadline": new_dt.isoformat()}, source="edit")
-        await query.answer(f"Deadline: {new_dt.strftime('%d-%m %H:%M')} ✓")
+        await query.answer(f"Deadline: {new_dt.strftime('%d-%m %H:%M')} ✅")
         task = await database.get_task(tid)
         if task:
             try:
@@ -9027,7 +9027,7 @@ async def handle_edit_value(message: Message, state: FSMContext) -> None:
 
     task = await database.get_task(tid)
     if task:
-        await _safe_answer(message, "✓ Saqlandi\n\n" + _format_task_card(task),
+        await _safe_answer(message, "✅ Saqlandi\n\n" + _format_task_card(task),
                            parse_mode="Markdown", reply_markup=_task_card_kb_with_back(task))
 
 
