@@ -277,7 +277,7 @@ QBTN_SEARCH_ALL = "🗂 Hammasi"
 # ── Sozlamalar section labels ──
 GBTN_SETTINGS_NOTIFY = "🔔 Bildirishnoma"
 GBTN_SETTINGS_BRIEFING = "⏰ Brifing vaqti"
-GBTN_SETTINGS_EVENING = "🌙 Kechki yakun (sozlash)"  # Bugun'dagi bilan to'qnashmasin
+GBTN_SETTINGS_EVENING = "🌙 Kechki vaqt"  # "yakun" is the action in Today section; here we set the time
 GBTN_SETTINGS_REMINDER = "📲 Eslatma parametrlari"
 GBTN_SETTINGS_VOICE = "🎙 Ovoz tasdig'i"
 GBTN_SETTINGS_CREATE_CONFIRM = "✅ Yaratish tasdig'i"
