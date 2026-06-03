@@ -1331,6 +1331,19 @@ async def mark_note_processed(note_id: str, converted_to_type: str,
 
 # ─────────────────────────────────────────── MEETINGS ───────────────────────────────────────────
 
+def _agenda_to_text(value) -> Optional[str]:
+    """`agenda` is a plain-TEXT column (read back as a string everywhere). Claude
+    sends it as a list of bullet points, which SQLite can't bind directly
+    ("type 'list' is not supported"). Normalize a list (or any value) to a
+    string so the INSERT/UPDATE never fails on it."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        items = [str(x).strip() for x in value if str(x).strip()]
+        return "\n".join(f"• {x}" for x in items) if items else None
+    return str(value)
+
+
 async def create_meeting(data: dict) -> str:
     meeting_id = new_id("m-")
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
@@ -1345,7 +1358,7 @@ async def create_meeting(data: dict) -> str:
                 data.get("datetime_end"),
                 json.dumps(data.get("participants", []), ensure_ascii=False),
                 data.get("location_or_link"),
-                data.get("agenda"),
+                _agenda_to_text(data.get("agenda")),
                 data.get("prep_notes"),
                 json.dumps(data.get("follow_up_actions", []), ensure_ascii=False),
                 now_iso(),
@@ -1371,6 +1384,8 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
         fields.append(f"{key} = ?")
         if key in ("participants", "follow_up_actions") and isinstance(value, list):
             value = json.dumps(value, ensure_ascii=False)
+        elif key == "agenda":
+            value = _agenda_to_text(value)
         values.append(value)
     if not fields:
         return False

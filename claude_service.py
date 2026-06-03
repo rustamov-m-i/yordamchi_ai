@@ -260,9 +260,17 @@ async def process_message(
     model = _pick_model(complexity, internal_directive)
     state_block = await _build_state_block()
 
-    history = await database.recent_messages(limit=10)
-    history = _budget_history(history)
-    messages = [{"role": m["role"], "content": m["content"]} for m in history]
+    # Conversation history is included ONLY for the interactive user path.
+    # Internal directives (briefings, summaries, proactive checks) must rely
+    # SOLELY on the structured state block — otherwise Claude treats things the
+    # user merely MENTIONED in chat (but never saved) as real tasks/meetings and
+    # fabricates them into briefings (reported bug: phantom "overdue tasks").
+    if internal_directive:
+        messages = []
+    else:
+        history = await database.recent_messages(limit=10)
+        history = _budget_history(history)
+        messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Redact PII for BOTH user messages and internal directives. Internal directives
     # are generated server-side but may interpolate state (task titles, meeting

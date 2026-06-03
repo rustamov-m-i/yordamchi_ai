@@ -288,12 +288,14 @@ def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply kbd Vazifalar bo'limida — filterlar va sub-amallar."""
     return ReplyKeyboardMarkup(
         keyboard=[
+            # Barchasi — alohida, eng tepada (to'liq kenglik).
+            # Keyin fokus filtrlari, so'ng arxiv/ko'rib chiqish.
+            [KeyboardButton(text=TBTN_TASKS_ALL)],
             [KeyboardButton(text=TBTN_TASKS_ACTIVE),
              KeyboardButton(text=TBTN_TASKS_TODAY),
-             KeyboardButton(text=TBTN_TASKS_OVERDUE)],
-            [KeyboardButton(text=TBTN_TASKS_IMPORTANT),
-             KeyboardButton(text=TBTN_TASKS_DONE),
-             KeyboardButton(text=TBTN_TASKS_ALL)],
+             KeyboardButton(text=TBTN_TASKS_IMPORTANT)],
+            [KeyboardButton(text=TBTN_TASKS_OVERDUE),
+             KeyboardButton(text=TBTN_TASKS_DONE)],
             [KeyboardButton(text=TBTN_TASKS_NEW),
              KeyboardButton(text=TBTN_TASKS_SEARCH)],
             [KeyboardButton(text=BTN_BACK_MAIN)],
@@ -494,27 +496,6 @@ def single_back_keyboard(callback_data: str = "nav_cockpit", text: str = "⬅️
     return InlineKeyboardMarkup(inline_keyboard=[[back_button(callback_data, text)]])
 
 
-def task_filter_keyboard(active: str = "active") -> InlineKeyboardMarkup:
-    """Filter chip row for the tasks view (matches flowchart's Filtrlar / menyu)."""
-    filters = [
-        ("active", "Aktiv"),
-        ("today", "Bugun"),
-        ("important", "Muhim"),
-        ("overdue", "O'tgan"),
-        ("done", "Bajarilgan"),
-        ("all", "Barchasi"),
-    ]
-    # 2 rows × 3 chips
-    chips = [
-        InlineKeyboardButton(
-            text=("● " + label) if key == active else label,
-            callback_data=f"taskfilter:{key}",
-        )
-        for key, label in filters
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=[chips[:3], chips[3:]])
-
-
 def task_inline_actions(task: dict) -> InlineKeyboardMarkup:
     """Per-task quick action row: 3 most-used buttons.
 
@@ -550,14 +531,13 @@ def task_detail_menu(task: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"taskopen:{tid}"),
             ],
         ])
+    # Quick lifecycle actions only. Field edits (Muddat, Prioritet, Status, …)
+    # all live in ✏️ Tahrir → task_edit_menu, so we don't duplicate them here.
+    # 👤 Ijrochi stays (it has no field-editor equivalent and is a frequent action).
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Bajarildi", callback_data=f"complete:{tid}"),
             InlineKeyboardButton(text="👤 Ijrochi", callback_data=f"set_assignee:{tid}"),
-        ],
-        [
-            InlineKeyboardButton(text="📅 Muddat", callback_data=f"editfield:{tid}:deadline"),
-            InlineKeyboardButton(text="⭐ Muhim", callback_data=f"mark_important:{tid}"),
         ],
         [
             InlineKeyboardButton(text="✏️ Tahrir", callback_data=f"edit:{tid}"),
@@ -622,8 +602,9 @@ class NewTaskFSM(StatesGroup):
     """Step-by-step guided form for creating a task."""
     awaiting_title = State()
     awaiting_priority = State()
-    awaiting_deadline = State()
-    awaiting_deadline_manual = State()
+    awaiting_deadline = State()           # step 1: pick a day
+    awaiting_deadline_time = State()      # step 2: pick a time for the chosen day
+    awaiting_deadline_manual = State()    # power path: type a full date+time
     awaiting_assignee = State()
     awaiting_confirm = State()
 
@@ -725,18 +706,6 @@ def meeting_inline_actions(meeting: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✕ Bekor qilish", callback_data=f"meeting_cancel:{mid}"),
         ],
         [back_button("meetingfilter:week")],
-    ])
-
-
-def new_item_keyboard() -> InlineKeyboardMarkup:
-    """The 'Yangi' submenu — 5 creation options from the diagram."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Yangi vazifa", callback_data="new:task")],
-        [InlineKeyboardButton(text="🤝 Yangi uchrashuv", callback_data="new:meeting")],
-        [InlineKeyboardButton(text="⏰ Eslatma qo'shish", callback_data="new:reminder")],
-        [InlineKeyboardButton(text="🎙 Ovozdan vazifa", callback_data="new:voice")],
-        [InlineKeyboardButton(text="✏️ Matn tahrirlash", callback_data="new:polish")],
-        [back_button()],
     ])
 
 
@@ -1038,7 +1007,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     """
     created_ids: dict[str, list[str]] = {
         "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
-        "note": [],
+        "note": [], "_failed": [],
     }
 
     for action in actions:
@@ -1113,8 +1082,29 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                 logger.warning("Unknown action type: %s", atype)
         except Exception:
             logger.exception("Failed to execute action %s", action)
+            created_ids["_failed"].append(atype or "unknown")
 
     return created_ids
+
+
+# Action type → user-facing noun for the "saqlanmadi" warning.
+_ACTION_NOUN_UZ = {
+    "create_task": "vazifa", "update_task": "vazifa yangilash",
+    "complete_task": "vazifa yakunlash", "create_reminder": "eslatma",
+    "schedule_meeting": "uchrashuv", "cancel_meeting": "uchrashuvni bekor qilish",
+    "create_note": "qayd", "save_contact": "kontakt",
+}
+
+
+def _failed_actions_note(ids_by_type: dict[str, list[str]]) -> str:
+    """If any action failed inside _execute_actions, return a short warning to
+    append to the reply — so a silent DB error never looks like success."""
+    failed = ids_by_type.get("_failed") if ids_by_type else None
+    if not failed:
+        return ""
+    nouns = ", ".join(sorted({_ACTION_NOUN_UZ.get(a, a) for a in failed}))
+    return (f"\n\n⚠️ **Saqlanmadi:** {nouns}. Texnik xato yuz berdi — "
+            f"qaytadan urinib ko'ring yoki /diagnostics.")
 
 
 # ─────────────────────── KEYBOARD BUILDER ───────────────────────
@@ -1410,6 +1400,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
             keyboard = _append_back_row(keyboard)
 
         text = (final_response.get("user_message") or "").strip() or "✅"
+        text += _failed_actions_note(ids_by_type)
         if progress_msg is not None:
             # Finalize the same message we've been editing — single chat bubble.
             try:
@@ -1426,7 +1417,12 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
     except Exception as e:
         logger.exception("_process_and_reply failed for pending=%s", pending_id)
         await database.fail_pending_action(pending_id, f"{type(e).__name__}: {e}")
-        raise
+        # Tell the user instead of failing silently. Handled here (no re-raise);
+        # the global error handler in bot.py is the fallback for everything else.
+        try:
+            await message.answer("⚠️ Texnik xato yuz berdi. Iltimos, qaytadan urinib ko'ring.")
+        except Exception:
+            logger.debug("Could not send error notice in _process_and_reply")
     finally:
         typing_task.cancel()
 
@@ -3749,9 +3745,10 @@ async def handle_reminder_edit_value(message: Message, state: FSMContext) -> Non
     if field == "title":
         ok = await database.update_reminder(rid, {"title": raw[:220]})
     else:
-        parsed = await _parse_deadline_natural(raw)
+        parsed, reason = await _parse_deadline_natural(raw)
         if not parsed:
-            await message.answer("Vaqtni tushunmadim. Masalan: `bugun 17:00` yoki `2 soat`.")
+            await _safe_answer(message, _deadline_error_message(reason, kind="time"),
+                               parse_mode="Markdown")
             return
         ok = await database.update_reminder(rid, {"remind_at": parsed, "status": "scheduled", "sent_at": None})
     if not ok:
@@ -4084,8 +4081,11 @@ async def _render_meetings_for_filter(message: Message, filt: str = "week",
         meetings = await database.list_meetings_in_window(start, end)
         label = "Ertangi"
     elif filt == "all":
+        # Start from the beginning of today (not `now`) so a meeting scheduled
+        # earlier today still shows — otherwise it silently drops out the moment
+        # its start time passes, which reads as "my meeting disappeared".
         meetings = await database.list_meetings_in_window(
-            now.isoformat(), (now + timedelta(days=30)).isoformat()
+            today_start.isoformat(), (today_start + timedelta(days=30)).isoformat()
         )
         label = "Barchasi"
     elif filt == "past":
@@ -4096,8 +4096,11 @@ async def _render_meetings_for_filter(message: Message, filt: str = "week",
         meetings = list(reversed(past))
         label = "O'tgan"
     else:  # week (default)
+        # Window starts at the beginning of today (not `now`) so meetings earlier
+        # today remain visible — the reported "voice shows it, the button doesn't"
+        # bug came from `now` excluding an already-started meeting.
         meetings = await database.list_meetings_in_window(
-            now.isoformat(), (now + timedelta(days=7)).isoformat()
+            today_start.isoformat(), (today_start + timedelta(days=7)).isoformat()
         )
         label = "Haftalik"
         filt = "week"
@@ -5664,20 +5667,42 @@ def _newtask_priority_kb() -> InlineKeyboardMarkup:
 
 
 def _newtask_deadline_kb() -> InlineKeyboardMarkup:
+    """Deadline step 1 — pick a DAY. The time is chosen on the next screen."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📅 Bugun 17:00", callback_data="newtask:dl:today"),
-            InlineKeyboardButton(text="📅 Ertaga 09:00", callback_data="newtask:dl:tomorrow"),
+            InlineKeyboardButton(text="📅 Bugun", callback_data="newtask:dl:today"),
+            InlineKeyboardButton(text="📅 Ertaga", callback_data="newtask:dl:tomorrow"),
+            InlineKeyboardButton(text="📅 Indin", callback_data="newtask:dl:indin"),
         ],
         [
             InlineKeyboardButton(text="📅 +3 kun", callback_data="newtask:dl:plus3"),
             InlineKeyboardButton(text="📅 Hafta oxiri", callback_data="newtask:dl:weekend"),
         ],
         [
-            InlineKeyboardButton(text="✏️ Qo'lda kiritish", callback_data="newtask:dl:manual"),
+            InlineKeyboardButton(text="✏️ Qo'lda", callback_data="newtask:dl:manual"),
             InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="newtask:dl:skip"),
         ],
         [InlineKeyboardButton(text="✕ Bekor qilish", callback_data="newtask:cancel")],
+    ])
+
+
+_NEWTASK_TIME_SLOTS = ["09:00", "12:00", "14:00", "17:00", "18:00"]
+
+
+def _newtask_time_kb() -> InlineKeyboardMarkup:
+    """Deadline step 2 — pick a TIME for the already-chosen day. Time callbacks
+    use 'HHMM' (no colon) so the ':' delimiter split stays unambiguous."""
+    slots = [
+        InlineKeyboardButton(text=t, callback_data=f"newtask:tm:{t.replace(':', '')}")
+        for t in _NEWTASK_TIME_SLOTS
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        slots[0:3],
+        slots[3:5] + [InlineKeyboardButton(text="⌨️ Boshqa", callback_data="newtask:tm:custom")],
+        [
+            InlineKeyboardButton(text="⬅️ Orqaga", callback_data="newtask:dl:back"),
+            InlineKeyboardButton(text="✕ Bekor qilish", callback_data="newtask:cancel"),
+        ],
     ])
 
 
@@ -5763,21 +5788,56 @@ async def newtask_priority(query: CallbackQuery, state: FSMContext) -> None:
                             reply_markup=_newtask_deadline_kb())
 
 
-def _newtask_compute_deadline(preset: str) -> str | None:
-    """Convert a preset key into an ISO deadline (or None for 'skip')."""
+def _newtask_compute_day(key: str) -> tuple[str | None, str | None]:
+    """Convert a day-preset key into (iso_date 'YYYY-MM-DD', human_label).
+    Returns (None, None) for an unknown key."""
     now = datetime.now(database.TZ)
-    if preset == "today":
-        return now.replace(hour=17, minute=0, second=0, microsecond=0).isoformat()
-    if preset == "tomorrow":
-        return (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0).isoformat()
-    if preset == "plus3":
-        return (now + timedelta(days=3)).replace(hour=17, minute=0, second=0, microsecond=0).isoformat()
-    if preset == "weekend":
-        # Saturday at 12:00 of the current/next week
+    if key == "today":
+        target, label = now, "Bugun"
+    elif key == "tomorrow":
+        target, label = now + timedelta(days=1), "Ertaga"
+    elif key == "indin":
+        target, label = now + timedelta(days=2), "Indin"
+    elif key == "plus3":
+        target, label = now + timedelta(days=3), "+3 kun"
+    elif key == "weekend":
         days_until_sat = (5 - now.weekday()) % 7 or 7
-        target = now + timedelta(days=days_until_sat)
-        return target.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
-    return None
+        target, label = now + timedelta(days=days_until_sat), "Shanba"
+    else:
+        return None, None
+    return target.strftime("%Y-%m-%d"), label
+
+
+def _combine_day_time(day_iso: str | None, hh: int, mm: int) -> str | None:
+    """Combine a 'YYYY-MM-DD' day with HH:MM into a TZ-aware ISO timestamp.
+    Returns None on malformed input or an impossible time (e.g. hour 25)."""
+    if not day_iso:
+        return None
+    try:
+        y, mo, d = map(int, day_iso.split("-"))
+        return database.TZ.localize(datetime(y, mo, d, hh, mm)).isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+async def _newtask_show_assignee(message: Message, data: dict, *, edit: bool) -> None:
+    """Render the assignee step. edit=True edits the bot's message (callback
+    path); edit=False sends a fresh message (user-typed path)."""
+    text = (
+        f"{_newtask_summary(data)}\n" + _SEP + "\n\n"
+        "4️⃣ **Ijrochi** (ixtiyoriy):\n\n"
+        "Pastdagi tugmalardan biri yoki ism yuboring "
+        "(masalan: «Komilov Javohir»)."
+    )
+    if edit:
+        try:
+            await message.edit_text(text, parse_mode="Markdown",
+                                    reply_markup=_newtask_assignee_kb())
+            return
+        except TelegramBadRequest:
+            pass
+    await _safe_answer(message, text, parse_mode="Markdown",
+                       reply_markup=_newtask_assignee_kb())
 
 
 @router.callback_query(F.data.startswith("newtask:dl:"))
@@ -5792,7 +5852,8 @@ async def newtask_deadline(query: CallbackQuery, state: FSMContext) -> None:
             "• `2026-05-25 14:30`\n"
             "• `25-05 14:30` (joriy yil)\n"
             "• `ertaga 09:00` / `bugun 17:00`\n"
-            "• `juma 12:00` (yaqin payshanba/juma...)"
+            "• `juma 12:00` (yaqin payshanba/juma...)\n"
+            "• `2 soat` / `15 daqiqa`"
         )
         try:
             await query.message.edit_text(
@@ -5807,13 +5868,13 @@ async def newtask_deadline(query: CallbackQuery, state: FSMContext) -> None:
         return
 
     if preset == "back":
-        # User asked to go back to deadline preset picker
+        # Return to step 1 — the day picker.
         await state.set_state(NewTaskFSM.awaiting_deadline)
         data = await state.get_data()
         await query.answer()
         try:
             await query.message.edit_text(
-                f"{_newtask_summary(data)}\n" + _SEP + "\n\n3️⃣ **Muddat** tanlang yoki o'tkazib yuboring:",
+                f"{_newtask_summary(data)}\n" + _SEP + "\n\n3️⃣ **Muddat** — kunni tanlang:",
                 parse_mode="Markdown", reply_markup=_newtask_deadline_kb(),
             )
         except TelegramBadRequest:
@@ -5821,29 +5882,114 @@ async def newtask_deadline(query: CallbackQuery, state: FSMContext) -> None:
         return
 
     if preset == "skip":
-        deadline = None
-    else:
-        deadline = _newtask_compute_deadline(preset)
-        if not deadline:
-            await query.answer("Noto'g'ri muddat preseti", show_alert=True)
-            return
+        await state.update_data(deadline=None)
+        await state.set_state(NewTaskFSM.awaiting_assignee)
+        await query.answer()
+        await _newtask_show_assignee(query.message, await state.get_data(), edit=True)
+        return
 
-    await state.update_data(deadline=deadline)
-    await state.set_state(NewTaskFSM.awaiting_assignee)
-    data = await state.get_data()
+    # A day was chosen → remember it and show step 2 (the time picker).
+    day_iso, label = _newtask_compute_day(preset)
+    if not day_iso:
+        await query.answer("Noto'g'ri kun preseti", show_alert=True)
+        return
+    await state.update_data(_dl_day_iso=day_iso, _dl_day_label=label)
+    await state.set_state(NewTaskFSM.awaiting_deadline_time)
     await query.answer()
-    text = (
-        f"{_newtask_summary(data)}\n" + _SEP + "\n\n"
-        "4️⃣ **Ijrochi** (ixtiyoriy):\n\n"
-        "Pastdagi tugmalardan biri yoki ism yuboring "
-        "(masalan: «Komilov Javohir»)."
-    )
+    text = f"🕐 **{label}** — soatni tanlang yoki `HH:MM` yozing:"
     try:
         await query.message.edit_text(text, parse_mode="Markdown",
-                                       reply_markup=_newtask_assignee_kb())
+                                       reply_markup=_newtask_time_kb())
     except TelegramBadRequest:
         await _safe_answer(query.message, text, parse_mode="Markdown",
-                            reply_markup=_newtask_assignee_kb())
+                            reply_markup=_newtask_time_kb())
+
+
+@router.callback_query(F.data.startswith("newtask:tm:"))
+async def newtask_deadline_time(query: CallbackQuery, state: FSMContext) -> None:
+    """Step 2: a time slot (or 'custom') was tapped. Combine with the day chosen
+    in step 1 and advance to the assignee step."""
+    choice = query.data.split(":", 2)[2]
+    data = await state.get_data()
+
+    if choice == "custom":
+        await query.answer()
+        label = data.get("_dl_day_label", "")
+        text = f"⌨️ **{label}** uchun soatni yozing — masalan `15:30`:"
+        try:
+            await query.message.edit_text(text, parse_mode="Markdown",
+                                           reply_markup=_newtask_time_kb())
+        except TelegramBadRequest:
+            await _safe_answer(query.message, text, parse_mode="Markdown")
+        return
+
+    try:  # choice is 'HHMM'
+        hh, mm = int(choice[:2]), int(choice[2:])
+    except (ValueError, IndexError):
+        await query.answer("Noto'g'ri vaqt", show_alert=True)
+        return
+    deadline = _combine_day_time(data.get("_dl_day_iso"), hh, mm)
+    if not deadline:
+        await query.answer("Vaqtni hisoblab bo'lmadi", show_alert=True)
+        return
+    await state.update_data(deadline=deadline)
+    await state.set_state(NewTaskFSM.awaiting_assignee)
+    await query.answer()
+    await _newtask_show_assignee(query.message, await state.get_data(), edit=True)
+
+
+@router.message(StateFilter(NewTaskFSM.awaiting_deadline_time), F.text | F.voice)
+async def newtask_deadline_time_text(message: Message, state: FSMContext) -> None:
+    """User typed instead of tapping a time slot. Accept a bare 'HH:MM' (combined
+    with the day chosen in step 1) or a full natural-language date as fallback."""
+    txt = await _get_text_or_transcribe(message, bot=message.bot)
+    if txt is None:
+        return
+    raw = (message.text or "").strip()
+    data = await state.get_data()
+
+    # 1) Bare time: "15:30", "15.30", "15 30", or "9" → combine with chosen day.
+    import re as _re
+    deadline = None
+    m = _re.match(r"^(\d{1,2})(?:[:.\s](\d{2}))?$", raw)
+    if m:
+        hh, mm = int(m.group(1)), int(m.group(2) or 0)
+        deadline = _combine_day_time(data.get("_dl_day_iso"), hh, mm)
+    # 2) Otherwise try a full natural-language date/time.
+    if not deadline:
+        parsed, _reason = await _parse_deadline_natural(raw)
+        deadline = parsed
+    if not deadline:
+        await _safe_answer(
+            message,
+            "🕐 Soatni `HH:MM` ko'rinishida yuboring (masalan `15:30`), "
+            "yoki tugmalardan tanlang.",
+            parse_mode="Markdown", reply_markup=_newtask_time_kb(),
+        )
+        return
+    await state.update_data(deadline=deadline)
+    await state.set_state(NewTaskFSM.awaiting_assignee)
+    await _newtask_show_assignee(message, await state.get_data(), edit=False)
+
+
+@router.message(StateFilter(NewTaskFSM.awaiting_deadline), F.text | F.voice)
+async def newtask_deadline_typed(message: Message, state: FSMContext) -> None:
+    """At the day picker the user can also just TYPE a full date/time instead of
+    tapping a day — parse it directly and jump to the assignee step."""
+    txt = await _get_text_or_transcribe(message, bot=message.bot)
+    if txt is None:
+        return
+    parsed, reason = await _parse_deadline_natural((message.text or "").strip())
+    if not parsed:
+        await _safe_answer(
+            message,
+            _deadline_error_message(reason, kind="deadline") + "\n\nYoki pastdagi tugmalardan tanlang.",
+            parse_mode="Markdown", reply_markup=_newtask_deadline_kb(),
+        )
+        return
+    await state.update_data(deadline=parsed)
+    await state.set_state(NewTaskFSM.awaiting_assignee)
+    await _newtask_show_assignee(message, await state.get_data(), edit=False)
 
 
 @router.message(StateFilter(NewTaskFSM.awaiting_deadline_manual), F.text | F.voice)
@@ -5852,11 +5998,12 @@ async def newtask_deadline_manual(message: Message, state: FSMContext) -> None:
     if _msg_text is None:
         return
 
-    deadline_iso = await _parse_deadline_natural((message.text or "").strip())
+    deadline_iso, reason = await _parse_deadline_natural((message.text or "").strip())
     if not deadline_iso:
         await _safe_answer(
             message,
-            "❌ Muddatni tushuna olmadim. Iltimos qaytadan yuboring yoki preset tanlang.",
+            _deadline_error_message(reason, kind="deadline") + "\n\nYoki pastdagi presetlardan tanlang.",
+            parse_mode="Markdown",
             reply_markup=_newtask_deadline_kb(),
         )
         await state.set_state(NewTaskFSM.awaiting_deadline)
@@ -6149,11 +6296,11 @@ async def newreminder_time_manual(message: Message, state: FSMContext) -> None:
     if _msg_text is None:
         return
 
-    remind_at = await _parse_deadline_natural((message.text or "").strip())
+    remind_at, reason = await _parse_deadline_natural((message.text or "").strip())
     if not remind_at:
         await _safe_answer(
             message,
-            "❌ Vaqtni tushuna olmadim. Masalan: `bugun 17:00`, `ertaga 09:00`, `2 soat`.",
+            _deadline_error_message(reason, kind="time"),
             parse_mode="Markdown",
             reply_markup=_newreminder_time_kb(),
         )
@@ -7052,6 +7199,7 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
     if keyboard:
         keyboard = _append_back_row(keyboard)
     text = (response.get("user_message") or "").strip() or "✅ Yaratildi"
+    text += _failed_actions_note(ids_by_type)
     await _safe_answer(query.message, text,
                         parse_mode="Markdown", reply_markup=keyboard)
     # Restore prior section state and auto-refresh the section list so the
@@ -7910,35 +8058,6 @@ async def handle_assignee_input(message: Message, state: FSMContext) -> None:
             parse_mode="Markdown",
             reply_markup=_task_card_kb_with_back(task),
         )
-
-
-@router.callback_query(F.data.startswith("mark_important:"))
-async def cb_mark_important(query: CallbackQuery) -> None:
-    """⭐ Muhim qilish — bump priority. P3/P2 → P1. P1 → P0. P0 unchanged."""
-    tid = query.data.split(":", 1)[1]
-    task = await database.get_task(tid)
-    if not task:
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    current = task.get("priority", "P2")
-    bump = {"P3": "P1", "P2": "P1", "P1": "P0", "P0": "P0"}
-    new_priority = bump.get(current, "P1")
-    if new_priority == current:
-        await query.answer(f"Allaqachon eng yuqori — {current}")
-    else:
-        await database.update_task(tid, {"priority": new_priority}, source="edit")
-        await query.answer(f"Prioritet: {new_priority} ⭐")
-    updated = await database.get_task(tid)
-    if updated:
-        try:
-            await query.message.edit_text(
-                _format_task_card(updated), parse_mode="Markdown",
-                reply_markup=_task_card_kb_with_back(updated),
-            )
-        except TelegramBadRequest:
-            pass
-
-
 
 
 def _reschedule_presets_keyboard(mid: str) -> InlineKeyboardMarkup:
@@ -9017,11 +9136,12 @@ async def handle_edit_value(message: Message, state: FSMContext) -> None:
         await database.update_task(tid, {"tags": tags}, source="edit")
     elif field == "deadline":
         # Try to parse via Claude (consistent with how user-input dates are parsed)
-        parsed = await _parse_deadline_natural(raw)
+        parsed, reason = await _parse_deadline_natural(raw)
         if parsed:
             await database.update_task(tid, {"deadline": parsed}, source="edit")
         else:
-            await message.answer("Sanani tushunmadim. `2026-05-25 14:30` yoki `ertaga 09:00` ko'rinishida yuboring.")
+            await _safe_answer(message, _deadline_error_message(reason, kind="deadline"),
+                               parse_mode="Markdown")
             return  # keep FSM open for retry
     await state.clear()
 
@@ -9031,9 +9151,39 @@ async def handle_edit_value(message: Message, state: FSMContext) -> None:
                            parse_mode="Markdown", reply_markup=_task_card_kb_with_back(task))
 
 
-async def _parse_deadline_natural(text: str) -> str | None:
+def _deadline_error_message(reason: str | None, *, kind: str = "deadline") -> str:
+    """Map a _parse_deadline_natural() reason code to a specific, actionable
+    message so different mistakes get different guidance — instead of one
+    generic "tushunmadim" line for every kind of bad input.
+
+    kind: 'deadline' (task due-date) or 'time' (reminder/edit time) — only
+    changes the noun shown to the user.
+    """
+    noun = "Muddatni" if kind == "deadline" else "Vaqtni"
+    if reason == "too_far":
+        # The bot DID understand the input — it just exceeds the 7-day relative
+        # cap. Saying "tushunmadim" here would be misleading, so be explicit.
+        return ("⏳ Juda uzoq muddat — nisbiy vaqt eng ko'pi 7 kun bo'lishi mumkin.\n"
+                "Aniq sana yuboring, masalan: `2026-06-10 15:00`.")
+    if reason == "invalid":
+        return ("📅 Bunday sana/vaqt mavjud emas (kun yoki oy noto'g'ri).\n"
+                "Tekshirib qaytadan yuboring: `2026-06-10 15:00`.")
+    # "unparsable" (or any unexpected reason) → generic-but-helpful with examples.
+    return (f"❌ {noun} tushunmadim. Masalan: `ertaga 09:00`, `2 soat`, "
+            f"yoki `2026-06-10 15:00`.")
+
+
+async def _parse_deadline_natural(text: str) -> tuple[str | None, str | None]:
     """Lightweight natural-language → ISO 8601 in Asia/Tashkent.
-    Handles common formats without invoking Claude. Returns None if unparseable.
+    Handles common formats without invoking Claude.
+
+    Returns (iso, reason):
+      - (iso,  None)         — parsed successfully
+      - (None, "too_far")    — relative offset exceeds the 7-day cap
+      - (None, "invalid")    — matched a date/time shape but the value is impossible
+      - (None, "unparsable") — nothing matched
+    Pass the reason to _deadline_error_message() so each mistake gets its own
+    fix-it message rather than one generic line.
     """
     import re
     text = text.strip().lower()
@@ -9049,30 +9199,32 @@ async def _parse_deadline_natural(text: str) -> str | None:
     if m:
         minutes = int(m.group(1))
         if 0 < minutes <= MAX_RELATIVE_MINUTES:
-            return (now + timedelta(minutes=minutes)).replace(second=0, microsecond=0).isoformat()
+            return (now + timedelta(minutes=minutes)).replace(second=0, microsecond=0).isoformat(), None
+        return None, "too_far"
     m = re.match(r"^(\d{1,3})\s*(soat|soatdan|hour|h)\b", text)
     if m:
         hours = int(m.group(1))
         if 0 < hours <= MAX_RELATIVE_HOURS:
-            return (now + timedelta(hours=hours)).replace(second=0, microsecond=0).isoformat()
+            return (now + timedelta(hours=hours)).replace(second=0, microsecond=0).isoformat(), None
+        return None, "too_far"
 
     # 1) ISO-ish: 2026-05-25 14:30 or 2026-05-25T14:30
     m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})[\s tT]+(\d{1,2}):(\d{2})$", text)
     if m:
         y, mo, d, hh, mm = map(int, m.groups())
         try:
-            return database.TZ.localize(datetime(y, mo, d, hh, mm)).isoformat()
+            return database.TZ.localize(datetime(y, mo, d, hh, mm)).isoformat(), None
         except ValueError:
-            return None
+            return None, "invalid"
 
     # 2) Short: 25-05 14:30 (current year)
     m = re.match(r"^(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$", text)
     if m:
         d, mo, hh, mm = map(int, m.groups())
         try:
-            return database.TZ.localize(datetime(now.year, mo, d, hh, mm)).isoformat()
+            return database.TZ.localize(datetime(now.year, mo, d, hh, mm)).isoformat(), None
         except ValueError:
-            return None
+            return None, "invalid"
 
     # 3) Relative keywords
     weekday_map = {
@@ -9095,38 +9247,23 @@ async def _parse_deadline_natural(text: str) -> str | None:
             delta = (target_wd - now.weekday()) % 7 or 7
             target = now + timedelta(days=delta)
         try:
-            return target.replace(hour=hh, minute=mm, second=0, microsecond=0).isoformat()
+            return target.replace(hour=hh, minute=mm, second=0, microsecond=0).isoformat(), None
         except ValueError:
-            return None
-    return None
+            return None, "invalid"
+    return None, "unparsable"
 
 
 def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
-    """Compact 2x2 task-card action set."""
+    """Opened task card — intentionally minimal: just ⋯ Batafsil and ⬅️ Ro'yxatga.
+    Every per-task action (Ijrochi, Bajarildi, Muddat, Tahrir, O'chirish, …) lives
+    inside ⋯ Batafsil (task_detail_menu), so we don't duplicate them on the card."""
     tid = task["id"]
-    if task.get("status") == "done":
-        rows = [
-            [
-                InlineKeyboardButton(text="↺ Qaytarish", callback_data=f"reopen:{tid}"),
-                InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"task_del:{tid}"),
-            ],
-            [
-                InlineKeyboardButton(text="⋯ Batafsil", callback_data=f"task_detail:{tid}"),
-                InlineKeyboardButton(text="⬅️ Ro'yxatga", callback_data="taskfilter:active"),
-            ],
-        ]
-    else:
-        rows = [
-            [
-                InlineKeyboardButton(text="👤 Ijrochi", callback_data=f"set_assignee:{tid}"),
-                InlineKeyboardButton(text="✅ Bajarildi", callback_data=f"complete:{tid}"),
-            ],
-            [
-                InlineKeyboardButton(text="⋯ Batafsil", callback_data=f"task_detail:{tid}"),
-                InlineKeyboardButton(text="⬅️ Ro'yxatga", callback_data="taskfilter:active"),
-            ],
-        ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⋯ Batafsil", callback_data=f"task_detail:{tid}"),
+            InlineKeyboardButton(text="⬅️ Ro'yxatga", callback_data="taskfilter:active"),
+        ],
+    ])
 
 
 @router.callback_query()
