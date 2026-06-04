@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     prep_sent_at TEXT,
     followup_sent_at TEXT,
     icloud_uid TEXT,
+    completed_at TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -290,7 +291,7 @@ async def init() -> None:
                 await db.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence ON tasks(recurrence_rule, recurrence_next_at)")
 
-        for col in ("prep_sent_at", "followup_sent_at"):
+        for col in ("prep_sent_at", "followup_sent_at", "completed_at"):
             if col not in meeting_cols:
                 await db.execute(f"ALTER TABLE meetings ADD COLUMN {col} TEXT")
 
@@ -561,6 +562,59 @@ async def delete_task(task_id: str, source: str = "manual") -> bool:
         return cur.rowcount > 0
 
 
+# ─────────────── BULK DELETE (voice/text "barchasini o'chir" — always confirmed in handler) ───────────────
+
+async def delete_all_tasks(status_in: Optional[list[str]] = None) -> int:
+    """Delete tasks in bulk. Optional status filter (e.g. ['done']); None = ALL.
+    Returns rows deleted. Caller MUST gate this behind a confirmation."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        if status_in:
+            ph = ",".join("?" * len(status_in))
+            cur = await db.execute(f"DELETE FROM tasks WHERE status IN ({ph})", tuple(status_in))
+        else:
+            cur = await db.execute("DELETE FROM tasks")
+        await db.commit()
+        return cur.rowcount
+
+
+async def delete_all_meetings() -> int:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM meetings")
+        await db.commit()
+        return cur.rowcount
+
+
+async def delete_all_notes() -> int:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM notes")
+        await db.commit()
+        return cur.rowcount
+
+
+async def delete_all_reminders() -> int:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM reminders")
+        await db.commit()
+        return cur.rowcount
+
+
+async def delete_all_contacts() -> int:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM contacts")
+        await db.commit()
+        return cur.rowcount
+
+
+async def count_table(table: str) -> int:
+    """Row count for a known table — used to preview bulk-delete impact."""
+    if table not in {"tasks", "meetings", "notes", "reminders", "contacts"}:
+        return 0
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(f"SELECT COUNT(*) FROM {table}")
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+
 async def get_task_history(task_id: str, limit: int = 50) -> list[dict]:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -619,7 +673,7 @@ async def list_today_tasks() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND deadline IS NOT NULL
                  AND deadline >= ?
                  AND deadline <= ?
@@ -638,7 +692,7 @@ async def list_overdue_tasks() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND deadline IS NOT NULL
                  AND deadline < ?
                ORDER BY deadline ASC""",
@@ -1399,6 +1453,29 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
 async def cancel_meeting(meeting_id: str) -> bool:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         cur = await db.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def complete_meeting(meeting_id: str) -> bool:
+    """Mark a meeting as attended/done. It then drops out of the active
+    (Bugun/Haftalik/…) views and shows with a ✅ in O'tgan."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "UPDATE meetings SET completed_at = ? WHERE id = ?",
+            (now_iso(), meeting_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def uncomplete_meeting(meeting_id: str) -> bool:
+    """Undo a 'done' mark — returns the meeting to the active views."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "UPDATE meetings SET completed_at = NULL WHERE id = ?",
+            (meeting_id,),
+        )
         await db.commit()
         return cur.rowcount > 0
 

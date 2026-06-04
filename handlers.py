@@ -189,8 +189,8 @@ _REMINDERS_SECTION_FILTERS = {
 NBTN_NOTES_INBOX = "📥 Inbox"
 NBTN_NOTES_PROCESSED = "⚙️ Ishlangan"
 NBTN_NOTES_ARCHIVED = "📦 Arxiv"
-NBTN_NOTES_NEW = "➕ Yangi qayd"
-NBTN_NOTES_SEARCH = "🔍 Qayd qidirish"
+NBTN_NOTES_NEW = "➕ Yangi note"
+NBTN_NOTES_SEARCH = "🔍 Note qidirish"
 
 _NOTES_SECTION_FILTERS = {
     NBTN_NOTES_INBOX:     "inbox",
@@ -228,7 +228,7 @@ class SectionFSM(StatesGroup):
 
 
 class NoteCaptureFSM(StatesGroup):
-    """One-shot FSM for `/qayd` with no body or "➕ Yangi qayd" button —
+    """One-shot FSM for `/qayd` with no body or "➕ Yangi note" button —
     next text/voice message becomes the note content."""
     awaiting_text = State()
 
@@ -264,7 +264,7 @@ DBTN_TODAY_MEETINGS = "🤝 Bugungi uchrashuvlar"
 NBTN_NEW_TASK = "📝 Yangi vazifa"
 NBTN_NEW_MEETING = "🤝 Yangi uchrashuv"
 NBTN_NEW_REMINDER = "⏰ Yangi eslatma"
-NBTN_NEW_NOTE = "📥 Yangi qayd"
+NBTN_NEW_NOTE = "📥 Yangi note"
 NBTN_NEW_VOICE = "🎙 Ovozli vazifa"
 NBTN_NEW_POLISH = "✏️ Matn tahrirlash"
 
@@ -341,7 +341,7 @@ def reminders_section_reply_keyboard() -> ReplyKeyboardMarkup:
 
 
 def notes_section_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply kbd Qaydlar bo'limida — Inbox / Ishlangan / Arxiv + amallar."""
+    """Reply kbd Notes bo'limida — Inbox / Ishlangan / Arxiv + amallar."""
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=NBTN_NOTES_INBOX),
@@ -352,7 +352,7 @@ def notes_section_reply_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_BACK_MAIN)],
         ],
         resize_keyboard=True, is_persistent=True,
-        input_field_placeholder="Qayd tanlang yoki yangisini yozing...",
+        input_field_placeholder="Note tanlang yoki yangisini yozing...",
     )
 
 
@@ -586,6 +586,12 @@ class VoiceConfirmFSM(StatesGroup):
     awaiting_revision = State()
 
 
+class PolishRevisionFSM(StatesGroup):
+    """✎ Yana tahrir — polished matnni qayta ishlash. Foydalanuvchi ko'rsatma
+    yuboradi (masalan «qisqartir»), bot original + ko'rsatmani qayta polish qiladi."""
+    awaiting = State()
+
+
 class CreateActionConfirmFSM(StatesGroup):
     """Tasdiq state — yangi vazifa/uchrashuv yaratishdan oldin foydalanuvchi
     "Tasdiqlayman/Bekor qilish" bossin uchun. Claude'ning to'liq javobi
@@ -689,17 +695,22 @@ def deadline_picker(task_id: str) -> InlineKeyboardMarkup:
 
 
 def meeting_inline_actions(meeting: dict) -> InlineKeyboardMarkup:
-    """Drill-down actions for a single meeting.
+    """Drill-down actions for a single meeting — STATE-AWARE.
 
-    Layout (one button per row for prominence, except Edit/Cancel pair):
-      [📝 Bayonnoma yaratish]
-      [🔄 Vaqtni o'zgartirish]
-      [✏️ Tahrirlash]      [✕ Bekor qilish]
-      [⬅️ Orqaga]
+    Before the meeting happens (not completed): ✅ Bo'ldi · reschedule · edit ·
+    cancel. NO "Bayonnoma yaratish" — minutes only make sense after the meeting,
+    and a cancelled meeting needs none.
+    After ✅ Bo'ldi (completed): 📝 Bayonnoma yaratish · ↺ undo · ⬅️ Ro'yxatga.
     """
     mid = meeting["id"]
+    if meeting.get("completed_at"):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Bayonnoma yaratish", callback_data=f"protocol:{mid}")],
+            [InlineKeyboardButton(text="↺ Bo'ldi'ni bekor qilish", callback_data=f"meeting_undone:{mid}")],
+            [back_button("meetingfilter:week", "⬅️ Ro'yxatga")],
+        ])
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Bayonnoma yaratish", callback_data=f"protocol:{mid}")],
+        [InlineKeyboardButton(text="✅ Bo'ldi", callback_data=f"meeting_done:{mid}")],
         [InlineKeyboardButton(text="🔄 Vaqtni o'zgartirish", callback_data=f"reschedule:{mid}")],
         [
             InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"meeting_edit:{mid}"),
@@ -1007,7 +1018,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     """
     created_ids: dict[str, list[str]] = {
         "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
-        "note": [], "_failed": [],
+        "note": [], "_failed": [], "_refresh": [],
     }
 
     for action in actions:
@@ -1076,6 +1087,25 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                     })
                     if nid:
                         created_ids["note"].append(nid)
+            elif atype == "delete_all_tasks":
+                n = await database.delete_all_tasks(data.get("status_in"))
+                created_ids["_refresh"].append("task")
+                logger.info("Bulk delete: %d tasks (status_in=%s)", n, data.get("status_in"))
+            elif atype == "delete_all_meetings":
+                n = await database.delete_all_meetings()
+                created_ids["_refresh"].append("meeting")
+                logger.info("Bulk delete: %d meetings", n)
+            elif atype == "delete_all_notes":
+                n = await database.delete_all_notes()
+                created_ids["_refresh"].append("note")
+                logger.info("Bulk delete: %d notes", n)
+            elif atype == "delete_all_reminders":
+                n = await database.delete_all_reminders()
+                created_ids["_refresh"].append("reminder")
+                logger.info("Bulk delete: %d reminders", n)
+            elif atype == "delete_all_contacts":
+                n = await database.delete_all_contacts()
+                logger.info("Bulk delete: %d contacts", n)
             elif atype == "none":
                 pass
             else:
@@ -1092,7 +1122,7 @@ _ACTION_NOUN_UZ = {
     "create_task": "vazifa", "update_task": "vazifa yangilash",
     "complete_task": "vazifa yakunlash", "create_reminder": "eslatma",
     "schedule_meeting": "uchrashuv", "cancel_meeting": "uchrashuvni bekor qilish",
-    "create_note": "qayd", "save_contact": "kontakt",
+    "create_note": "note", "save_contact": "kontakt",
 }
 
 
@@ -1185,6 +1215,25 @@ _STREAM_EDIT_MIN_DELTA_CHARS = 24    # don't spam edits for tiny additions
 
 _DESTRUCTIVE_ACTION_TYPES = {"create_task", "schedule_meeting"}
 
+# Mass-delete actions ("barchasini o'chir"). These ALWAYS require confirmation —
+# independent of the confirm_create_actions setting — because they're
+# irreversible and a mis-heard voice command could wipe everything.
+_BULK_DELETE_ACTION_TYPES = {
+    "delete_all_tasks", "delete_all_meetings", "delete_all_notes",
+    "delete_all_reminders", "delete_all_contacts",
+}
+_BULK_DELETE_LABEL = {
+    "delete_all_tasks": ("vazifa", "tasks"),
+    "delete_all_meetings": ("uchrashuv", "meetings"),
+    "delete_all_notes": ("note", "notes"),
+    "delete_all_reminders": ("eslatma", "reminders"),
+    "delete_all_contacts": ("kontakt", "contacts"),
+}
+
+# Single delete/cancel via voice/text. ALWAYS confirm (a mis-heard "X'ni o'chir"
+# shouldn't silently delete) — independent of the confirm_create_actions setting.
+_SINGLE_DELETE_ACTION_TYPES = {"delete_task", "cancel_meeting"}
+
 
 async def _maybe_refresh_section(
     message: Message,
@@ -1207,10 +1256,13 @@ async def _maybe_refresh_section(
     if not current:
         return
 
-    created_tasks = bool(ids_by_type.get("task"))
-    created_meetings = bool(ids_by_type.get("meeting"))
-    created_reminders = bool(ids_by_type.get("reminder"))
-    created_notes = bool(ids_by_type.get("note"))
+    # `_refresh` lets non-create actions (e.g. bulk deletes) ask for a section
+    # re-render even though they produce no new item IDs.
+    refresh = set(ids_by_type.get("_refresh") or [])
+    created_tasks = bool(ids_by_type.get("task")) or "task" in refresh
+    created_meetings = bool(ids_by_type.get("meeting")) or "meeting" in refresh
+    created_reminders = bool(ids_by_type.get("reminder")) or "reminder" in refresh
+    created_notes = bool(ids_by_type.get("note")) or "note" in refresh
 
     # Map current section → render call. Only fire when a matching item was
     # actually created, otherwise we'd spam the user with a redundant list.
@@ -1230,14 +1282,81 @@ async def _maybe_refresh_section(
         logger.exception("Section auto-refresh failed (non-fatal)")
 
 
-def _format_create_preview(actions: list[dict]) -> str:
-    """Render a confirm-prompt preview for create_task / schedule_meeting actions.
-    Shown to the user before the destructive action is executed when the
-    `confirm_create_actions` setting is on (default)."""
+_SHOW_ACTION_TYPES = {
+    "show_tasks", "show_meetings", "show_notes", "show_reminders", "show_contacts",
+}
+
+
+async def _render_show_action(message: Message, state: "FSMContext | None", action: dict) -> None:
+    """Render a full, DB-backed section list for a "ko'rsat/ro'yxat" request.
+
+    Claude only sees today+overdue tasks in its state block, so if it enumerates
+    "all tasks" itself the list is INCOMPLETE (reported bug). We instead render
+    the real section straight from the DB — every item, with filters/pagination.
+    """
+    atype = action.get("type")
+    filt = (action.get("data") or {}).get("filter") or ""
+    if atype == "show_tasks":
+        if state is not None:
+            await state.set_state(SectionFSM.in_tasks)
+        await message.answer("📋 **VAZIFALAR**", parse_mode="Markdown",
+                             reply_markup=tasks_section_reply_keyboard())
+        await _render_tasks_for_filter(message, filt or "active")
+    elif atype == "show_meetings":
+        if state is not None:
+            await state.set_state(SectionFSM.in_meetings)
+        await message.answer("🤝 **UCHRASHUVLAR**", parse_mode="Markdown",
+                             reply_markup=meetings_section_reply_keyboard())
+        await _render_meetings_for_filter(message, filt or "week")
+    elif atype == "show_notes":
+        await cmd_notes(message, state)
+    elif atype == "show_reminders":
+        await cmd_reminders(message, state)
+    elif atype == "show_contacts":
+        await cmd_team(message, state)
+
+
+async def _format_create_preview(actions: list[dict]) -> str:
+    """Render a confirm-prompt preview for create / bulk-delete actions, shown
+    before execution. Bulk deletes show the LIVE row count so the user sees
+    exactly how much would be wiped."""
     lines = ["⚠️ **TASDIQLAYSIZMI?**", ""]
     for a in actions:
         t = a.get("type")
         d = a.get("data", {}) or {}
+        if t == "delete_task":
+            try:
+                task = await database.get_task(a.get("id"))
+            except Exception:
+                task = None
+            title = (task or {}).get("title", a.get("id", "—"))
+            lines.append(f"🗑 **Vazifa o'chiriladi:** {title}")
+            lines.append("   _Qaytarib bo'lmaydi._")
+            lines.append("")
+            continue
+        if t == "cancel_meeting":
+            try:
+                m = await database.get_meeting(a.get("id"))
+            except Exception:
+                m = None
+            title = (m or {}).get("title", a.get("id", "—"))
+            lines.append(f"🗑 **Uchrashuv bekor qilinadi:** {title}")
+            lines.append("   _Qaytarib bo'lmaydi._")
+            lines.append("")
+            continue
+        if t in _BULK_DELETE_ACTION_TYPES:
+            noun, table = _BULK_DELETE_LABEL[t]
+            try:
+                n = await database.count_table(table)
+            except Exception:
+                n = 0
+            scope = ""
+            if t == "delete_all_tasks" and d.get("status_in"):
+                scope = f" ({', '.join(d['status_in'])})"
+            lines.append(f"🗑 **Barcha {noun}lar o'chiriladi{scope}** — {n} ta")
+            lines.append("   _Bu amalni qaytarib bo'lmaydi._")
+            lines.append("")
+            continue
         if t == "create_task":
             title = (d.get("title") or "—").strip()
             assignee = (d.get("assignee") or "belgilanmagan").strip()
@@ -1352,19 +1471,43 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
             await database.complete_pending_action(pending_id)
             return
 
-        # ── Tasdiq qatlami — yangi vazifa/uchrashuv yaratishdan oldin ──
-        # Voice/text orqali kelgan so'rovda Claude noto'g'ri tushunishi mumkin,
-        # shuning uchun create_task / schedule_meeting bajarilishidan oldin
-        # foydalanuvchidan tasdiq olamiz (default ON; /settings dan o'chirish mumkin).
+        # ── "Ko'rsat/ro'yxat" intent — render the REAL section from the DB ──
+        # Claude's state block only holds today+overdue, so letting it enumerate
+        # "all tasks" yields an incomplete list. Intercept show_* and render the
+        # full section instead (reported: "barcha vazifalarni ko'rsat" → faqat bir qismi).
+        show_action = next(
+            (a for a in final_response.get("actions", []) if a.get("type") in _SHOW_ACTION_TYPES),
+            None,
+        )
+        if show_action is not None:
+            await database.complete_pending_action(pending_id)
+            if progress_msg is not None:
+                try:
+                    await progress_msg.delete()
+                except TelegramBadRequest:
+                    pass
+            await _render_show_action(message, state, show_action)
+            return
+
+        # ── Tasdiq qatlami ──
+        # Bulk deletes ("barchasini o'chir") ALWAYS confirm — irreversible.
+        # create_task / schedule_meeting confirm only if the setting is on
+        # (default ON; /settings dan o'chirish mumkin).
         actions = final_response.get("actions", [])
-        destructive = [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
-        if state is not None and destructive:
-            try:
-                _settings = await database.get_settings()
-            except Exception:
-                _settings = {}
-            if _settings.get("confirm_create_actions", True):
-                preview = _format_create_preview(destructive)
+        try:
+            _settings = await database.get_settings()
+        except Exception:
+            _settings = {}
+        bulk_deletes = [a for a in actions if a.get("type") in _BULK_DELETE_ACTION_TYPES]
+        single_deletes = [a for a in actions if a.get("type") in _SINGLE_DELETE_ACTION_TYPES]
+        # Deletes ALWAYS confirm (irreversible). Creates confirm only if the
+        # confirm_create_actions setting is on.
+        to_confirm = list(bulk_deletes) + list(single_deletes)
+        if _settings.get("confirm_create_actions", True):
+            to_confirm += [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
+        if state is not None and to_confirm:
+            if True:
+                preview = await _format_create_preview(to_confirm)
                 confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="acts_confirm"),
                     InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
@@ -1653,10 +1796,10 @@ async def cmd_help(message: Message) -> None:
         "• `/tasks` — aktiv, bugungi, muhim, o'tgan, bajarilgan va takroriy vazifalar.\n\n"
         "**3. Eslatmalar**\n"
         "• `/reminders` — alohida eslatmalar, snooze, takrorlash va bajarildi nazorati.\n\n"
-        "**4. Qaydlar (Inbox)**\n"
-        "• `/notes` — qayta ishlanmagan qaydlar inbox'i (GTD uslubi).\n"
-        "• `/qayd <matn>` — tezkor qayd qo'shish.\n"
-        "• Boshqa chatdan xabarni forward qiling — avto qaydga aylanadi.\n"
+        "**4. Notes (Inbox)**\n"
+        "• `/notes` — qayta ishlanmagan note'lar inbox'i (GTD uslubi).\n"
+        "• `/qayd <matn>` — tezkor note qo'shish.\n"
+        "• Boshqa chatdan xabarni forward qiling — avto note'ga aylanadi.\n"
         "• Voice: _\"qayd qil: ...\"_ — ovozdan ham mumkin.\n\n"
         "**5. Uchrashuvlar**\n"
         "• `/meetings` — uchrashuvlar, tayyorgarlik brifi va action itemlar.\n\n"
@@ -1752,7 +1895,7 @@ async def _build_briefing_text() -> str:
         f"**{urgent_count}** ta shoshilinch  ·  **{len(overdue)}** ta muddati o'tgan",
     ]
     if inbox_count > 0:
-        lines.append(f"📥 **{inbox_count}** ta qayd inbox'da kutmoqda")
+        lines.append(f"📥 **{inbox_count}** ta note inbox'da kutmoqda")
     lines.append("")
 
     if best_task:
@@ -2547,7 +2690,7 @@ def _format_tasks_compact(
             "📌  **UMUMIY HOLAT**",
             "",
             f"Jami {stats['total']}   ·   Aktiv {stats['active']}   ·   Bajarilgan {stats['done']}",
-            f"Shoshilinch {stats['urgent']}   ·   Muhim {stats['important']}   ·   O'tgan {stats['overdue']}",
+            f"Shoshilinch {stats['urgent']}   ·   Muhim {stats['important']}   ·   O'tgan {stats['overdue']}   ·   🚧 To'silgan {stats.get('blocked', 0)}",
             "",
             DIVIDER,
             "",
@@ -2557,9 +2700,11 @@ def _format_tasks_compact(
     done = [t for t in page_tasks if t.get("status") == "done"]
 
     def _task_badge(task: dict) -> str:
-        """Per-task badge — overdue/urgent > important > today > routine > done."""
+        """Per-task badge — done > blocked > overdue/urgent > important > today > routine."""
         if task.get("status") == "done":
             return "✅"
+        if task.get("status") == "blocked":
+            return "🚧"  # stuck — needs unblocking
         priority = task.get("priority", "P2")
         deadline = task.get("deadline")
         is_overdue = False
@@ -2908,13 +3053,13 @@ def _format_notes_compact(notes: list[dict], label: str,
                             inbox_count: int = 0, page: int = 1) -> str:
     """One-screen compact list — card per note with source badge + preview."""
     DIVIDER = "━" * 20
-    head = [f"📝 **QAYDLAR · {label.upper()}**", ""]
+    head = [f"📝 **NOTES · {label.upper()}**", ""]
     head.append(f"📥 Inbox: **{inbox_count}** ta qayta ishlanmagan")
     head.append("")
     head.append(DIVIDER)
     head.append("")
     if not notes:
-        head.append("_Hozircha bu bo'limda qaydlar yo'q._")
+        head.append("_Hozircha bu bo'limda note yo'q._")
         head.append("")
         head.append("Tezkor qo'shish: `/qayd <matn>` yoki ovoz orqali "
                      "_\"qayd qil: ...\"_.")
@@ -2952,7 +3097,7 @@ def _derive_note_title_fallback(content: str) -> str:
     """Mirror of database._derive_title for display use only."""
     first = next((ln.strip() for ln in (content or "").splitlines() if ln.strip()), "")
     if not first:
-        return "(bo'sh qayd)"
+        return "(bo'sh note)"
     return first if len(first) <= 60 else first[:59] + "…"
 
 
@@ -3066,7 +3211,9 @@ async def _render_notes_for_filter(message: Message, filt: str = "inbox",
 async def _compute_tasks_overview() -> dict:
     """Counts for the UMUMIY HOLAT block — stable across filters."""
     all_tasks = await database.list_tasks(limit=500)
-    active = [t for t in all_tasks if t.get("status") in ("todo", "in_progress")]
+    # "Active" = open work = todo + in_progress + blocked. Blocked is open work
+    # that's stuck — it MUST stay visible (previously it only showed in Barchasi).
+    active = [t for t in all_tasks if t.get("status") in ("todo", "in_progress", "blocked")]
     done = [t for t in all_tasks if t.get("status") == "done"]
     now = datetime.now(database.TZ)
 
@@ -3082,6 +3229,7 @@ async def _compute_tasks_overview() -> dict:
     overdue = [t for t in active if _overdue(t)]
     urgent = [t for t in active if t.get("priority") == "P0"]
     important = [t for t in active if t.get("priority") == "P1"]
+    blocked = [t for t in active if t.get("status") == "blocked"]
     return {
         "total": len(all_tasks),
         "active": len(active),
@@ -3089,6 +3237,7 @@ async def _compute_tasks_overview() -> dict:
         "overdue": len(overdue),
         "urgent": len(urgent),
         "important": len(important),
+        "blocked": len(blocked),
     }
 
 
@@ -3100,17 +3249,17 @@ async def _render_tasks_for_filter(message: Message, filt: str = "active",
     instead of sending a new one — keeps the chat tidy.
     """
     if filt == "active":
-        tasks = await database.list_tasks(status_in=["todo", "in_progress"], limit=200)
+        tasks = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=200)
         label = "Aktiv vazifalar"
     elif filt == "today":
         tasks = await database.list_today_tasks()
         label = "Bugungi vazifalar"
     elif filt == "important":
-        all_active = await database.list_tasks(status_in=["todo", "in_progress"], limit=200)
+        all_active = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=200)
         tasks = [t for t in all_active if t.get("priority") in ("P0", "P1")]
         label = "Muhim vazifalar"
     elif filt == "urgent":
-        all_active = await database.list_tasks(status_in=["todo", "in_progress"], limit=200)
+        all_active = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=200)
         tasks = [t for t in all_active if t.get("priority") == "P0"]
         label = "Shoshilinch"
     elif filt == "overdue":
@@ -3126,7 +3275,7 @@ async def _render_tasks_for_filter(message: Message, filt: str = "active",
         tasks = await database.list_tasks(limit=200)
         label = "Barchasi"
     else:
-        tasks = await database.list_tasks(status_in=["todo", "in_progress"], limit=200)
+        tasks = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=200)
         label = "Aktiv vazifalar"
 
     # `_format_tasks_compact` cards'ni "BAJARILMAGAN" → "BAJARILGAN" tartibida chiqaradi.
@@ -3181,17 +3330,17 @@ async def cb_reminder_filter(query: CallbackQuery) -> None:
     await _render_reminders_for_filter(query.message, filt, page=page, edit_existing=True)
 
 
-# ─────────────────────── QAYDLAR — COMMANDS + CALLBACKS ───────────────────────
+# ─────────────────────── NOTES — COMMANDS + CALLBACKS ───────────────────────
 
 
 @router.message(Command("notes"))
 @router.message(Command("qaydlar"))
 async def cmd_notes(message: Message, state: FSMContext | None = None) -> None:
-    """Qaydlar bo'limi — Inbox / Ishlangan / Arxiv. Default: Inbox."""
+    """Notes bo'limi — Inbox / Ishlangan / Arxiv. Default: Inbox."""
     if state is not None:
         await state.set_state(SectionFSM.in_notes)
     await message.answer(
-        "📝 **QAYDLAR**", parse_mode="Markdown",
+        "📝 **NOTES**", parse_mode="Markdown",
         reply_markup=notes_section_reply_keyboard(),
     )
     await _render_notes_for_filter(message, "inbox")
@@ -3231,15 +3380,33 @@ async def cmd_qayd(message: Message, state: FSMContext | None = None) -> None:
     )
 
 
+# All reply-keyboard button labels (collected from the *BTN* constants above) —
+# used to stop a tapped navigation button from being captured as a note.
+_RESERVED_LABELS = {v for k, v in dict(globals()).items()
+                    if "BTN" in k and isinstance(v, str) and v}
+
+
+def _is_note_noise(text: str) -> bool:
+    """True if `text` is NOT a real note: a slash command, or a tapped
+    reply-keyboard button label (e.g. '⬅️ Asosiy menyu'). Prevents junk notes."""
+    t = (text or "").strip()
+    return (not t) or t.startswith("/") or t in _RESERVED_LABELS
+
+
 @router.message(StateFilter(NoteCaptureFSM.awaiting_text), F.text | F.voice)
 async def handle_note_capture(message: Message, state: FSMContext) -> None:
-    """One-shot capture: next text/voice after /qayd or '➕ Yangi qayd' button."""
+    """One-shot capture: next text/voice after /qayd or '➕ Yangi note' button."""
     content = await _get_text_or_transcribe(message)
     if not content:
         return
     content = content.strip()
     if not content:
-        await message.answer("Bo'sh xabar — qayd yaratilmadi.")
+        await message.answer("Bo'sh xabar — note yaratilmadi.")
+        return
+    # A tapped nav button or command isn't a note — cancel capture, let it route.
+    if _is_note_noise(content):
+        await state.clear()
+        await message.answer("✕ Note kiritish bekor qilindi.", reply_markup=main_reply_keyboard())
         return
     await state.clear()
     source = "voice" if message.voice else "manual"
@@ -3257,7 +3424,7 @@ async def _note_capture_reply(message: Message, note_id: str, source_hint: str) 
         InlineKeyboardButton(text="🤖 Hozir tahlil", callback_data=f"noteanalyze:{note_id}"),
     ]])
     await message.answer(
-        f"📝 **Qayd saqlandi** · `{note_id}`\n_Manba: {source_hint}_",
+        f"📝 **Note saqlandi** · `{note_id}`\n_Manba: {source_hint}_",
         parse_mode="Markdown",
         reply_markup=kb,
     )
@@ -3278,6 +3445,25 @@ def _html_escape(s: str) -> str:
              .replace(">", "&gt;"))
 
 
+def _sanitize_forward_html(html: str) -> str:
+    """Make a forwarded message's aiogram html_text safe to RE-SEND inside our
+    own <blockquote expandable>. Two constructs make Telegram reject the whole
+    message (and then we'd fall back to showing raw tags — the reported
+    'meaning changed' bug):
+
+      1. <tg-emoji> — a bot can't resend a premium/custom emoji it doesn't own.
+         Keep the inner unicode fallback char, drop the wrapper.
+      2. Nested <blockquote> — Telegram forbids blockquote-in-blockquote, and we
+         already wrap the body in one. Flatten any inner blockquote tags.
+    """
+    import re as _re
+    if not html:
+        return html
+    html = _re.sub(r'<tg-emoji\b[^>]*>(.*?)</tg-emoji>', r'\1', html, flags=_re.S)
+    html = _re.sub(r'</?blockquote\b[^>]*>', '', html)
+    return html
+
+
 def _format_note_detail(note: dict) -> tuple[str, str]:
     """Full-content card shown when a note is opened via noteopen:{id}.
     Returns (html_text, parse_mode). Uses Telegram's native <blockquote>
@@ -3291,7 +3477,7 @@ def _format_note_detail(note: dict) -> tuple[str, str]:
         "archived": "📦 Arxiv",
     }.get(note.get("status"), note.get("status") or "—")
 
-    title = (note.get("title") or "Qayd").strip()[:80]
+    title = (note.get("title") or "Note").strip()[:80]
     parts: list[str] = [
         f"📝 <b>{_html_escape(title)}</b>",
         "",
@@ -3318,7 +3504,7 @@ def _format_note_detail(note: dict) -> tuple[str, str]:
     html_body = note.get("content_html")
     plain = (note.get("content") or "").strip()
     if html_body and (note.get("source") == "forward" or html_body.strip()):
-        body = html_body.strip()
+        body = _sanitize_forward_html(html_body.strip())
     else:
         body = _html_escape(plain)
     # Hard cap: Telegram message limit is ~4096 chars including markup;
@@ -3334,7 +3520,7 @@ async def cb_note_open(query: CallbackQuery) -> None:
     nid = query.data.split(":", 1)[1]
     note = await database.get_note(nid)
     if not note:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
     await query.answer()
     text, parse_mode = _format_note_detail(note)
@@ -3351,7 +3537,7 @@ async def cb_note_archive(query: CallbackQuery) -> None:
     nid = query.data.split(":", 1)[1]
     ok = await database.archive_note(nid)
     if not ok:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
     await query.answer("📦 Arxivga ko'chirildi ✅")
     note = await database.get_note(nid)
@@ -3376,7 +3562,7 @@ async def cb_note_restore(query: CallbackQuery) -> None:
         "converted_to_type": None,
     })
     if not ok:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
     await query.answer("📥 Inbox'ga qaytarildi ✅")
     note = await database.get_note(nid)
@@ -3398,16 +3584,16 @@ async def cb_note_delete(query: CallbackQuery) -> None:
     nid = query.data.split(":", 1)[1]
     note = await database.get_note(nid)
     if not note:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
     await query.answer()
     confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🗑 Ha, o'chirilsin", callback_data=f"notedelconfirm:{nid}"),
         InlineKeyboardButton(text="✕ Bekor", callback_data=f"noteopen:{nid}"),
     ]])
-    title = (note.get("title") or "qayd")[:60]
+    title = (note.get("title") or "note")[:60]
     await query.message.answer(
-        f"⚠️ **«{title}»** qaydi o'chirilsinmi?\nBu amalni qaytarib bo'lmaydi.",
+        f"⚠️ **«{title}»** note o'chirilsinmi?\nBu amalni qaytarib bo'lmaydi.",
         parse_mode="Markdown",
         reply_markup=confirm_kb,
     )
@@ -3418,11 +3604,11 @@ async def cb_note_delete_confirm(query: CallbackQuery) -> None:
     nid = query.data.split(":", 1)[1]
     ok = await database.delete_note(nid)
     if not ok:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
     await query.answer("🗑 O'chirildi ✅")
     try:
-        await query.message.edit_text("🗑 Qayd o'chirildi.")
+        await query.message.edit_text("🗑 Note o'chirildi.")
     except TelegramBadRequest:
         pass
 
@@ -3435,13 +3621,13 @@ async def cb_note_to_task(query: CallbackQuery) -> None:
     nid = query.data.split(":", 1)[1]
     note = await database.get_note(nid)
     if not note:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
-    title = (note.get("title") or note.get("content", "Qayddan vazifa")).strip()[:200]
+    title = (note.get("title") or note.get("content", "Note'dan vazifa")).strip()[:200]
     description = (note.get("content") or "").strip()
     if description == title:
         description = None
-    tags = list(note.get("tags") or []) + [f"qayd:{nid}"]
+    tags = list(note.get("tags") or []) + [f"note:{nid}"]
     tid = await database.create_task({
         "title": title,
         "description": description,
@@ -3456,7 +3642,7 @@ async def cb_note_to_task(query: CallbackQuery) -> None:
     if task:
         await _safe_answer(
             query.message,
-            "📝 **Qayd vazifaga aylantirildi**\n\n" + _format_task_card(task),
+            "📝 **Note vazifaga aylantirildi**\n\n" + _format_task_card(task),
             parse_mode="Markdown",
             reply_markup=task_inline_actions(task),
         )
@@ -3469,9 +3655,9 @@ async def cb_note_to_reminder(query: CallbackQuery, state: FSMContext) -> None:
     nid = query.data.split(":", 1)[1]
     note = await database.get_note(nid)
     if not note:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
-    title = (note.get("title") or note.get("content", "Qayddan eslatma")).strip()[:200]
+    title = (note.get("title") or note.get("content", "Note'dan eslatma")).strip()[:200]
     # Hop into the existing new-reminder flow with title pre-set; the user
     # picks the time, and on submit we run mark_note_processed via a tag.
     await state.set_state(NewReminderFSM.awaiting_time)
@@ -3489,19 +3675,19 @@ async def cb_note_to_reminder(query: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data.startswith("noteanalyze:"))
-async def cb_note_analyze(query: CallbackQuery) -> None:
+async def cb_note_analyze(query: CallbackQuery, state: FSMContext) -> None:
     """Send the note content to Claude (fast model) for a 2-line summary +
     one concrete next-action suggestion. The suggested action then flows
     through the existing create-confirm gate."""
     nid = query.data.split(":", 1)[1]
     note = await database.get_note(nid)
     if not note:
-        await query.answer("Qayd topilmadi", show_alert=True)
+        await query.answer("Note topilmadi", show_alert=True)
         return
     await query.answer("🤖 Tahlil qilinmoqda...")
     content = (note.get("content") or "").strip()
     if not content:
-        await query.message.answer("Bo'sh qayd — tahlil qilish mumkin emas.")
+        await query.message.answer("Bo'sh note — tahlil qilish mumkin emas.")
         return
     typing = asyncio.create_task(_keep_typing(query.bot, query.message.chat.id))
     try:
@@ -3524,26 +3710,24 @@ async def cb_note_analyze(query: CallbackQuery) -> None:
     text = (response.get("user_message") or "").strip() or "_Tahlil bo'sh._"
     actions = response.get("actions", [])
     destructive = [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
-    # Show analysis. If there are destructive actions, follow the standard
-    # confirm flow via _execute_actions (which respects the user's
-    # confirm_create_actions setting).
+    # Show the analysis, then ask to CONFIRM before creating anything (no longer
+    # auto-creates silently). Reuses the standard acts_confirm pipeline; the
+    # _note_id lets it mark this note processed once the action is executed.
     await _safe_answer(query.message, f"🤖 **Tahlil:**\n\n{text}", parse_mode="Markdown")
     if destructive:
-        # We don't have FSMContext in this callback — the user explicitly asked
-        # for "tahlil qil", so auto-execute the suggested action without the
-        # standard confirm gate. Surface the preview so the action is visible.
-        preview = _format_create_preview(destructive)
-        try:
-            ids_by_type = await _execute_actions(actions)
-            await query.message.answer(preview + "\n\n✅ Yaratildi.",
-                                          parse_mode="Markdown")
-            # Mark the source note as processed if a task or reminder was created.
-            for kind, key in (("task", "task"), ("reminder", "reminder")):
-                if ids_by_type.get(key):
-                    await database.mark_note_processed(nid, kind, ids_by_type[key][0])
-                    break
-        except Exception:
-            logger.exception("Note analyze auto-execute failed")
+        preview = await _format_create_preview(destructive)
+        await state.set_state(CreateActionConfirmFSM.awaiting)
+        await state.update_data(
+            pending_response={"actions": destructive,
+                              "user_message": "✅ Tayyor.", "buttons": []},
+            _prior_section=None,
+            _note_id=nid,
+        )
+        confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Yarataman", callback_data="acts_confirm"),
+            InlineKeyboardButton(text="✕ Yo'q", callback_data="acts_cancel"),
+        ]])
+        await _safe_answer(query.message, preview, parse_mode="Markdown", reply_markup=confirm_kb)
 
 
 @router.message(Command("recurring"))
@@ -3812,6 +3996,8 @@ def _format_meeting_card(m: dict, show_date: bool = False) -> str:
     time_label = f"{time_start} – {end_clock}" if end_clock else time_start
 
     title = (m.get("title") or "—").strip()
+    if m.get("completed_at"):
+        title = "✅ " + title  # attended/done marker
     parts = m.get("participants") or []
     if not parts:
         plabel = "belgilanmagan"
@@ -3970,6 +4156,8 @@ def _format_meetings_compact(
     def _meeting_card(m: dict, num: int | None) -> list[str]:
         """One meeting card with 1-line title + 3-line detail block."""
         title = (m.get("title") or "—").strip()
+        if m.get("completed_at"):
+            title = "✅ " + title  # attended/done marker (seen in O'tgan)
         prefix = f"{num}.  " if num is not None else ""
         return [
             f"{prefix}{title}",
@@ -4105,6 +4293,11 @@ async def _render_meetings_for_filter(message: Message, filt: str = "week",
         label = "Haftalik"
         filt = "week"
 
+    # Completed (attended) meetings leave the active/upcoming views — they stay
+    # visible only under "O'tgan" (marked with ✅).
+    if filt != "past":
+        meetings = [m for m in meetings if not m.get("completed_at")]
+
     stats = await _compute_meetings_overview()
     total_pages = max(1, (len(meetings) + _MEETINGS_PER_PAGE - 1) // _MEETINGS_PER_PAGE)
     page = max(1, min(page, total_pages))
@@ -4160,6 +4353,40 @@ async def cb_meeting_open(query: CallbackQuery) -> None:
     except TelegramBadRequest:
         await _safe_answer(query.message, text, parse_mode="Markdown", reply_markup=meeting_inline_actions(meeting))
 
+
+async def _rerender_meeting_card(query: CallbackQuery, mid: str) -> None:
+    meeting = await database.get_meeting(mid)
+    if not meeting:
+        return
+    text = _format_meeting_card(meeting, show_date=True)
+    try:
+        await query.message.edit_text(text, parse_mode="Markdown",
+                                       reply_markup=meeting_inline_actions(meeting))
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("meeting_done:"))
+async def cb_meeting_done(query: CallbackQuery) -> None:
+    """✅ Bo'ldi — mark the meeting attended. It leaves Bugun/Haftalik and shows
+    with a ✅ under O'tgan."""
+    mid = query.data.split(":", 1)[1]
+    if not await database.complete_meeting(mid):
+        await query.answer("Uchrashuv topilmadi", show_alert=True)
+        return
+    await query.answer("✅ Bo'ldi deb belgilandi")
+    await _rerender_meeting_card(query, mid)
+
+
+@router.callback_query(F.data.startswith("meeting_undone:"))
+async def cb_meeting_undone(query: CallbackQuery) -> None:
+    """↺ Undo the 'done' mark — returns the meeting to the active views."""
+    mid = query.data.split(":", 1)[1]
+    if not await database.uncomplete_meeting(mid):
+        await query.answer("Uchrashuv topilmadi", show_alert=True)
+        return
+    await query.answer("↺ Faol ro'yxatga qaytarildi")
+    await _rerender_meeting_card(query, mid)
 
 
 @router.message(StateFilter(MeetingSearchFSM.awaiting_query), F.text | F.voice)
@@ -4577,7 +4804,7 @@ class PlanFSM(StatesGroup):
 
 @router.message(Command("plan"))
 async def cmd_plan(message: Message, state: FSMContext) -> None:
-    """Executive planning mode — user describes situation, bot returns A-J structured plan."""
+    """Executive planning mode — user describes situation (or empty=auto from DB), bot returns a structured strategic plan."""
     # If args were passed inline (e.g., `/plan bugun 5 ta vazifa bor...`), use them directly
     args = message.text.split(maxsplit=1)
     if len(args) > 1 and args[1].strip():
@@ -4585,20 +4812,20 @@ async def cmd_plan(message: Message, state: FSMContext) -> None:
         return
 
     await state.set_state(PlanFSM.awaiting_situation)
-    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✕ Bekor qilish", callback_data="plan_cancel")
-    ]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Hozirgi holatdan reja", callback_data="plan_auto")],
+        [InlineKeyboardButton(text="✕ Bekor qilish", callback_data="plan_cancel")],
+    ])
     await message.answer(
         "🎯 **Executive Planning**\n\n"
-        "Hozirgi vaziyatingizni batafsil yozib bering (matn yoki ovoz):\n"
-        "• Qanday vazifalar bor?\n"
-        "• Qancha vaqt ichingizda?\n"
-        "• Belgilangan uchrashuvlar bormi?\n"
-        "• Kimga bog'liq?\n\n"
-        "_Bot 10 ta bo'limli reja qaytaradi: ustuvorliklar, vaqt taqsimoti, "
-        "yuboriladigan xabarlar, eskalatsiya, checklist, xavflar va tavsiyalar._",
+        "📊 **Hozirgi holatdan reja** — hech narsa yozmasdan, bazadagi real "
+        "vazifa, uchrashuv va muddatlaringizdan avtomatik reja tuzaman.\n\n"
+        "✍️ Yoki vaziyatni o'zingiz yozing (matn/ovoz): qaysi ishlar, qancha vaqt, "
+        "uchrashuvlar, kimga bog'liq.\n\n"
+        "_Reja: ustuvorliklar, vaqt taqsimoti, yuboriladigan xabarlar, "
+        "eskalatsiya, xavflar va tavsiyalar._",
         parse_mode="Markdown",
-        reply_markup=cancel_kb,
+        reply_markup=kb,
     )
 
 
@@ -4644,20 +4871,50 @@ async def cb_plan_cancel(query: CallbackQuery, state: FSMContext) -> None:
         pass
 
 
+@router.callback_query(F.data == "plan_auto")
+async def cb_plan_auto(query: CallbackQuery, state: FSMContext) -> None:
+    """📊 Auto-plan — build the plan straight from the DB state (no manual
+    situation). Claude reads the CURRENT PRINCIPAL STATE block (real tasks,
+    meetings, overdue, deadlines) and produces the plan from it."""
+    await state.clear()
+    await query.answer("Bazadan reja tuzaman…")
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    await _run_planning_session(query.message, "")
+
+
 _PLAN_DIRECTIVE = """[INTERNAL] executive_plan
 
-The principal is in /plan mode. Their next message describes their situation.
-Produce a FULL planning document in O'zbek (lotin) using the A-J structure from
-the system prompt's planning module (45_planning.md).
+Act as the principal's senior Chief of Staff / strategy advisor — NOT a to-do
+organizer. Lead with strategy: start with a STRATEGIK FOKUS block (Maqsad / Eng
+muhim bitta narsa / Leverage), then the structured plan (45_planning.md). Apply
+leverage (80-20), critical-path sequencing, explicit trade-offs, second-order
+risks, aggressive delegation, and say what to DROP today (XAVF & TRADE-OFF section).
+
+Produce a FULL executive planning document in O'zbek (lotin), structured per 45_planning.md (clean emoji sections, no tables).
+
+DATA SOURCE:
+- If the principal's message describes a situation, plan around THAT.
+- If the message is EMPTY, build the plan from the CURRENT PRINCIPAL STATE block —
+  the REAL active tasks, today/this-week meetings, overdue and blocked items, and
+  deadlines. Prioritize them, time-block around fixed meetings, flag conflicts.
+  NEVER invent tasks or meetings that aren't in the state block. If the state is
+  empty, say so briefly and suggest adding tasks — don't fabricate a fake day.
+
+FORMAT — Telegram-friendly, NO markdown tables (they render as raw pipes on mobile):
+- Use emoji + section headers + "━━━" dividers + short lines.
+- Tasks: "🔴 1. <title> — <P-level>\\n   👤 <mas'ul> · ⏰ <deadline>" (one per block).
+- Time plan: "  HH:MM–HH:MM  <ish>" lines (not a table).
+- Status icons: 🔴 P0 / 🔴 Fixed / 🟠 P1 / 🔵 P2 / ⚪ P3.
 
 Key reminders:
-- Status column (NOT Priority) with icons: 🔴 P0, 🔴 Fixed, 🟠 P1, 🔵 P2, ⚪ P3
-- Telegram messages MUST be rasmiy (formal) — "Hurmatli [Full Name + otasining ismi]," not "aka, salom"
-- Flag time conflicts explicitly (e.g., "meeting overlaps deadline")
-- Recommend delegation aggressively when 3-hour windows are tight
-- 3 clarifying questions in section J ONLY (don't ask elsewhere)
+- Telegram messages (section D) MUST be rasmiy (formal).
+- Flag time conflicts; recommend delegation when windows are tight.
+- 3 clarifying questions in section J ONLY.
 
-Output: full markdown in user_message; actions=[]; buttons = plan-accept + plan-create-tasks pair.
+Output: user_message = full plan (Telegram-friendly, NO tables); actions=[].
 """
 
 
@@ -4698,10 +4955,12 @@ async def cb_plan_accept(query: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("plan_tasks:"))
-async def cb_plan_tasks(query: CallbackQuery) -> None:
-    """Extract tasks from a saved plan and create them in DB via Claude."""
+async def cb_plan_tasks(query: CallbackQuery, state: FSMContext) -> None:
+    """Extract the principal's own tasks from a saved plan, then show a PREVIEW
+    and require confirmation before creating them (reuses the standard
+    acts_confirm pipeline — so nothing is created silently)."""
     plan_id = query.data.split(":", 1)[1]
-    await query.answer("Vazifalarni yarataman...")
+    await query.answer("Vazifalarni ajrataman…")
 
     plans = await database.list_recent_plans(limit=50)
     plan = next((p for p in plans if p["id"] == plan_id), None)
@@ -4711,22 +4970,34 @@ async def cb_plan_tasks(query: CallbackQuery) -> None:
 
     extract_directive = (
         "[INTERNAL] extract_tasks_from_plan\n\n"
-        "The principal has accepted this plan. Extract every actionable task "
-        "(NOT delegated ones — only items where Mas'ul = 'Siz' or principal himself).\n\n"
-        f"PLAN:\n{plan['output_text'][:3000]}\n\n"
+        "Extract EVERY actionable task the principal must do himself (NOT delegated "
+        "ones — skip items marked 'Topshiring' / Mas'ul ≠ Siz).\n\n"
+        # 6000 (was 3000) so tasks deep in a long plan aren't dropped.
+        f"PLAN:\n{plan['output_text'][:6000]}\n\n"
         "Output JSON envelope with actions=[create_task...]. Each task: title (imperative), "
-        "priority (P0/P1/P2/P3 — map from Status column), deadline (ISO 8601 Asia/Tashkent). "
-        "user_message: short Uzbek confirmation listing what you created."
+        "priority (P0/P1/P2/P3 — map from Status), deadline (ISO 8601 Asia/Tashkent or null). "
+        "user_message: one short Uzbek line."
     )
     response = await claude_service.process_message("", internal_directive=extract_directive)
-    # Execute actions through the standard executor
-    ids = await _execute_actions(response.get("actions", []))
-    msg = response.get("user_message", "")
-    if ids["task"]:
-        msg = msg or f"✅ {len(ids['task'])} ta vazifa yaratildi"
-    else:
-        msg = msg or "Bajariladigan vazifa topilmadi"
-    await query.message.answer(msg, parse_mode="Markdown", reply_markup=tasks_compact_keyboard([]))
+    actions = [a for a in response.get("actions", []) if a.get("type") == "create_task"]
+    if not actions:
+        await query.message.answer("Rejadan bajariladigan (o'zingizning) vazifa topilmadi.")
+        return
+
+    # Confirm before creating — route through the existing acts_confirm flow.
+    preview = await _format_create_preview(actions)
+    await state.set_state(CreateActionConfirmFSM.awaiting)
+    await state.update_data(
+        pending_response={"actions": actions,
+                          "user_message": f"📌 Rejadan {len(actions)} ta vazifa yaratildi.",
+                          "buttons": []},
+        _prior_section=None,
+    )
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="acts_confirm"),
+        InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
+    ]])
+    await _safe_answer(query.message, preview, parse_mode="Markdown", reply_markup=confirm_kb)
 
 
 
@@ -6351,6 +6622,12 @@ async def newreminder_confirm(query: CallbackQuery, state: FSMContext) -> None:
         "recurrence_rule": data.get("recurrence_rule"),
         "source": "manual_form",
     })
+    # If this reminder was started from a note (📝 Qaydlar → Eslatmaga), mark the
+    # note processed so it leaves the inbox. Without this the note lingered as
+    # unprocessed even after a successful conversion.
+    from_note = data.get("from_note_id")
+    if from_note:
+        await database.mark_note_processed(from_note, "reminder", rid)
     await state.clear()
     reminder = await database.get_reminder(rid)
     await query.answer("⏰ Eslatma saqlandi")
@@ -7059,7 +7336,20 @@ def _forward_signal(message: Message) -> tuple[str | None, str | None]:
 
 
 @router.message(
-    StateFilter(default_state),
+    # A forward is an explicit "save this" gesture — capture it as a note in the
+    # default chat AND while browsing any section. Previously this was
+    # default_state only, so forwarding *inside a section* fell through to the
+    # section's text handler -> _process_and_reply -> Claude, which reinterpreted
+    # the forwarded message instead of saving it (reported: "meaning changed").
+    # Active input FSMs (NewTask, reminders, meeting edit/protocol, …) are
+    # intentionally NOT listed, so a forward there still serves as that flow's input.
+    StateFilter(
+        default_state,
+        SectionFSM.in_tasks, SectionFSM.in_reminders, SectionFSM.in_meetings,
+        SectionFSM.in_stats, SectionFSM.in_team, SectionFSM.in_risks,
+        SectionFSM.in_today, SectionFSM.in_new, SectionFSM.in_search,
+        SectionFSM.in_settings, SectionFSM.in_notes,
+    ),
     F.forward_origin | F.forward_from | F.forward_from_chat | F.forward_sender_name,
 )
 async def handle_forwarded_message(message: Message, state: FSMContext) -> None:
@@ -7072,7 +7362,7 @@ async def handle_forwarded_message(message: Message, state: FSMContext) -> None:
     content = (message.text or message.caption or "").strip()
     if not content:
         await message.answer(
-            "📎 Bo'sh forward — qayd yaratilmadi. Matn yoki izoh bo'lgan xabarni forward qiling."
+            "📎 Bo'sh forward — note yaratilmadi. Matn yoki izoh bo'lgan xabarni forward qiling."
         )
         return
     # html_text preserves Telegram entities (bold, italic, code, links) as HTML
@@ -7176,6 +7466,7 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     response = data.get("pending_response")
     prior_state = data.get("_prior_section")
+    note_id = data.get("_note_id")  # set when confirming a note-analyze action
     await state.clear()
     if not response or not isinstance(response, dict):
         await query.answer("Tasdiqlash vaqti o'tdi — yangi so'rov yuboring.",
@@ -7195,6 +7486,15 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
             "❌ Yaratishda xato yuz berdi. Logni tekshiring (/diagnostics)."
         )
         return
+    # If this came from a note-analyze confirm, mark the source note processed.
+    if note_id:
+        for key in ("task", "reminder"):
+            if ids_by_type.get(key):
+                try:
+                    await database.mark_note_processed(note_id, key, ids_by_type[key][0])
+                except Exception:
+                    logger.debug("mark_note_processed failed for %s", note_id)
+                break
     keyboard = _build_keyboard(response.get("buttons", []), ids_by_type)
     if keyboard:
         keyboard = _append_back_row(keyboard)
@@ -7263,6 +7563,90 @@ async def handle_voice_revision(message: Message, bot: Bot, state: FSMContext) -
             await message.answer("Bo'sh xabar. Yangi matn yuboring.")
             return
     await _send_voice_confirm_prompt(message, state, new_transcript)
+
+
+# ─────────────── POLISH OUTPUT ACTIONS (📋 Nusxa / 📤 Yuborish / ✎ Yana tahrir) ───────────────
+# These callbacks ('copy', 'share', 'edit:polish') are emitted by Claude in the
+# POLISH response's buttons array — they had no handlers, so the buttons did
+# nothing (copy/share) or hit the task editor with id='polish' → "Vazifa topilmadi".
+
+def _extract_polished_body(message: Message) -> str:
+    """Pull just the polished letter out of a 'Tahrirlangan matn:' card —
+    header line and ─── rules stripped — so it can be re-sent clean."""
+    raw = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    out: list[str] = []
+    for ln in raw.split("\n"):
+        s = ln.strip()
+        if not s:
+            out.append("")
+            continue
+        if "Tahrirlangan matn" in s or "Tahrirlangan xat" in s:
+            continue
+        if set(s) <= set("─—-_=•· "):  # a line made only of rule/bullet chars
+            continue
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
+@router.callback_query(F.data == "copy")
+async def cb_polish_copy(query: CallbackQuery) -> None:
+    """📋 Nusxa olish — re-send the polished text alone so it's easy to
+    long-press → copy (a bot can't write to the clipboard directly)."""
+    body = _extract_polished_body(query.message)
+    if not body:
+        await query.answer("Nusxa olinadigan matn topilmadi", show_alert=True)
+        return
+    await query.answer("📋 Toza matn pastda — bosib turib nusxa oling")
+    await query.message.answer(body)
+
+
+@router.callback_query(F.data == "share")
+async def cb_polish_share(query: CallbackQuery) -> None:
+    """📤 Boshqaga yuborish — re-send the polished text as a standalone message
+    the user can forward to the recipient."""
+    body = _extract_polished_body(query.message)
+    if not body:
+        await query.answer("Yuboriladigan matn topilmadi", show_alert=True)
+        return
+    await query.answer()
+    await query.message.answer(body)
+    await query.message.answer(
+        "📤 _Yuqoridagi xabarni kerakli odamga forward qiling._",
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data == "edit:polish")
+async def cb_polish_edit(query: CallbackQuery, state: FSMContext) -> None:
+    """✎ Yana tahrir — refine the polished text. Registered BEFORE the generic
+    edit:<task-id> handler so it isn't mis-routed to the task editor."""
+    body = _extract_polished_body(query.message)
+    await state.set_state(PolishRevisionFSM.awaiting)
+    await state.update_data(polish_original=body)
+    await query.answer()
+    await query.message.answer(
+        "✏️ **Qanday o'zgartiray?**\n\nKo'rsatma yoki yangi matn yuboring "
+        "(masalan: «qisqartir», «rasmiyroq qil», «iliqroq ohang»).",
+        parse_mode="Markdown",
+    )
+
+
+@router.message(StateFilter(PolishRevisionFSM.awaiting), F.text | F.voice)
+async def handle_polish_revision(message: Message, state: FSMContext) -> None:
+    """User sent a revision instruction for the polished text — re-polish it
+    (original + instruction) through the normal pipeline, which returns a fresh
+    polished card with the same buttons."""
+    instr = await _get_text_or_transcribe(message, bot=message.bot)
+    if instr is None:
+        return
+    data = await state.get_data()
+    original = data.get("polish_original", "")
+    await state.clear()
+    combined = (
+        "Quyidagi rasmiy matnni ko'rsatma bo'yicha qayta tahrirla (polish). "
+        f"Ko'rsatma: {(message.text or '').strip()}\n\nAsl matn:\n{original}"
+    )
+    await _process_and_reply(message, combined, state=state)
 
 
 @router.message(StateFilter(VoiceConfirmFSM.awaiting_action), F.text | F.voice)
@@ -7647,7 +8031,7 @@ async def handle_search_section_button(message: Message, state: FSMContext) -> N
 @router.message(StateFilter(SectionFSM.in_notes), F.text | F.voice)
 async def handle_notes_section_button(message: Message, state: FSMContext) -> None:
     """Reply-keyboard tugmalari Qaydlar bo'limida. Inbox/Ishlangan/Arxiv —
-    filter; '➕ Yangi qayd' → one-shot capture FSM; '🔍 Qidirish' → search
+    filter; '➕ Yangi note' → one-shot capture FSM; '🔍 Qidirish' → search
     flow; matn fall-through Claude'ga, voice ham."""
     _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
     if _msg_text is None:
