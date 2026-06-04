@@ -939,7 +939,10 @@ async def list_delegated_open_tasks(limit: int = 20) -> list[dict]:
             """SELECT * FROM tasks
                WHERE status IN ('todo','in_progress')
                  AND assignee IS NOT NULL
-                 AND TRIM(LOWER(assignee)) NOT IN ('', 'men', 'oʻzim', 'ozim')
+                 AND LOWER(TRIM(assignee)) NOT IN (
+                     '', 'men', 'siz', 'belgilanmagan', '—',
+                     'oʻzim', 'o''zim', 'o''z', 'ozim'
+                 )
                ORDER BY
                  CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
                  deadline ASC
@@ -1844,7 +1847,10 @@ async def executive_stats(days: int = 7) -> dict:
                FROM tasks
                WHERE status IN ('todo','in_progress')
                  AND assignee IS NOT NULL
-                 AND TRIM(LOWER(assignee)) NOT IN ('', 'men', 'oʻzim', 'ozim')
+                 AND LOWER(TRIM(assignee)) NOT IN (
+                     '', 'men', 'siz', 'belgilanmagan', '—',
+                     'oʻzim', 'o''zim', 'o''z', 'ozim'
+                 )
                GROUP BY assignee ORDER BY total DESC LIMIT 8""",
             (now.isoformat(),),
         )

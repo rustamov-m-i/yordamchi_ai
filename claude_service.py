@@ -364,7 +364,11 @@ async def process_message(
     else:
         history = await database.recent_messages(limit=10)
         history = _budget_history(history)
-        messages = [{"role": m["role"], "content": m["content"]} for m in history]
+        # Drop any empty-content rows — the Anthropic API rejects empty messages
+        # ("messages.N: ... must have non-empty content"), which would 400 the
+        # whole call. Defense-in-depth alongside not persisting internal directives.
+        messages = [{"role": m["role"], "content": m["content"]}
+                    for m in history if (m.get("content") or "").strip()]
 
     # Redact PII for BOTH user messages and internal directives. Internal directives
     # are generated server-side but may interpolate state (task titles, meeting
@@ -475,7 +479,7 @@ async def process_message(
 
     if not internal_directive:
         await database.append_message("user", user_text)
-        await database.append_message("assistant", parsed.get("user_message", ""))
+        await database.append_message("assistant", parsed.get("user_message") or "✅")
         await database.trim_history(keep=30)
 
     return parsed
@@ -518,7 +522,11 @@ async def process_message_stream(
     else:
         history = await database.recent_messages(limit=10)
         history = _budget_history(history)
-        messages = [{"role": m["role"], "content": m["content"]} for m in history]
+        # Drop any empty-content rows — the Anthropic API rejects empty messages
+        # ("messages.N: ... must have non-empty content"), which would 400 the
+        # whole call. Defense-in-depth alongside not persisting internal directives.
+        messages = [{"role": m["role"], "content": m["content"]}
+                    for m in history if (m.get("content") or "").strip()]
         outgoing_content, redacted_count = redaction.redact(user_text)
         purpose = "user_message_stream"
     messages.append({"role": "user", "content": outgoing_content})
@@ -587,8 +595,11 @@ async def process_message_stream(
     parsed.setdefault("needs_clarification", False)
     parsed.setdefault("clarification_question", None)
 
-    await database.append_message("user", user_text)
-    await database.append_message("assistant", parsed.get("user_message", ""))
-    await database.trim_history(keep=30)
+    # Never persist internal directives (plans/briefings) — their user_text is ""
+    # which would poison history with an empty message and 400 the next API call.
+    if not internal_directive:
+        await database.append_message("user", user_text)
+        await database.append_message("assistant", parsed.get("user_message") or "✅")
+        await database.trim_history(keep=30)
 
     yield ("complete", parsed)
