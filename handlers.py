@@ -1215,6 +1215,11 @@ _STREAM_EDIT_MIN_DELTA_CHARS = 24    # don't spam edits for tiny additions
 
 _DESTRUCTIVE_ACTION_TYPES = {"create_task", "schedule_meeting"}
 
+# Most tasks/meetings creatable from a single message. A pasted list of ~14 is
+# realistic; beyond ~20 the JSON response risks truncation and the confirm card
+# grows unwieldy. We keep the first N and tell the principal to resend the rest.
+_MAX_CREATE_ACTIONS_PER_MSG = 20
+
 # Mass-delete actions ("barchasini o'chir"). These ALWAYS require confirmation —
 # independent of the confirm_create_actions setting — because they're
 # irreversible and a mis-heard voice command could wipe everything.
@@ -1321,9 +1326,38 @@ async def _format_create_preview(actions: list[dict]) -> str:
     before execution. Bulk deletes show the LIVE row count so the user sees
     exactly how much would be wiped."""
     lines = ["⚠️ **TASDIQLAYSIZMI?**", ""]
+    # When many tasks/meetings are created at once (e.g. a pasted list of 14),
+    # the full 6-line card per item overflows Telegram's 4096-char message limit
+    # and is hard to scan. Switch to one compact line per item past this count.
+    _create_types = {"create_task", "schedule_meeting"}
+    n_creates = sum(1 for a in actions if a.get("type") in _create_types)
+    compact = n_creates > 4
+    if compact:
+        lines.append(f"📋 **{n_creates} ta yangi yozuv qo'shiladi:**")
+        lines.append("")
+    create_idx = 0
     for a in actions:
         t = a.get("type")
         d = a.get("data", {}) or {}
+        if compact and t == "create_task":
+            create_idx += 1
+            title = (d.get("title") or "—").strip()
+            assignee = (d.get("assignee") or "—").strip()
+            dl_label, _ = _format_deadline_short(d.get("deadline"))
+            badge = _PRIORITY_BADGE.get(d.get("priority", "P2"), "🔵")
+            lines.append(f"{badge} {create_idx}. {title} — 👤 {assignee} · ⏳ {dl_label}")
+            continue
+        if compact and t == "schedule_meeting":
+            create_idx += 1
+            title = (d.get("title") or "—").strip()
+            start = d.get("datetime_start", "—")
+            try:
+                dt = datetime.fromisoformat(start).astimezone(database.TZ)
+                start_label = dt.strftime("%d-%m %H:%M")
+            except (ValueError, TypeError):
+                start_label = start
+            lines.append(f"🤝 {create_idx}. {title} — 🕐 {start_label}")
+            continue
         if t == "delete_task":
             try:
                 task = await database.get_task(a.get("id"))
@@ -1494,6 +1528,26 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
         # create_task / schedule_meeting confirm only if the setting is on
         # (default ON; /settings dan o'chirish mumkin).
         actions = final_response.get("actions", [])
+        # Cap mass-create requests so a huge pasted list can't truncate the JSON
+        # or overflow the confirm card. Keep the first N create actions in order,
+        # drop the rest, and tell the principal to resend them.
+        _overflow_note = ""
+        _n_creates = sum(1 for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES)
+        if _n_creates > _MAX_CREATE_ACTIONS_PER_MSG:
+            dropped = _n_creates - _MAX_CREATE_ACTIONS_PER_MSG
+            kept, seen = [], 0
+            for a in actions:
+                if a.get("type") in _DESTRUCTIVE_ACTION_TYPES:
+                    seen += 1
+                    if seen > _MAX_CREATE_ACTIONS_PER_MSG:
+                        continue
+                kept.append(a)
+            actions = kept
+            final_response["actions"] = actions
+            _overflow_note = (
+                f"\n\n⚠️ Bir xabarda {_MAX_CREATE_ACTIONS_PER_MSG} tagacha yozuv qo'shiladi. "
+                f"Qolgan {dropped} tasini alohida xabarda yuboring."
+            )
         try:
             _settings = await database.get_settings()
         except Exception:
@@ -1507,7 +1561,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
             to_confirm += [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
         if state is not None and to_confirm:
             if True:
-                preview = await _format_create_preview(to_confirm)
+                preview = await _format_create_preview(to_confirm) + _overflow_note
                 confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="acts_confirm"),
                     InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
@@ -1544,6 +1598,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
 
         text = (final_response.get("user_message") or "").strip() or "✅"
         text += _failed_actions_note(ids_by_type)
+        text += _overflow_note
         if progress_msg is not None:
             # Finalize the same message we've been editing — single chat bubble.
             try:
@@ -4887,48 +4942,100 @@ async def cb_plan_auto(query: CallbackQuery, state: FSMContext) -> None:
 
 _PLAN_DIRECTIVE = """[INTERNAL] executive_plan
 
-Act as the principal's senior Chief of Staff / strategy advisor — NOT a to-do
-organizer. Lead with strategy: start with a STRATEGIK FOKUS block (Maqsad / Eng
-muhim bitta narsa / Leverage), then the structured plan (45_planning.md). Apply
-leverage (80-20), critical-path sequencing, explicit trade-offs, second-order
-risks, aggressive delegation, and say what to DROP today (XAVF & TRADE-OFF section).
+Act as the principal's Chief of Staff for a DELEGATOR — he delegates most
+execution to a team. The plan DIAGNOSES (where is he the bottleneck, who is
+overloaded, what breaks), it does NOT re-list his tasks. Follow 45_planning.md
+exactly. Keep it TIGHT (~25-45 lines), not a document.
 
-Produce a FULL executive planning document in O'zbek (lotin), structured per 45_planning.md (clean emoji sections, no tables).
+CORE sections, in this order:
+1) 🎯 STRATEGIK FOKUS — Maqsad / Eng muhim bitta ish / Leverage (3 lines).
+2) ⚖️ YUK BALANSI — per-owner active load; flag who is OVERLOADED (the bottleneck)
+   and who is FREE; give ONE concrete redistribution line (move which task to whom).
+   If there is NO delegation (all tasks assignee "—"), use 🔑 FAQAT SIZ instead:
+   the 1-3 items that truly need the principal; the rest should be delegated.
+3) 📋 USTUVOR VAZIFALAR — critical-path order; GROUP by day and label the crunch
+   if deadlines cluster (e.g. "📅 05-06 — 6 ta shoshilinch").
+4) ⚠️ XAVF & TRADE-OFF — what breaks, deadline conflicts, and what to DROP/defer.
+5) 💡 TAVSIYA — 3-5 specific actions (verb + name + time).
+
+SITUATIONAL sections (⏱ vaqt rejasi, 🛡 eskalatsiya, 📝 tayyorgarlik, ✉️ xabarlar,
+☑️ checklist, 📄 shablon, ❓ savollar) — include ONLY when their trigger is real.
+DEFAULT TO OMITTING them. Do NOT invent an hour-by-hour schedule for a pure
+delegation/contract day, and do NOT auto-generate message templates.
 
 DATA SOURCE:
 - If the principal's message describes a situation, plan around THAT.
-- If the message is EMPTY, build the plan from the CURRENT PRINCIPAL STATE block —
-  the REAL active tasks, today/this-week meetings, overdue and blocked items, and
-  deadlines. Prioritize them, time-block around fixed meetings, flag conflicts.
-  NEVER invent tasks or meetings that aren't in the state block. If the state is
-  empty, say so briefly and suggest adding tasks — don't fabricate a fake day.
+- If EMPTY, build from the CURRENT PRINCIPAL STATE block — REAL active tasks
+  (with their `assignee` for YUK BALANSI), today/this-week meetings, overdue and
+  blocked items, deadlines. NEVER invent tasks, people, or dates. If state is
+  empty, say so briefly and suggest adding tasks — don't fabricate a day.
 
-FORMAT — Telegram-friendly, NO markdown tables (they render as raw pipes on mobile):
-- Use emoji + section headers + "━━━" dividers + short lines.
-- Tasks: "🔴 1. <title> — <P-level>\\n   👤 <mas'ul> · ⏰ <deadline>" (one per block).
-- Time plan: "  HH:MM–HH:MM  <ish>" lines (not a table).
+FORMAT — Telegram-friendly, NO markdown tables (raw pipes on mobile):
+- emoji + section headers + "━━━" dividers + short lines.
+- Tasks: "🔴 1. <title> — <P>\\n   👤 <mas'ul> · ⏰ <deadline>".
+- Load: "👤 <ism> — N ta (🔴 K ertaga)"; bottleneck "⚠️ <ism> haddan tashqari yuklangan — qayta taqsimlang".
 - Status icons: 🔴 P0 / 🔴 Fixed / 🟠 P1 / 🔵 P2 / ⚪ P3.
-
-Key reminders:
-- Telegram messages (section D) MUST be rasmiy (formal).
-- Flag time conflicts; recommend delegation when windows are tight.
-- 3 clarifying questions in section J ONLY.
 
 Output: user_message = full plan (Telegram-friendly, NO tables); actions=[].
 """
 
 
 async def _run_planning_session(message: Message, situation: str) -> None:
+    # A long Opus plan that lands ~30s later with zero feedback reads as
+    # "broken". Stream it so the plan visibly builds, exactly like the main
+    # chat path. The directive routes to Opus via its "executive_plan" keyword.
+    directive = _PLAN_DIRECTIVE
+    if situation and situation.strip():
+        # The principal typed/dictated a situation — feed it in. (Previously this
+        # was silently dropped: an internal_directive overrides user_text, so the
+        # free-text `/plan <vaziyat>` was ignored and only the DB was planned.)
+        directive = _PLAN_DIRECTIVE + "\n\n## PRINTSIPAL YOZGAN VAZIYAT\n" + situation.strip()
+
     typing_task = asyncio.create_task(_keep_typing(message.bot, message.chat.id))
+    progress_msg: Message | None = None
+    last_edit_at = 0.0
+    last_edit_text = ""
+    loop = asyncio.get_event_loop()
+    response: dict | None = None
     try:
-        response = await claude_service.process_message(
-            situation, internal_directive=_PLAN_DIRECTIVE,
-        )
+        async for kind, payload in claude_service.process_message_stream(
+            "", internal_directive=directive,
+        ):
+            if kind == "partial":
+                text = (payload or "").strip()
+                if not text:
+                    continue
+                now = loop.time()
+                if (now - last_edit_at) < _STREAM_EDIT_MIN_INTERVAL_SEC:
+                    continue
+                if abs(len(text) - len(last_edit_text)) < _STREAM_EDIT_MIN_DELTA_CHARS:
+                    continue
+                # Partials go out WITHOUT parse_mode — mid-stream markdown is
+                # often unbalanced (open ** with no close) and would 400.
+                if progress_msg is None:
+                    progress_msg = await message.answer(text + " ▌")
+                else:
+                    try:
+                        await progress_msg.edit_text(text + " ▌")
+                    except TelegramBadRequest:
+                        pass
+                last_edit_at = now
+                last_edit_text = text
+            elif kind == "complete":
+                response = payload
+                break
     finally:
         typing_task.cancel()
 
+    if response is None:
+        response = claude_service._FALLBACK_RESPONSE
     plan_text = response.get("user_message", "")
     if not plan_text:
+        if progress_msg is not None:
+            try:
+                await progress_msg.delete()
+            except TelegramBadRequest:
+                pass
         await message.answer("Reja yaratib boʻlmadi. Qaytadan urinib koʻring.")
         return
 
@@ -4940,7 +5047,14 @@ async def _run_planning_session(message: Message, situation: str) -> None:
     ], [
         back_button(),
     ]])
-    await _safe_answer(message, plan_text, parse_mode="Markdown", reply_markup=kb)
+    # Finalize the streamed bubble: drop the cursor, render markdown, attach buttons.
+    if progress_msg is not None:
+        try:
+            await progress_msg.edit_text(plan_text, parse_mode="Markdown", reply_markup=kb)
+        except TelegramBadRequest:
+            await _safe_answer(message, plan_text, parse_mode="Markdown", reply_markup=kb)
+    else:
+        await _safe_answer(message, plan_text, parse_mode="Markdown", reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("plan_accept:"))
