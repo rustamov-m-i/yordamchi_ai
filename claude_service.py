@@ -72,7 +72,13 @@ def _circuit_record_success() -> None:
 # Internal-directive keywords that signal complex reasoning and benefit from Opus.
 # Anything not on this list (and not explicitly forced via complexity="fast"|"complex")
 # uses the default CLAUDE_MODEL (Sonnet).
-_COMPLEX_DIRECTIVE_KEYWORDS = ("executive_plan", "check_followups", "risk_analysis")
+#
+# NOTE: check_followups was deliberately removed. It is a routine 4×/day state scan
+# with tiny output (~115 tokens) but ran on Opus and drove ~70% of total LLM spend.
+# Sonnet handles it at ~1/5 the cost with no quality loss, and two of its three
+# checks are already covered by cheaper jobs (_post_meeting_followup_sweep and the
+# nightly Haiku _proactive_dependency_check). Don't re-add without a cost review.
+_COMPLEX_DIRECTIVE_KEYWORDS = ("executive_plan", "risk_analysis")
 
 
 _MAX_HISTORY_TOKENS_APPROX = 2000  # ~4 chars/token heuristic

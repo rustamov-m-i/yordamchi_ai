@@ -2239,7 +2239,7 @@ async def handle_task_import(message: Message, state: FSMContext) -> None:
             a["type"] = "update_task"
             a["id"] = rid
     if not actions:
-        thinking = await message.answer("🔎 Fayldan vazifalarni topyapman…")
+        thinking = await message.answer("🔍 Fayldan vazifalarni topyapman…")
         actions = await _smart_tasks_from_table(table)
         method = "aqlli tahlil"
         try:
@@ -5427,26 +5427,10 @@ async def handle_plan_situation_text(message: Message, state: FSMContext) -> Non
         return
 
     await state.clear()
-    await _run_planning_session(message, message.text)
-
-
-@router.message(StateFilter(PlanFSM.awaiting_situation), F.voice)
-async def handle_plan_situation_voice(message: Message, state: FSMContext, bot: Bot) -> None:
-    await state.clear()
-    # Reuse voice handler logic
-    if message.voice.file_size and message.voice.file_size > voice_service.MAX_AUDIO_BYTES:
-        await message.answer("Ovoz juda katta. Iltimos, qisqaroq yuboring.")
-        return
-    await message.bot.send_chat_action(message.chat.id, "typing")
-    file = await bot.get_file(message.voice.file_id)
-    audio_io = await bot.download_file(file.file_path)
-    audio_bytes = audio_io.getvalue() if hasattr(audio_io, "getvalue") else audio_io.read()
-    transcript = await voice_service.transcribe(audio_bytes, filename="voice.ogg", language="uz")
-    if not transcript:
-        await message.answer("Ovozni o'qiy olmadim. Matn bilan qayta yuboring.")
-        return
-    await message.answer(f"_🎙 Tushundim:_ {_escape_markdown(transcript[:200])}…", parse_mode="Markdown")
-    await _run_planning_session(message, transcript)
+    # _get_text_or_transcribe patched message.text with the transcript for voice,
+    # so _msg_text is the situation for BOTH text and voice. The F.text | F.voice
+    # filter above already catches both — no separate F.voice handler is needed.
+    await _run_planning_session(message, _msg_text)
 
 
 @router.callback_query(F.data == "plan_cancel")
@@ -5478,41 +5462,40 @@ async def cb_plan_auto(query: CallbackQuery, state: FSMContext) -> None:
 
 _PLAN_DIRECTIVE = """[INTERNAL] executive_plan
 
-Act as the principal's Chief of Staff for a DELEGATOR — he delegates most
-execution to a team. The plan DIAGNOSES (where is he the bottleneck, who is
-overloaded, what breaks), it does NOT re-list his tasks. Follow 45_planning.md
-exactly. Keep it TIGHT (~25-45 lines), not a document.
+Act as the principal's Chief of Staff for a DELEGATOR. Produce a "TEZKOR NAZORAT"
+control board in O'zbek using the EXACT template in 45_planning.md — detailed task
+CARDS, color-coded load, firm decisions. A control panel, not prose.
 
-CORE sections, in this order:
-1) 🎯 STRATEGIK FOKUS — Maqsad / Eng muhim bitta ish / Leverage (3 lines).
-2) ⚖️ YUK BALANSI — per-owner active load; flag who is OVERLOADED (the bottleneck)
-   and who is FREE; give ONE concrete redistribution line (move which task to whom).
-   If there is NO delegation (all tasks assignee "—"), use 🔑 FAQAT SIZ instead:
-   the 1-3 items that truly need the principal; the rest should be delegated.
-3) 📋 USTUVOR VAZIFALAR — critical-path order; GROUP by day and label the crunch
-   if deadlines cluster (e.g. "📅 05-06 — 6 ta shoshilinch").
-4) ⚠️ XAVF & TRADE-OFF — what breaks, deadline conflicts, and what to DROP/defer.
-5) 💡 TAVSIYA — 3-5 specific actions (verb + name + time).
+SECTIONS, in this exact order (skip one ONLY if its data is empty):
+1) 📌 SARLAVHA — "**<DD-MM> TO'LQINI — TEZKOR NAZORAT**", then "Maqsad: <1 jumla>" and
+   "Fokus: **N ta shoshilinch vazifa + N ta qayta taqsimot + N ta mas'ul tayinlash**" (EXACT counts).
+2) ⏳ P0 — BUGUN DARHOL — 1-3 must-act-now CARDS (assign a missing owner / pull work off
+   the overloaded person / the riskiest item). Omit the section if nothing is urgent today.
+3) ⏳ <DD-MM> DEADLINE — <N> TA VAZIFA — every task due that day as a CARD, critical-path order.
+   If deadlines do NOT cluster on one day, title it "📋 USTUVOR VAZIFALAR" and order by nearest deadline.
+4) 📌 YUK BALANSI — per-owner load, COLOR-CODED: 🔴 overloaded (bottleneck) / 🟡 moderate /
+   🟢 free. EXACT counts from the LOAD BY ASSIGNEE block. If NO delegation (all "—"), use 🔑 FAQAT SIZ.
+5) ⏳ BUGUNGI HARAKAT REJASI — concrete time blocks ("HH:MM — <harakat>"); compute meeting+deadline conflicts.
+6) 📌 QARORLAR — 🔷 firm decisions, including what to defer/drop (the trade-off).
+7) 📌 BOSH FORMULA — "Bugun: **...**" / "Ertaga: **...**" / "<DD-MM>: **...**".
 
-SITUATIONAL sections (⏱ vaqt rejasi, 🛡 eskalatsiya, 📝 tayyorgarlik, ✉️ xabarlar,
-☑️ checklist, 📄 shablon, ❓ savollar) — include ONLY when their trigger is real.
-DEFAULT TO OMITTING them. Do NOT invent an hour-by-hour schedule for a pure
-delegation/contract day, and do NOT auto-generate message templates.
+CARD format (one blank line between cards):
+**<N>. <icon> <sarlavha>**
+👤 Ijrochi: <ism / **tayinlanmagan** / qayta taqsimlash kerak>
+⏳ Muddat: <DD-MM HH:MM>
+⭐ Muhimlik: Yuqori   (yoki "🔷 Muhimlik: Rejadagi/Muhim")
+📝 Izoh: <next action; optional "Ichki deadline: DD-MM, HH:MM">
+Status icons: 🔴 Yuqori/P0 · 🟠 Muhim/P1 · ⚪ Rejadagi/P2-P3.
 
 DATA SOURCE:
 - If the principal's message describes a situation, plan around THAT.
-- If EMPTY, build from the CURRENT PRINCIPAL STATE block — REAL active tasks
-  (with their `assignee` for YUK BALANSI), today/this-week meetings, overdue and
-  blocked items, deadlines. NEVER invent tasks, people, or dates. If state is
-  empty, say so briefly and suggest adding tasks — don't fabricate a day.
+- If EMPTY, build from the CURRENT PRINCIPAL STATE block — REAL active tasks (with their
+  `assignee` for YUK BALANSI), today/this-week meetings, overdue and blocked items,
+  deadlines. NEVER invent tasks, people, or dates. If state is empty, say so briefly and
+  suggest adding tasks — don't fabricate a day.
 
-FORMAT — Telegram-friendly, NO markdown tables (raw pipes on mobile):
-- emoji + section headers + "━━━" dividers + short lines.
-- Tasks: "🔴 1. <title> — <P>\\n   👤 <mas'ul> · ⏰ <deadline>".
-- Load: "👤 <ism> — N ta (🔴 K ertaga)"; bottleneck "⚠️ <ism> haddan tashqari yuklangan — qayta taqsimlang".
-- Status icons: 🔴 P0 / 🔴 Fixed / 🟠 P1 / 🔵 P2 / ⚪ P3.
-
-Output: user_message = full plan (Telegram-friendly, NO tables); actions=[].
+FORMAT — Telegram-friendly, NO markdown tables: "**bold**" headers, "━━━" dividers, blank line between cards.
+Output: user_message = full board (template above); actions=[].
 """
 
 
@@ -5583,13 +5566,24 @@ async def _run_planning_session(message: Message, situation: str) -> None:
     ], [
         back_button(),
     ]])
-    # Finalize the streamed bubble: drop the cursor, render markdown, attach buttons.
-    if progress_msg is not None:
+    # Finalize: drop the cursor, render markdown, attach buttons. A board longer
+    # than one Telegram message can't be edited into the streamed bubble
+    # (edit_text 400s past ~4096 chars), so in that case — or if the markdown
+    # edit fails — delete the stale bubble and send the board split at section
+    # boundaries via _safe_answer, instead of orphaning a truncated stream bubble.
+    edited = False
+    if progress_msg is not None and len(plan_text) <= _TG_SOFT_LIMIT:
         try:
             await progress_msg.edit_text(plan_text, parse_mode="Markdown", reply_markup=kb)
+            edited = True
         except TelegramBadRequest:
-            await _safe_answer(message, plan_text, parse_mode="Markdown", reply_markup=kb)
-    else:
+            edited = False
+    if not edited:
+        if progress_msg is not None:
+            try:
+                await progress_msg.delete()
+            except TelegramBadRequest:
+                pass
         await _safe_answer(message, plan_text, parse_mode="Markdown", reply_markup=kb)
 
 
@@ -5597,7 +5591,7 @@ async def _run_planning_session(message: Message, situation: str) -> None:
 async def cb_plan_accept(query: CallbackQuery) -> None:
     plan_id = query.data.split(":", 1)[1]
     await database.mark_plan_accepted(plan_id)
-    await query.answer("Reja qabul qilindi ✅ 2 kun ichida qanday o'tganini so'rayman.")
+    await query.answer("Reja qabul qilindi ✅")
     try:
         await query.message.edit_reply_markup(reply_markup=single_back_keyboard())
     except Exception:

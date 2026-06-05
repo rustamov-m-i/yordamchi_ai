@@ -2254,29 +2254,6 @@ async def list_recent_plans(limit: int = 10) -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
-async def list_plans_due_followup() -> list[dict]:
-    """Plans created 48h ago that haven't had follow-up yet."""
-    cutoff = (datetime.now(TZ) - timedelta(hours=48)).isoformat()
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            """SELECT * FROM plans
-               WHERE created_at <= ? AND follow_up_asked_at IS NULL AND accepted = 1
-               ORDER BY created_at ASC LIMIT 5""",
-            (cutoff,),
-        )
-        return [dict(r) for r in await cur.fetchall()]
-
-
-async def mark_plan_followup_asked(plan_id: str) -> None:
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        await db.execute(
-            "UPDATE plans SET follow_up_asked_at = ? WHERE id = ?",
-            (now_iso(), plan_id),
-        )
-        await db.commit()
-
-
 # ─────────────────────────────────────────── PENDING ACTIONS (idempotency) ───────────────────────────────────────────
 
 
