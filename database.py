@@ -2488,6 +2488,115 @@ async def llm_cost_breakdown(days: int = 7) -> dict:
     return {"by_model": rows, "totals": totals, "days": days}
 
 
+# ───────────────── SELF-IMPROVEMENT — PERCEPTION (Phase 1, read-only) ─────────────────
+# Queryable telemetry signals for the supervised self-improvement subsystem. Pure
+# reads over existing tables (llm_audit_log / corrections / conversation_history) —
+# no new tables, no writes, no behaviour change. Consumed by metrics.py.
+
+async def llm_error_breakdown(days: int = 7) -> dict:
+    """Error / fallback rate over the past N days. A row with a non-NULL `error` is a
+    turn that fell back to a degraded response, so error_calls == fallbacks. Returns
+    totals + breakdown by error label and by purpose-family (user vs internal)."""
+    cutoff = (datetime.now(TZ) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT error, purpose, COUNT(*) AS n
+                 FROM llm_audit_log
+                WHERE ts >= ?
+                GROUP BY error, purpose""",
+            (cutoff,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    def _family(purpose):
+        p = (purpose or "").lower()
+        if p.startswith("internal"):
+            return "internal"
+        if p.startswith("user") or p == "document":
+            return "user"
+        return "other"
+
+    total = sum(r["n"] for r in rows)
+    error_calls = sum(r["n"] for r in rows if r["error"])
+    by_label: dict = {}
+    by_family: dict = {}
+    for r in rows:
+        fam = by_family.setdefault(_family(r["purpose"]), {"calls": 0, "errors": 0})
+        fam["calls"] += r["n"]
+        if r["error"]:
+            by_label[r["error"]] = by_label.get(r["error"], 0) + r["n"]
+            fam["errors"] += r["n"]
+    return {
+        "window_days": days,
+        "total_calls": total,
+        "error_calls": error_calls,
+        "error_rate": round(error_calls / total, 4) if total else 0.0,
+        "by_label": sorted(
+            ({"label": k, "calls": v} for k, v in by_label.items()),
+            key=lambda x: -x["calls"]),
+        "by_family": by_family,
+    }
+
+
+async def correction_frequency(days: int = 30, limit: int = 500) -> dict:
+    """Style/behaviour corrections the principal made in the window. Theming is
+    derived downstream (metrics.py) from `reason`/`context` — there is no theme
+    column. Returns the count + the rows (newest first)."""
+    cutoff = (datetime.now(TZ) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT context, correction, reason, created_at FROM corrections "
+            "WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
+            (cutoff, limit),
+        )
+        items = [dict(r) for r in await cur.fetchall()]
+    return {"window_days": days, "total": len(items), "items": items}
+
+
+async def cost_trend_by_day(days: int = 14) -> dict:
+    """Per-day cost / token / call / error trend. Latency is NOT recorded in
+    llm_audit_log, so this is cost+token based. Day = local-TZ date prefix of `ts`."""
+    cutoff = (datetime.now(TZ) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT substr(ts, 1, 10) AS day,
+                      COUNT(*) AS calls,
+                      SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS errors,
+                      SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS tokens,
+                      SUM(COALESCE(estimated_cost_usd, 0)) AS cost_usd
+                 FROM llm_audit_log
+                WHERE ts >= ?
+                GROUP BY day
+                ORDER BY day ASC""",
+            (cutoff,),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    for r in rows:
+        r["cost_usd"] = round(float(r["cost_usd"] or 0), 4)
+        r["tokens"] = int(r["tokens"] or 0)
+    return {"window_days": days, "by_day": rows}
+
+
+async def recent_conversation(days: int = 7, limit: int = 500) -> list[dict]:
+    """Chronological (oldest→newest) conversation turns in the window — role,
+    content, created_at. Feeds metrics.py's 'unmet request' rephrase heuristic.
+    Takes the most-recent `limit` rows, then returns them oldest-first."""
+    cutoff = (datetime.now(TZ) - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT role, content, created_at FROM conversation_history "
+            "WHERE created_at >= ? ORDER BY id DESC LIMIT ?",
+            (cutoff, limit),
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    rows.reverse()
+    return rows
+
+
 async def purge_old_audit_logs(retention_days: int) -> int:
     """Same idea for the LLM audit log table — used by scheduler nightly."""
     if retention_days <= 0:
