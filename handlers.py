@@ -2048,6 +2048,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     # It also serves as onboarding: a concise tour of what the bot does + examples.
     await state.clear()
     await message.answer(
+        "Salom! 👋\n"
         "🤝 **Yordamchi — shaxsiy AI yordamchingiz**\n\n"
         "Vazifa, eslatma, uchrashuv va qaydlaringizni boshqaraman. "
         "Oddiy til yoki ovoz bilan yozing — qolganini o'zim bajaraman.\n\n"
