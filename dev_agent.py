@@ -240,7 +240,20 @@ async def prepare(proposal: dict, implementer: Optional[Implementer] = None) -> 
             await database.log_si_audit("prepare_failed", pid, res.summary)
             return PrepareResult(False, pid, branch, reason=res.summary)
 
-        hits = diff_touches_protected(await changed_files(worktree))
+        # What did the implementer actually touch? Log the count + a summary tail so
+        # an empty/odd run is diagnosable from the audit trail.
+        changed = await changed_files(worktree)
+        await database.log_si_audit("implement_done", pid,
+                                    f"files={len(changed)} :: {(res.summary or '')[:400]}")
+        # No file changes → do NOT advance to a phantom 'ready' state (which would
+        # push an empty branch). Reject so the principal isn't shown an empty diff.
+        if not changed:
+            await cleanup_worktree(worktree)
+            await database.log_si_audit("prepare_no_changes", pid, (res.summary or "")[:400])
+            return PrepareResult(False, pid, branch,
+                                 reason="implementer hech qanday fayl o'zgartirmadi (bo'sh diff)")
+
+        hits = diff_touches_protected(changed)
         if hits:
             await cleanup_worktree(worktree)
             await database.update_proposal_status(pid, "requires_manual")

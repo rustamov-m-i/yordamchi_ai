@@ -155,12 +155,25 @@ async def _prep_scenarios():
     r4 = await dev_agent.prepare({"id": "imp-x"}, implementer=dev_agent.StubImplementer())
     check("prepare: stub (no SDK) → ok=False", r4.ok is False and "SDK" in r4.reason)
 
+    # 5) implementer ran but changed NO files → ok=False (no phantom 'ready'/empty branch)
+    async def cf_empty(wt):
+        return []
+    dev_agent.changed_files = cf_empty
+    dev_agent.run_test_gate = gate_green
+    pid5 = await database.create_improvement_proposal({"title": "No-op", "fix_kind": "code", "status": "approved"})
+    r5 = await dev_agent.prepare({"id": pid5}, implementer=FakeImpl(ok=True))
+    check("prepare: o'zgarish yo'q → ok=False", r5.ok is False and "o'zgartirmadi" in r5.reason, r5.reason)
+    check("prepare: o'zgarish yo'q → status approved (in_progress EMAS)",
+          (await database.get_improvement_proposal(pid5))["status"] == "approved")
+
     # audit trail populated
-    audit = await database.list_si_audit(limit=50)
+    audit = await database.list_si_audit(limit=80)
     actions = {a["action"] for a in audit}
     check("audit: prepare_ok yozildi", "prepare_ok" in actions)
     check("audit: prepare_rejected_protected yozildi", "prepare_rejected_protected" in actions)
     check("audit: prepare_failed (stub) yozildi", "prepare_failed" in actions)
+    check("audit: implement_done yozildi (fayl soni diagnostikasi)", "implement_done" in actions)
+    check("audit: prepare_no_changes yozildi", "prepare_no_changes" in actions)
 
 
 def test_real_worktree_smoke():
