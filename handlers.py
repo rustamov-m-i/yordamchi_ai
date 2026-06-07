@@ -5570,25 +5570,28 @@ _SI_ACTIVE_STATUSES = {"new", "approved", "in_progress", "pr_open", "merged"}
 
 
 def _format_silog_text(props: list) -> str:
-    """The /silog dashboard: in-flight proposals + recently completed ones."""
-    lines = ["📜 **Self-improvement — holat**", ""]
+    """The /silog dashboard: in-flight proposals + recently completed ones.
+    PLAIN text (sent WITHOUT parse_mode): statuses ('in_progress') and user titles
+    ('check_followups …') contain underscores that legacy Markdown mis-parses as
+    italics → 'can't find end of entity'. No markup here = no parse errors ever."""
+    lines = ["📜 Self-improvement — holat", ""]
     if not props:
         lines.append("Hozircha hech qanday taklif yo'q.")
         return "\n".join(lines)
     active = [p for p in props if p.get("status") in _SI_ACTIVE_STATUSES]
     done = [p for p in props if p.get("status") not in _SI_ACTIVE_STATUSES]
     if active:
-        lines.append("⏳ **Faol:**")
+        lines.append("⏳ Faol:")
         for p in active:
             b = _SI_STATUS_BADGE.get(p.get("status"), "•")
-            lines.append(f"  {b} `{p['id']}` {p.get('status')} — «{(p.get('title') or '—')[:38]}»")
+            lines.append(f"  {b} {p['id']} · {p.get('status')} — {(p.get('title') or '—')[:38]}")
         lines.append("")
     if done:
-        lines.append("✅ **Tugaganlar (oxirgi):**")
+        lines.append("✅ Tugaganlar (oxirgi):")
         for p in done[:6]:
             b = _SI_STATUS_BADGE.get(p.get("status"), "•")
-            lines.append(f"  {b} `{p['id']}` {p.get('status')} — «{(p.get('title') or '—')[:38]}»")
-    lines += ["", "_🔍 tugma — audit zanjirini ko'rish._"]
+            lines.append(f"  {b} {p['id']} · {p.get('status')} — {(p.get('title') or '—')[:38]}")
+    lines += ["", "🔍 tugma — audit zanjirini ko'rish."]
     return "\n".join(lines)
 
 
@@ -5609,7 +5612,7 @@ def _silog_keyboard(props: list) -> InlineKeyboardMarkup:
 async def cmd_silog(message: Message) -> None:
     """Self-improvement status + audit view (read-only)."""
     props = await database.list_improvement_proposals(limit=20)
-    await _safe_answer(message, _format_silog_text(props), parse_mode="Markdown",
+    await _safe_answer(message, _format_silog_text(props),
                        reply_markup=_silog_keyboard(props))
 
 
@@ -5618,7 +5621,7 @@ async def cb_silog_refresh(query: CallbackQuery) -> None:
     props = await database.list_improvement_proposals(limit=20)
     await query.answer("🔄 Yangilandi")
     try:
-        await query.message.edit_text(_format_silog_text(props), parse_mode="Markdown",
+        await query.message.edit_text(_format_silog_text(props),
                                       reply_markup=_silog_keyboard(props))
     except TelegramBadRequest:
         pass
@@ -5635,21 +5638,23 @@ async def cb_si_audit(query: CallbackQuery) -> None:
     entries = await database.list_si_audit(limit=40, proposal_id=pid)
     await query.answer()
     badge = _SI_STATUS_BADGE.get(p.get("status"), "•")
-    lines = [f"🔍 **{pid} — audit zanjiri**", "",
-             f"📋 «{(p.get('title') or '—')[:50]}»",
+    # PLAIN text — audit action names ('deploy_succeeded') and titles contain
+    # underscores that legacy Markdown would mis-parse. No markup = no parse errors.
+    lines = [f"🔍 {pid} — audit zanjiri", "",
+             f"📋 {(p.get('title') or '—')[:50]}",
              f"holat: {badge} {p.get('status')}", ""]
     if entries:
         for a in reversed(entries):           # list_si_audit is id DESC → reverse to chronological
             ts = (a.get("ts") or "")[11:19]    # HH:MM:SS
             detail = (a.get("detail") or "").strip()
             tail = f" — {detail[:40]}" if detail else ""
-            lines.append(f"`{ts}`  {a.get('action')}{tail}")
+            lines.append(f"{ts}  {a.get('action')}{tail}")
     else:
-        lines.append("_Audit yozuvi yo'q._")
+        lines.append("Audit yozuvi yo'q.")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="⬅️ Orqaga", callback_data="silog:refresh")]])
     try:
-        await query.message.edit_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb)
+        await query.message.edit_text("\n".join(lines), reply_markup=kb)
     except TelegramBadRequest:
         pass
 

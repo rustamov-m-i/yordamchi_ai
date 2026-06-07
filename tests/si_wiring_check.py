@@ -333,6 +333,8 @@ async def main():
     check("I: sarlavha bor", "Self-improvement — holat" in txt)
     check("I: 'Tugaganlar' bo'limi bor", "Tugaganlar" in txt, txt[:200])
     check("I: deployed badge (✅) bor", "✅" in txt)
+    check("I: silog matni Markdown-belgisiz (parse-safe)",
+          "**" not in txt and "`" not in txt, txt[:120])
     kcbs = kb_cbs(handlers._silog_keyboard(props))
     check("I: siaudit tugmalari bor", any(c.startswith("siaudit:") for c in kcbs), f"{kcbs}")
     check("I: 'silog:refresh' tugmasi bor", "silog:refresh" in kcbs)
@@ -349,6 +351,8 @@ async def main():
     audit_txt = qa2.message.answers[-1][0] if qa2.message.answers else ""
     check("I: audit ko'rinishi pid + sarlavha", hpid in audit_txt and "audit zanjiri" in audit_txt)
     check("I: audit 'deploy_succeeded' ko'rsatadi", "deploy_succeeded" in audit_txt, audit_txt[:150])
+    check("I: audit matni Markdown-belgisiz (parse-safe, '_' li nomlarga qaramay)",
+          "**" not in audit_txt and "`" not in audit_txt, audit_txt[:120])
     qbad = FakeQuery("siaudit:imp-yoqnarsa")
     await handlers.cb_si_audit(qbad)
     check("I: noma'lum pid → alert", bool(qbad.answered) and qbad.answered[-1][1].get("show_alert"))
