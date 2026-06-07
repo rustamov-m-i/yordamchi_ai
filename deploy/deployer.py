@@ -89,14 +89,28 @@ class Deployer:
         return False
 
     # ── orchestration ──
+    def _checked(self, cmd: list) -> tuple:
+        r = self.run(cmd)
+        ok = getattr(r, "returncode", 0) == 0
+        out = ((getattr(r, "stdout", "") or "") + "\n" + (getattr(r, "stderr", "") or "")).strip()
+        self.events.append(("cmd", " ".join(cmd), ok, out[-300:]))
+        return ok, out
+
     def deploy(self, target: "str | None" = None) -> dict:
         """Forward-deploy with auto-rollback. Returns a result dict."""
         good = self.record_good()
         if target:
-            self.run(["git", "fetch", "origin"])
-            self.run(["git", "checkout", target])
+            ok, out = self._checked(["git", "fetch", "origin"])
+            if not ok:
+                return {"status": "failed", "good": good, "healthy": False, "error": out[-500:]}
+            ok, out = self._checked(["git", "checkout", target])
+            if not ok:
+                return {"status": "failed", "good": good, "healthy": False, "error": out[-500:]}
         else:
-            self.run(["git", "pull", "--ff-only"])
+            ok, out = self._checked(["git", "pull", "--ff-only"])
+            if not ok:
+                return {"status": "failed", "good": good, "healthy": False, "error": out[-500:]}
+
         self._restart()
 
         if self.healthy():
