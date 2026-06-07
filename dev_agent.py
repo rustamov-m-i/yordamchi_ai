@@ -307,12 +307,37 @@ async def open_and_merge_pr(branch: str, title: str, body: str = "",
                             runner: Callable = subprocess.run, auto_merge: bool = False) -> tuple:
     """Open a PR for `branch` (Gate 4); optionally merge. `runner` injectable for
     tests. Merge is NEVER automatic without explicit human approval (auto_merge gate)."""
+    def _out(r):
+        return ((getattr(r, "stdout", "") or "") + "\n" + (getattr(r, "stderr", "") or "")).strip()
+
     def _pr():
-        c = runner(["gh", "pr", "create", "--head", branch, "--title", title,
-                    "--body", body or title], cwd=ROOT, capture_output=True, text=True)
-        url = (getattr(c, "stdout", "") or "").strip()
-        if auto_merge and getattr(c, "returncode", 0) == 0:
-            runner(["gh", "pr", "merge", branch, "--merge", "--delete-branch"],
-                   cwd=ROOT, capture_output=True, text=True)
-        return getattr(c, "returncode", 0) == 0, url
+        c = runner([
+            "gh", "pr", "create",
+            "--base", "main",
+            "--head", branch,
+            "--title", title,
+            "--body", body or title,
+        ], cwd=ROOT, capture_output=True, text=True)
+
+        if getattr(c, "returncode", 0) != 0:
+            msg = _out(c)
+            # If PR already exists, reuse it instead of failing.
+            if "already exists" not in msg.lower():
+                return False, msg
+            v = runner(["gh", "pr", "view", branch, "--json", "url", "--jq", ".url"],
+                       cwd=ROOT, capture_output=True, text=True)
+            if getattr(v, "returncode", 0) != 0:
+                return False, _out(v)
+            url = (getattr(v, "stdout", "") or "").strip()
+        else:
+            url = (getattr(c, "stdout", "") or "").strip()
+
+        if auto_merge:
+            m = runner(["gh", "pr", "merge", branch, "--merge", "--delete-branch"],
+                       cwd=ROOT, capture_output=True, text=True)
+            if getattr(m, "returncode", 0) != 0:
+                return False, _out(m) or url
+
+        return True, url
+
     return await asyncio.to_thread(_pr)
