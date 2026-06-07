@@ -1065,7 +1065,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     """
     created_ids: dict[str, list[str]] = {
         "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
-        "note": [], "_failed": [], "_refresh": [],
+        "note": [], "_failed": [], "_refresh": [], "_conflict": [],
     }
 
     for action in actions:
@@ -1092,16 +1092,27 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
             elif atype == "delete_task" and target_id:
                 await database.delete_task(target_id)
             elif atype == "schedule_meeting":
-                mid = await database.create_meeting(data)
-                created_ids["meeting"].append(mid)
-                sched = scheduler_module.get_scheduler()
-                if sched and data.get("datetime_start"):
-                    sched.schedule_meeting_reminder(mid, data["datetime_start"])
-                # Push to iCloud as a FIRE-AND-FORGET background task — the user gets their
-                # bot reply within ~1 second; iCloud sync happens in parallel (typically 1-3s).
-                if config.ICLOUD_ENABLED and data.get("datetime_start"):
-                    _spawn_background(_push_meeting_to_icloud(mid, data), name=f"icloud_push:{mid}")
-                await _upsert_contacts(list(data.get("participants") or []))
+                # To'qnashuvni oldini olish: bir xil vaqtga ustma-ust uchrashuv
+                # qo'ymaymiz. Vaqti mavjud uchrashuv bilan kesishsa — yaratmaymiz
+                # va foydalanuvchini ogohlantiramiz.
+                conflicts = await database.find_meeting_conflicts(
+                    data.get("datetime_start"), data.get("datetime_end"))
+                if conflicts:
+                    created_ids["_conflict"].append(_conflict_summary(data, conflicts))
+                    logger.info(
+                        "schedule_meeting o'tkazib yuborildi — vaqt to'qnashuvi (%d ta uchrashuv)",
+                        len(conflicts))
+                else:
+                    mid = await database.create_meeting(data)
+                    created_ids["meeting"].append(mid)
+                    sched = scheduler_module.get_scheduler()
+                    if sched and data.get("datetime_start"):
+                        sched.schedule_meeting_reminder(mid, data["datetime_start"])
+                    # Push to iCloud as a FIRE-AND-FORGET background task — the user gets their
+                    # bot reply within ~1 second; iCloud sync happens in parallel (typically 1-3s).
+                    if config.ICLOUD_ENABLED and data.get("datetime_start"):
+                        _spawn_background(_push_meeting_to_icloud(mid, data), name=f"icloud_push:{mid}")
+                    await _upsert_contacts(list(data.get("participants") or []))
             elif atype == "cancel_meeting" and target_id:
                 await database.cancel_meeting(target_id)
                 sched = scheduler_module.get_scheduler()
@@ -1202,6 +1213,36 @@ _ACTION_NOUN_UZ = {
     "schedule_meeting": "uchrashuv", "cancel_meeting": "uchrashuvni bekor qilish",
     "create_note": "note", "save_contact": "kontakt",
 }
+
+
+def _fmt_meeting_when(start_iso: str | None) -> str:
+    """ISO vaqtni 'DD.MM HH:MM' ko'rinishida; o'qilmasa bo'sh satr."""
+    dt = database.parse_iso_dt(start_iso) if start_iso else None
+    return dt.strftime("%d.%m %H:%M") if dt else ""
+
+
+def _conflict_summary(data: dict, conflicts: list[dict]) -> str:
+    """Yaratilmagan uchrashuv haqida qisqa, foydalanuvchiga ko'rsatiladigan satr."""
+    title = (data.get("title") or "Uchrashuv").strip()
+    when = _fmt_meeting_when(data.get("datetime_start"))
+    clash = conflicts[0]
+    clash_title = (clash.get("title") or "Uchrashuv").strip()
+    clash_when = _fmt_meeting_when(clash.get("datetime_start"))
+    extra = f" (+{len(conflicts) - 1} ta boshqa)" if len(conflicts) > 1 else ""
+    head = f"«{title}»" + (f" ({when})" if when else "")
+    tail = f"«{clash_title}»" + (f" ({clash_when})" if clash_when else "") + extra
+    return f"{head} — {tail} bilan to'qnashadi"
+
+
+def _conflict_note(ids_by_type: dict[str, list[str]]) -> str:
+    """Vaqt to'qnashuvi tufayli qo'yilmagan uchrashuvlar haqida ogohlantirish —
+    javobga qo'shiladi, shunda jim qolib ketmaydi."""
+    conflicts = ids_by_type.get("_conflict") if ids_by_type else None
+    if not conflicts:
+        return ""
+    lines = "\n".join(f"• {c}" for c in conflicts)
+    return (f"\n\n⚠️ **Uchrashuv qo'yilmadi (vaqt band):**\n{lines}\n"
+            f"Boshqa vaqt tanlang yoki mavjud uchrashuvni bekor qiling.")
 
 
 def _failed_actions_note(ids_by_type: dict[str, list[str]]) -> str:
@@ -2010,6 +2051,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
             keyboard = _append_back_row(keyboard)
 
         text = (final_response.get("user_message") or "").strip() or "✅"
+        text += _conflict_note(ids_by_type)
         text += _failed_actions_note(ids_by_type)
         text += _overflow_note
         if progress_msg is not None:
