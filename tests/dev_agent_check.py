@@ -79,8 +79,26 @@ def test_push_pr_commands():
     ok, out = asyncio.run(dev_agent.push_branch("si/imp-1", "/tmp/wt", "msg", runner=fake))
     check("push: ok", ok is True)
     check("push: git add", ["git", "add", "-A"] in calls)
+    check("push: commit uses -c identity (global git config'ga bog'liq emas)",
+          any(a[0] == "git" and "user.email=si-bot@yordamchi.local" in a and "commit" in a
+              for a in calls), f"{calls}")
     check("push: git push -u origin branch",
           ["git", "push", "-u", "origin", "si/imp-1"] in calls)
+
+    # commit fails (no identity / nothing to commit) → ok=False AND no push (no empty branch)
+    cfail = []
+
+    class RC:
+        def __init__(self, rc):
+            self.returncode, self.stdout, self.stderr = rc, "", "nothing to commit"
+
+    def fake_commit_fail(args, **kw):
+        cfail.append(list(args))
+        return RC(1 if "commit" in args else 0)
+    okf, _ = asyncio.run(dev_agent.push_branch("si/imp-2", "/tmp/wt", "msg", runner=fake_commit_fail))
+    check("push: commit yiqilsa → ok=False", okf is False)
+    check("push: commit yiqilsa → push YO'Q (bo'sh branch oldini oladi)",
+          not any(a[:2] == ["git", "push"] for a in cfail))
 
     calls.clear()
     okp, url = asyncio.run(dev_agent.open_and_merge_pr("si/imp-1", "Title", runner=fake, auto_merge=False))

@@ -286,7 +286,16 @@ async def push_branch(branch: str, worktree: str, commit_msg: str,
     injectable so tests verify the command sequence without touching the remote."""
     def _push():
         runner(["git", "add", "-A"], cwd=worktree, capture_output=True, text=True)
-        runner(["git", "commit", "-m", commit_msg], cwd=worktree, capture_output=True, text=True)
+        # Identity via -c so the commit does NOT depend on a global git user.* being
+        # configured on the VM — without it `git commit` fails silently and the pushed
+        # branch ends up identical to main (an empty PR: "nothing to compare").
+        c = runner(["git", "-c", "user.email=si-bot@yordamchi.local",
+                    "-c", "user.name=Yordamchi SI", "commit", "-m", commit_msg],
+                   cwd=worktree, capture_output=True, text=True)
+        if getattr(c, "returncode", 1) != 0:
+            # Non-zero = no identity OR nothing to commit → never push an empty branch.
+            return False, ("commit muvaffaqiyatsiz: "
+                           + (getattr(c, "stderr", "") or getattr(c, "stdout", "") or "")[:200])
         r = runner(["git", "push", "-u", "origin", branch], cwd=worktree,
                    capture_output=True, text=True)
         ok = getattr(r, "returncode", 0) == 0
