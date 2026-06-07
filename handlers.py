@@ -328,14 +328,16 @@ def _two_per_row(labels: list[str], solo: set[str]) -> list[list[KeyboardButton]
 
 
 def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply kbd Vazifalar bo'limida — Barchasi va Asosiy menyu alohida qator,
-    qolganlari 2 tadan."""
+    """Reply kbd Vazifalar bo'limida — barcha tugmalar 2 qatorda."""
     return ReplyKeyboardMarkup(
-        keyboard=_two_per_row(
-            [TBTN_TASKS_ACTIVE, TBTN_TASKS_TODAY, TBTN_TASKS_IMPORTANT,
-             TBTN_TASKS_OVERDUE, TBTN_TASKS_DONE, TBTN_TASKS_ALL,
-             TBTN_TASKS_CATEGORIES, TBTN_TASKS_NEW, TBTN_TASKS_SEARCH, BTN_BACK_MAIN],
-            solo={TBTN_TASKS_ALL, BTN_BACK_MAIN}),
+        keyboard=[
+            [KeyboardButton(text=TBTN_TASKS_ACTIVE), KeyboardButton(text=TBTN_TASKS_TODAY),
+             KeyboardButton(text=TBTN_TASKS_IMPORTANT), KeyboardButton(text=TBTN_TASKS_OVERDUE),
+             KeyboardButton(text=TBTN_TASKS_DONE)],
+            [KeyboardButton(text=TBTN_TASKS_ALL), KeyboardButton(text=TBTN_TASKS_CATEGORIES),
+             KeyboardButton(text=TBTN_TASKS_NEW), KeyboardButton(text=TBTN_TASKS_SEARCH),
+             KeyboardButton(text=BTN_BACK_MAIN)],
+        ],
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Filter tanlang yoki yangi vazifa...",
     )

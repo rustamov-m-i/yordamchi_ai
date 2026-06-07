@@ -631,8 +631,13 @@ async def main():
     check("kbd Eslatma: filtrlar 2 tadan ([Bugun, Yuborilgan])",
           [handlers.RBTN_REMINDERS_TODAY, handlers.RBTN_REMINDERS_SENT] in _rk)
     _tk = [[b.text for b in row] for row in handlers.tasks_section_reply_keyboard().keyboard]
-    check("kbd Vazifa: Barchasi + Asosiy menyu alohida",
-          [handlers.TBTN_TASKS_ALL] in _tk and [handlers.BTN_BACK_MAIN] in _tk)
+    check("kbd Vazifa: tugmalar 2 qatorda joylashgan",
+          len(_tk) == 2 and set(_tk[0] + _tk[1]) == {
+              handlers.TBTN_TASKS_ACTIVE, handlers.TBTN_TASKS_TODAY,
+              handlers.TBTN_TASKS_IMPORTANT, handlers.TBTN_TASKS_OVERDUE,
+              handlers.TBTN_TASKS_DONE, handlers.TBTN_TASKS_ALL,
+              handlers.TBTN_TASKS_CATEGORIES, handlers.TBTN_TASKS_NEW,
+              handlers.TBTN_TASKS_SEARCH, handlers.BTN_BACK_MAIN})
 
     print("\n── Eslatma tahrir: matn + OVOZ ishlaydi (bug tuzatildi) ──")
     class _ReFakeState:
