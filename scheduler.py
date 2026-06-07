@@ -361,7 +361,10 @@ class YordamchiScheduler:
         except TelegramBadRequest as e:
             if "parse" in str(e).lower():
                 try:
-                    await self.bot.send_message(config.PRINCIPAL_USER_ID, text, reply_markup=reply_markup)
+                    # Explicit None overrides the bot's default Markdown (a bare
+                    # send would still inherit it and fail the same way).
+                    await self.bot.send_message(config.PRINCIPAL_USER_ID, text,
+                                                parse_mode=None, reply_markup=reply_markup)
                 except Exception:
                     logger.exception("Failed to send scheduled message (plain fallback)")
             else:

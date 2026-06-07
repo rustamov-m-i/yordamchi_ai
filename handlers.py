@@ -90,7 +90,9 @@ async def _safe_answer(message: Message, text: str, **kwargs) -> None:
             await message.answer(chunk, **chunk_kwargs)
         except TelegramBadRequest as e:
             if "can't parse entities" in str(e).lower() or "parse" in str(e).lower():
-                chunk_kwargs.pop("parse_mode", None)
+                # Explicit None overrides the bot's DEFAULT parse_mode (Markdown);
+                # merely popping the kwarg would still fall back to that default.
+                chunk_kwargs["parse_mode"] = None
                 await message.answer(chunk, **chunk_kwargs)
             else:
                 raise
@@ -5358,7 +5360,8 @@ async def _si_notify(bot: Bot, text: str,
                                parse_mode="Markdown", reply_markup=reply_markup)
     except TelegramBadRequest:
         try:
-            await bot.send_message(config.PRINCIPAL_USER_ID, text, reply_markup=reply_markup)
+            await bot.send_message(config.PRINCIPAL_USER_ID, text,
+                                   parse_mode=None, reply_markup=reply_markup)
         except Exception:
             logger.exception("SI notify failed")
     except Exception:
@@ -5613,7 +5616,7 @@ def _silog_keyboard(props: list) -> InlineKeyboardMarkup:
 async def cmd_silog(message: Message) -> None:
     """Self-improvement status + audit view (read-only)."""
     props = await database.list_improvement_proposals(limit=20)
-    await _safe_answer(message, _format_silog_text(props),
+    await _safe_answer(message, _format_silog_text(props), parse_mode=None,
                        reply_markup=_silog_keyboard(props))
 
 
@@ -5622,7 +5625,7 @@ async def cb_silog_refresh(query: CallbackQuery) -> None:
     props = await database.list_improvement_proposals(limit=20)
     await query.answer("🔄 Yangilandi")
     try:
-        await query.message.edit_text(_format_silog_text(props),
+        await query.message.edit_text(_format_silog_text(props), parse_mode=None,
                                       reply_markup=_silog_keyboard(props))
     except TelegramBadRequest:
         pass
@@ -5655,7 +5658,7 @@ async def cb_si_audit(query: CallbackQuery) -> None:
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="⬅️ Orqaga", callback_data="silog:refresh")]])
     try:
-        await query.message.edit_text("\n".join(lines), reply_markup=kb)
+        await query.message.edit_text("\n".join(lines), parse_mode=None, reply_markup=kb)
     except TelegramBadRequest:
         pass
 

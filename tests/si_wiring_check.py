@@ -57,13 +57,13 @@ class FakeBot:
 class FakeMsg:
     def __init__(self, text=""):
         self.text = text
-        self.answers = []
+        self.answers = []   # (text, reply_markup, parse_mode)
 
     async def answer(self, t, **k):
-        self.answers.append((t, k.get("reply_markup")))
+        self.answers.append((t, k.get("reply_markup"), k.get("parse_mode")))
 
     async def edit_text(self, t, **k):
-        self.answers.append(("EDIT:" + t, k.get("reply_markup")))
+        self.answers.append(("EDIT:" + t, k.get("reply_markup"), k.get("parse_mode")))
 
 
 class FakeQuery:
@@ -341,6 +341,11 @@ async def main():
     ms = FakeMsg("/silog")
     await handlers.cmd_silog(ms)
     check("I: /silog xabar yubordi", bool(ms.answers))
+    # REGRESSIYA: bot default'i ParseMode.MARKDOWN — /silog aniq parse_mode=None
+    # bermasa, '_' li status/audit nomlari Markdown deb o'qilib xato beradi.
+    check("I: /silog parse_mode=None (default Markdown bekor)",
+          bool(ms.answers) and all(a[2] is None for a in ms.answers),
+          str([a[2] for a in ms.answers]))
     qr = FakeQuery("silog:refresh")
     await handlers.cb_silog_refresh(qr)
     check("I: refresh javob + edit", bool(qr.answered)
@@ -353,6 +358,8 @@ async def main():
     check("I: audit 'deploy_succeeded' ko'rsatadi", "deploy_succeeded" in audit_txt, audit_txt[:150])
     check("I: audit matni Markdown-belgisiz (parse-safe, '_' li nomlarga qaramay)",
           "**" not in audit_txt and "`" not in audit_txt, audit_txt[:120])
+    check("I: audit parse_mode=None (default Markdown bekor)",
+          bool(qa2.message.answers) and qa2.message.answers[-1][2] is None)
     qbad = FakeQuery("siaudit:imp-yoqnarsa")
     await handlers.cb_si_audit(qbad)
     check("I: noma'lum pid → alert", bool(qbad.answered) and qbad.answered[-1][1].get("show_alert"))
