@@ -1687,6 +1687,72 @@ def _agenda_to_text(value) -> Optional[str]:
     return str(value)
 
 
+# Uchrashuv davomiyligi noma'lum (datetime_end yo'q) bo'lsa — taxminiy uzunlik.
+# Bu qiymat handlers._DEFAULT_MEETING_MIN bilan mos.
+DEFAULT_MEETING_MINUTES = 60
+
+
+def _meeting_interval(start_iso: Optional[str],
+                      end_iso: Optional[str]) -> Optional[tuple[datetime, datetime]]:
+    """Uchrashuv (boshlanish, tugash) oraliqini qaytaradi. datetime_end yo'q yoki
+    boshlanishdan keyin bo'lmasa — taxminiy davomiylik qo'shiladi. Boshlanishni
+    o'qib bo'lmasa None."""
+    start = parse_iso_dt(start_iso)
+    if start is None:
+        return None
+    end = parse_iso_dt(end_iso)
+    if end is None or end <= start:
+        end = start + timedelta(minutes=DEFAULT_MEETING_MINUTES)
+    return start, end
+
+
+def _intervals_overlap(a_start: datetime, a_end: datetime,
+                       b_start: datetime, b_end: datetime) -> bool:
+    """Yarim-ochiq [start, end) oraliqlar kesishsa True. Ketma-ket uchrashuvlar
+    (biri tugagan payt ikkinchisi boshlansa) to'qnashuv HISOBLANMAYDI."""
+    return a_start < b_end and b_start < a_end
+
+
+async def find_meeting_conflicts(start_iso: Optional[str],
+                                 end_iso: Optional[str] = None,
+                                 exclude_id: Optional[str] = None) -> list[dict]:
+    """Vaqti [start_iso, end_iso) bilan ustma-ust tushadigan faol uchrashuvlarni
+    qaytaradi — ikki marta band qilishni (double-booking) oldini olish uchun.
+    Yakunlangan uchrashuvlar va boshlanishi o'qilmaydiganlar e'tiborga olinmaydi.
+    exclude_id — qayta rejalashtirishda joriy uchrashuvni o'tkazib yuborish uchun."""
+    new_iv = _meeting_interval(start_iso, end_iso)
+    if new_iv is None:
+        return []
+    new_start, new_end = new_iv
+
+    # Yangi uchrashuvdan oldin boshlangan uzun uchrashuvni o'tkazib yubormaslik
+    # uchun oraliqni bir kun kengaytiramiz; aniq tekshiruv Python tomonida.
+    lo = (new_start - timedelta(days=1)).isoformat()
+    hi = (new_end + timedelta(days=1)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM meetings
+               WHERE datetime_start BETWEEN ? AND ?
+                 AND completed_at IS NULL
+               ORDER BY datetime_start ASC""",
+            (lo, hi),
+        )
+        rows = await cur.fetchall()
+
+    conflicts: list[dict] = []
+    for r in rows:
+        m = _row_to_meeting(r)
+        if exclude_id and m.get("id") == exclude_id:
+            continue
+        iv = _meeting_interval(m.get("datetime_start"), m.get("datetime_end"))
+        if iv is None:
+            continue
+        if _intervals_overlap(new_start, new_end, iv[0], iv[1]):
+            conflicts.append(m)
+    return conflicts
+
+
 async def create_meeting(data: dict) -> str:
     meeting_id = new_id("m-")
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
