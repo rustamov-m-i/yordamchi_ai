@@ -631,8 +631,9 @@ async def main():
     check("kbd Eslatma: filtrlar 2 tadan ([Bugun, Yuborilgan])",
           [handlers.RBTN_REMINDERS_TODAY, handlers.RBTN_REMINDERS_SENT] in _rk)
     _tk = [[b.text for b in row] for row in handlers.tasks_section_reply_keyboard().keyboard]
-    check("kbd Vazifa: tugmalar 2 qatorda joylashgan",
-          len(_tk) == 2 and set(_tk[0] + _tk[1]) == {
+    _tk_flat = [b for row in _tk for b in row]
+    check("kbd Vazifa: 2 tadan bir qatorda (uzun yorliq kesilmaydi)",
+          all(len(r) <= 2 for r in _tk) and set(_tk_flat) == {
               handlers.TBTN_TASKS_ACTIVE, handlers.TBTN_TASKS_TODAY,
               handlers.TBTN_TASKS_IMPORTANT, handlers.TBTN_TASKS_OVERDUE,
               handlers.TBTN_TASKS_DONE, handlers.TBTN_TASKS_ALL,

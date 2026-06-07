@@ -328,19 +328,17 @@ def _two_per_row(labels: list[str], solo: set[str]) -> list[list[KeyboardButton]
 
 
 def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply kbd Vazifalar bo'limida — 2 qator: tepa = 6 filtr ('qaysi vazifalar'),
-    past = 4 amal ('nima qilaman'). 'Barchasi' ham filtr, shuning uchun tepada;
-    pastdagi uzun yorliqlarga (Kategoriyalar/Qidirish) shu bilan joy ochiladi."""
+    """Reply kbd Vazifalar bo'limida — 2 tadan bir qatorda. Har tugma ekranning
+    yarmini oladi, shuning uchun uzun yorliqlar ('Vazifa qidirish') ham kesilmaydi.
+    Tartib: filtrlar yuqorida (hozir → diqqat → ko'rib chiqish), amallar pastda."""
     return ReplyKeyboardMarkup(
-        keyboard=[
-            # 1-qator — FILTRLAR (qisqa yorliqlar, 6 ta sig'adi)
-            [KeyboardButton(text=TBTN_TASKS_ACTIVE), KeyboardButton(text=TBTN_TASKS_TODAY),
-             KeyboardButton(text=TBTN_TASKS_IMPORTANT), KeyboardButton(text=TBTN_TASKS_OVERDUE),
-             KeyboardButton(text=TBTN_TASKS_DONE), KeyboardButton(text=TBTN_TASKS_ALL)],
-            # 2-qator — AMALLAR (uzun yorliqlar, 4 taga keng joy)
-            [KeyboardButton(text=TBTN_TASKS_CATEGORIES), KeyboardButton(text=TBTN_TASKS_NEW),
-             KeyboardButton(text=TBTN_TASKS_SEARCH), KeyboardButton(text=BTN_BACK_MAIN)],
-        ],
+        keyboard=_two_per_row(
+            [TBTN_TASKS_ACTIVE, TBTN_TASKS_TODAY,        # hozir / bugun
+             TBTN_TASKS_IMPORTANT, TBTN_TASKS_OVERDUE,   # diqqat: muhim / o'tgan
+             TBTN_TASKS_DONE, TBTN_TASKS_ALL,            # ko'rib chiqish: bajarilgan / barchasi
+             TBTN_TASKS_CATEGORIES, TBTN_TASKS_NEW,      # amallar: bo'limlar / yangi vazifa
+             TBTN_TASKS_SEARCH, BTN_BACK_MAIN],          # qidiruv / asosiy menyu
+            solo=set()),
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Filter tanlang yoki yangi vazifa...",
     )
