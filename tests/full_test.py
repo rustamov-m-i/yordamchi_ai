@@ -398,6 +398,14 @@ async def test_handlers_surface():
         t("handlers", "Yangi submenu: 5 options + Back",
           sum(len(row) for row in nk.inline_keyboard) == 6)
 
+    # /start onboarding message greets the user with "Salom" before the title
+    import inspect
+    start_src = inspect.getsource(handlers.cmd_start)
+    salom_idx = start_src.find("Salom")
+    title_idx = start_src.find("shaxsiy AI yordamchingiz")
+    t("handlers", "cmd_start greets with 'Salom' before the title",
+      salom_idx != -1 and title_idx != -1 and salom_idx < title_idx)
+
     # Edit FSM exists
     t("handlers", "PlanFSM + TaskEditFSM defined",
       hasattr(handlers, "PlanFSM") and hasattr(handlers, "TaskEditFSM"))
