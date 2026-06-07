@@ -279,6 +279,30 @@ CREATE TABLE IF NOT EXISTS categories (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS improvement_proposals (
+    id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'auto',
+    title TEXT NOT NULL,
+    problem TEXT,
+    evidence TEXT,
+    root_cause TEXT,
+    fix_kind TEXT,
+    proposed_change TEXT,
+    impact_estimate TEXT,
+    status TEXT NOT NULL DEFAULT 'new'
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON improvement_proposals(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS self_improvement_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    proposal_id TEXT,
+    action TEXT NOT NULL,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_si_audit_ts ON self_improvement_audit(ts DESC);
 """
 
 
@@ -2595,6 +2619,110 @@ async def recent_conversation(days: int = 7, limit: int = 500) -> list[dict]:
         rows = [dict(r) for r in await cur.fetchall()]
     rows.reverse()
     return rows
+
+
+# ───────────────── SELF-IMPROVEMENT — PROPOSALS (Phase 2) ─────────────────
+# improvement_proposals: the queue of supervised improvement proposals (Channel A
+# nightly auto-diagnosis, or Channel B /improve in Phase 3). Surfacing & approval
+# live in Phase 3 — these are plain CRUD helpers. Unknown fix_kind/status/source
+# from a malformed LLM proposal are coerced to safe defaults.
+
+_PROPOSAL_FIX_KINDS = {"prompt", "code", "config", "data", "feature"}
+_PROPOSAL_STATUSES = {"new", "approved", "rejected", "in_progress", "pr_open",
+                      "merged", "deployed", "reverted", "done", "requires_manual"}
+
+
+async def create_improvement_proposal(data: dict) -> str:
+    """Insert one proposal; returns its id ('imp-…')."""
+    pid = new_id("imp-")
+    fix_kind = (data.get("fix_kind") or "").strip().lower()
+    if fix_kind not in _PROPOSAL_FIX_KINDS:
+        fix_kind = "code"
+    status = (data.get("status") or "new").strip().lower()
+    if status not in _PROPOSAL_STATUSES:
+        status = "new"
+    source = (data.get("source") or "auto").strip().lower()
+    if source not in ("auto", "manual"):
+        source = "auto"
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO improvement_proposals
+                 (id, created_at, source, title, problem, evidence, root_cause,
+                  fix_kind, proposed_change, impact_estimate, status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (pid, datetime.now(TZ).isoformat(), source, (data.get("title") or "—")[:200],
+             data.get("problem"), data.get("evidence"), data.get("root_cause"),
+             fix_kind, data.get("proposed_change"), data.get("impact_estimate"), status),
+        )
+        await db.commit()
+    return pid
+
+
+async def list_improvement_proposals(status_in: "list | None" = None, limit: int = 50) -> list[dict]:
+    q = "SELECT * FROM improvement_proposals"
+    params: list = []
+    if status_in:
+        q += " WHERE status IN (%s)" % ",".join("?" * len(status_in))
+        params += list(status_in)
+    q += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(q, params)
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_improvement_proposal(pid: str) -> "dict | None":
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM improvement_proposals WHERE id = ?", (pid,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def update_proposal_status(pid: str, status: str) -> bool:
+    status = (status or "").strip().lower()
+    if status not in _PROPOSAL_STATUSES:
+        return False
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "UPDATE improvement_proposals SET status = ? WHERE id = ?", (status, pid))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def count_proposals_by_status() -> dict:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT status, COUNT(*) AS n FROM improvement_proposals GROUP BY status")
+        return {r["status"]: r["n"] for r in await cur.fetchall()}
+
+
+# Full audit trail for the self-improvement loop (spec §9 #6): every prepare /
+# push / merge / reject / deploy is logged here, reviewable end to end.
+async def log_si_audit(action: str, proposal_id: "str | None" = None,
+                       detail: "str | None" = None) -> None:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO self_improvement_audit (ts, proposal_id, action, detail) "
+            "VALUES (?,?,?,?)",
+            (datetime.now(TZ).isoformat(), proposal_id, action, (detail or "")[:2000]))
+        await db.commit()
+
+
+async def list_si_audit(limit: int = 50, proposal_id: "str | None" = None) -> list[dict]:
+    q = "SELECT * FROM self_improvement_audit"
+    params: list = []
+    if proposal_id:
+        q += " WHERE proposal_id = ?"
+        params.append(proposal_id)
+    q += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(q, params)
+        return [dict(r) for r in await cur.fetchall()]
 
 
 async def purge_old_audit_logs(retention_days: int) -> int:

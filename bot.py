@@ -26,6 +26,7 @@ from aiogram.types import BotCommand, ErrorEvent, MenuButtonDefault
 import config
 import database
 import handlers
+import heartbeat
 from fsm_storage import SQLiteStorage
 from scheduler import YordamchiScheduler
 
@@ -79,6 +80,9 @@ async def _register_bot_commands(bot: Bot) -> None:
         BotCommand(command="settings", description="⚙️ Sozlamalar"),
         BotCommand(command="calendar", description="📆 iCloud kalendar"),
         BotCommand(command="diagnostics", description="🩺 Bot holati"),
+        BotCommand(command="improvements", description="💡 Yaxshilanish takliflari"),
+        BotCommand(command="improve", description="✍️ Yaxshilanish so'rovi"),
+        BotCommand(command="autopilot", description="🤖 Self-improve: on/off"),
         BotCommand(command="backup", description="💾 Backup yaratish"),
         BotCommand(command="cancel", description="✕ Joriy amalni bekor qilish"),
         BotCommand(command="help", description="Yordam"),
@@ -215,6 +219,7 @@ async def main() -> None:
 
     me = await bot.get_me()
     logger.info("Bot started: @%s (id=%s). Principal user_id=%s", me.username, me.id, config.PRINCIPAL_USER_ID)
+    heartbeat.write_heartbeat()  # initial liveness signal for the supervised deployer (Phase 5)
 
     polling_task = asyncio.create_task(
         dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())

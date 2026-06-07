@@ -1,0 +1,33 @@
+# Yordamchi — supervised DEPLOYER (Phase 5). A oneshot unit that runs the deployer
+# OUTSIDE the bot process, so it survives the bot dying and can roll back.
+#
+# Trigger it from a PATH unit (watch data/deploy_request.json) or a short timer.
+# The deployer reads the signal the bot writes on Gate-5/6 approval, then:
+#   record GOOD → git pull → restart yordamchi → health-check → rollback on failure.
+#
+# Install (on the VM, paths adjusted to your deployment):
+#   1) sudo cp deploy/yordamchi-deployer.service /etc/systemd/system/
+#   2) sudo cp deploy/yordamchi-deployer.path    /etc/systemd/system/   # (optional watcher)
+#   3) Scoped sudo (spec §9 #5) — the deployer user may ONLY restart the bot:
+#        # /etc/sudoers.d/yordamchi-deployer
+#        yordamchi ALL=(root) NOPASSWD: /bin/systemctl restart yordamchi, \
+#                                       /bin/systemctl reset-failed yordamchi
+#   4) sudo systemctl daemon-reload
+#
+# The deployer's git rights are limited to this repo; it never touches .env,
+# config.py, redaction.py, the deployer itself, or CI (protected paths).
+
+[Unit]
+Description=Yordamchi — supervised deployer (one-shot)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=yordamchi
+WorkingDirectory=/opt/yordamchi
+Environment=YORDAMCHI_REPO=/opt/yordamchi
+Environment=YORDAMCHI_SERVICE=yordamchi
+ExecStart=/opt/yordamchi/venv/bin/python deploy/deployer.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=yordamchi-deployer

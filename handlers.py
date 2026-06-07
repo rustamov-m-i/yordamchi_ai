@@ -1,7 +1,9 @@
 """Telegram message and callback handlers."""
 
 import asyncio
+import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -303,23 +305,37 @@ GBTN_SETTINGS_CREATE_CONFIRM = "✅ Yaratish tasdig'i"
 GBTN_SETTINGS_CALENDAR = "📅 Kalendar holati"
 
 
+def _two_per_row(labels: list[str], solo: set[str]) -> list[list[KeyboardButton]]:
+    """Reply-kbd tartibi: `solo` yorliqlari ALOHIDA to'liq qator oladi; qolgan
+    tugmalar 2 tadan yonma-yon joylashadi (tartib saqlanadi). Toq son bo'lsa,
+    oxirgisi yakka qoladi."""
+    rows: list[list[KeyboardButton]] = []
+    pending: list[str] = []
+
+    def _flush():
+        for i in range(0, len(pending), 2):
+            rows.append([KeyboardButton(text=t) for t in pending[i:i + 2]])
+        pending.clear()
+
+    for lbl in labels:
+        if lbl in solo:
+            _flush()
+            rows.append([KeyboardButton(text=lbl)])
+        else:
+            pending.append(lbl)
+    _flush()
+    return rows
+
+
 def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply kbd Vazifalar bo'limida — filterlar va sub-amallar."""
+    """Reply kbd Vazifalar bo'limida — Barchasi va Asosiy menyu alohida qator,
+    qolganlari 2 tadan."""
     return ReplyKeyboardMarkup(
-        keyboard=[
-            # Barchasi — alohida, eng tepada (to'liq kenglik).
-            # Keyin fokus filtrlari, so'ng arxiv/ko'rib chiqish.
-            [KeyboardButton(text=TBTN_TASKS_ALL)],
-            [KeyboardButton(text=TBTN_TASKS_ACTIVE),
-             KeyboardButton(text=TBTN_TASKS_TODAY),
-             KeyboardButton(text=TBTN_TASKS_IMPORTANT)],
-            [KeyboardButton(text=TBTN_TASKS_OVERDUE),
-             KeyboardButton(text=TBTN_TASKS_DONE)],
-            [KeyboardButton(text=TBTN_TASKS_CATEGORIES)],
-            [KeyboardButton(text=TBTN_TASKS_NEW),
-             KeyboardButton(text=TBTN_TASKS_SEARCH)],
-            [KeyboardButton(text=BTN_BACK_MAIN)],
-        ],
+        keyboard=_two_per_row(
+            [TBTN_TASKS_ACTIVE, TBTN_TASKS_TODAY, TBTN_TASKS_IMPORTANT,
+             TBTN_TASKS_OVERDUE, TBTN_TASKS_DONE, TBTN_TASKS_ALL,
+             TBTN_TASKS_CATEGORIES, TBTN_TASKS_NEW, TBTN_TASKS_SEARCH, BTN_BACK_MAIN],
+            solo={TBTN_TASKS_ALL, BTN_BACK_MAIN}),
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Filter tanlang yoki yangi vazifa...",
     )
@@ -328,17 +344,11 @@ def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
 def meetings_section_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply kbd Uchrashuvlar bo'limida — filterlar va sub-amallar."""
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=MBTN_MEETINGS_WEEK),
-             KeyboardButton(text=MBTN_MEETINGS_TODAY),
-             KeyboardButton(text=MBTN_MEETINGS_TOMORROW)],
-            [KeyboardButton(text=MBTN_MEETINGS_ALL),
-             KeyboardButton(text=MBTN_MEETINGS_PAST)],
-            [KeyboardButton(text=MBTN_MEETINGS_PROTOCOLS)],
-            [KeyboardButton(text=MBTN_MEETINGS_NEW),
-             KeyboardButton(text=MBTN_MEETINGS_SEARCH)],
-            [KeyboardButton(text=BTN_BACK_MAIN)],
-        ],
+        keyboard=_two_per_row(
+            [MBTN_MEETINGS_WEEK, MBTN_MEETINGS_TODAY, MBTN_MEETINGS_TOMORROW,
+             MBTN_MEETINGS_PAST, MBTN_MEETINGS_ALL,
+             MBTN_MEETINGS_NEW, MBTN_MEETINGS_SEARCH, MBTN_MEETINGS_PROTOCOLS, BTN_BACK_MAIN],
+            solo={MBTN_MEETINGS_ALL, BTN_BACK_MAIN}),
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Filter tanlang yoki yangi uchrashuv...",
     )
@@ -347,14 +357,10 @@ def meetings_section_reply_keyboard() -> ReplyKeyboardMarkup:
 def reminders_section_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply kbd Eslatmalar bo'limida — filterlar va asosiy amallar."""
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=RBTN_REMINDERS_TODAY),
-             KeyboardButton(text=RBTN_REMINDERS_SENT),
-             KeyboardButton(text=RBTN_REMINDERS_ALL)],
-            [KeyboardButton(text=RBTN_REMINDERS_NEW),
-             KeyboardButton(text=RBTN_REMINDERS_SEARCH)],
-            [KeyboardButton(text=BTN_BACK_MAIN)],
-        ],
+        keyboard=_two_per_row(
+            [RBTN_REMINDERS_TODAY, RBTN_REMINDERS_SENT, RBTN_REMINDERS_ALL,
+             RBTN_REMINDERS_NEW, RBTN_REMINDERS_SEARCH, BTN_BACK_MAIN],
+            solo={RBTN_REMINDERS_ALL, BTN_BACK_MAIN}),
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Eslatma tanlang yoki yangi eslatma...",
     )
@@ -3215,14 +3221,26 @@ async def _build_briefing_text() -> str:
     date_label_upper = f"{now.day}-{UZ_MONTHS_FULL[now.month - 1].upper()}"
     DIVIDER = "━" * 20
 
+    # Self-improvement: pending proposal count (Phase 3) — computed once, surfaced in
+    # BOTH the quiet-day and the full briefing when > 0.
+    try:
+        _pending_props = (await database.count_proposals_by_status()).get("new", 0)
+    except Exception:
+        _pending_props = 0
+    _prop_line = (f"💡 **{_pending_props} ta yaxshilanish taklifi** — /improvements"
+                  if _pending_props else None)
+
     if not today_tasks and not today_meetings and not overdue:
-        return "\n".join([
+        _quiet = [
             f"🗓 **BUGUN · {date_label_upper}**",
             "",
             "Bugun uchun aktiv vazifa yoki uchrashuv yo'q.",
             "",
             "_Kun boshida 1-2 ta muhim vazifani rejalashtiring._",
-        ])
+        ]
+        if _prop_line:
+            _quiet += ["", _prop_line]
+        return "\n".join(_quiet)
 
     def _muhimlik_emoji(priority: str) -> str:
         # ⚡ only for Shoshilinch (P0); 🔹 for everything else
@@ -3331,6 +3349,10 @@ async def _build_briefing_text() -> str:
 
     kun_oxiri = ("Yopilgan, qolgan va kechikayotgan vazifalar bo'yicha "
                  "qisqa qayta hisobot chiqarish.")
+
+    # Self-improvement: pending proposal line (Phase 3) — _prop_line computed above.
+    if _prop_line:
+        lines += ["", _prop_line]
 
     lines.extend([
         DIVIDER, "",
@@ -5124,6 +5146,410 @@ async def cmd_qayd(message: Message, state: FSMContext | None = None) -> None:
         parse_mode="Markdown",
         reply_markup=single_back_keyboard("nav_notes"),
     )
+
+
+# ───────────────── SELF-IMPROVEMENT — PROPOSAL GATE (Phase 3) ─────────────────
+# /improvements (list + approve/reject/details), /improve <request> (Channel B),
+# /autopilot on|off (master kill switch). Principal-gated by the auth middleware.
+# Approval ONLY flips status to 'approved' — it starts NO implementation (Phase 4
+# does not exist yet). Rejection sets 'rejected' and triggers nothing.
+
+_PROP_FIX_LABELS = {"prompt": "Prompt", "code": "Kod", "config": "Sozlama",
+                    "data": "Ma'lumot", "feature": "Yangi imkoniyat"}
+
+
+def _format_proposal_card(p: dict, full: bool = False) -> str:
+    src = "🤖 Avto" if p.get("source") == "auto" else "✍️ So'rov"
+    kind = _PROP_FIX_LABELS.get(p.get("fix_kind"), p.get("fix_kind") or "—")
+    manual = p.get("status") == "requires_manual"
+    lines = ["📋 **" + (p.get("title") or "—") + "**", "",
+             f"{src} · {kind}" + ("  ·  ⚠️ qo'lda spec kerak" if manual else "")]
+    if p.get("problem"):
+        lines += ["", f"❗️ {p['problem']}"]
+    if full:
+        if p.get("evidence"):
+            lines += ["", f"📊 Dalil: {p['evidence']}"]
+        if p.get("root_cause"):
+            lines += [f"🔍 Sabab: {p['root_cause']}"]
+        if p.get("proposed_change"):
+            lines += ["", f"🔧 Taklif: {p['proposed_change']}"]
+        if p.get("impact_estimate"):
+            lines += [f"📈 Ta'sir: {p['impact_estimate']}"]
+    return "\n".join(lines)
+
+
+def _proposal_keyboard(p: dict) -> InlineKeyboardMarkup:
+    pid = p["id"]
+    rows = []
+    if p.get("status") != "requires_manual":   # requires_manual can't be auto-built → no Approve
+        rows.append([
+            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"impapprove:{pid}"),
+            InlineKeyboardButton(text="❌ Rad et", callback_data=f"impreject:{pid}"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton(text="❌ Rad et", callback_data=f"impreject:{pid}")])
+    rows.append([InlineKeyboardButton(text="📄 Batafsil", callback_data=f"impdetails:{pid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.message(Command("improvements"))
+async def cmd_improvements(message: Message) -> None:
+    """List pending self-improvement proposals (Channel A + B) for Gate-1 approval."""
+    props = await database.list_improvement_proposals(status_in=["new", "requires_manual"], limit=20)
+    if not props:
+        await message.answer("💡 **Yaxshilanish takliflari**\n\nHozircha yangi taklif yo'q.",
+                             parse_mode="Markdown")
+        return
+    await message.answer(f"💡 **Yaxshilanish takliflari ({len(props)})**", parse_mode="Markdown")
+    for p in props:
+        await _safe_answer(message, _format_proposal_card(p), parse_mode="Markdown",
+                           reply_markup=_proposal_keyboard(p))
+
+
+@router.message(Command("improve"))
+async def cmd_improve(message: Message) -> None:
+    """Channel B: the principal requests a feature/fix. Stores a source=manual
+    proposal and shows the Gate-1 scope confirmation. No LLM — the raw request IS
+    the scope; the dev_agent refines it in Phase 4."""
+    text = (message.text or "").removeprefix("/improve").strip()
+    if not text:
+        await message.answer(
+            "✍️ **Yaxshilanish so'rovi**\n\nFoydalanish: `/improve <nima qo'shay yoki tuzatay>`\n"
+            "Masalan: `/improve eslatmalarga snooze tugmasi qo'sh`", parse_mode="Markdown")
+        return
+    pid = await database.create_improvement_proposal({
+        "source": "manual", "title": text[:120], "problem": "Principal so'rovi (Channel B).",
+        "proposed_change": text, "fix_kind": "feature", "status": "new",
+    })
+    p = await database.get_improvement_proposal(pid)
+    await _safe_answer(message, "✍️ **So'rov qabul qilindi — tasdiqlaysizmi?**\n\n"
+                       + _format_proposal_card(p), parse_mode="Markdown",
+                       reply_markup=_proposal_keyboard(p))
+
+
+@router.message(Command("autopilot"))
+async def cmd_autopilot(message: Message) -> None:
+    """Master kill switch for the self-improvement loop: `/autopilot on|off`."""
+    arg = (message.text or "").removeprefix("/autopilot").strip().lower()
+    if arg in ("on", "yoq", "yoqish", "1", "true"):
+        await database.set_setting("autopilot_enabled", True)
+        await message.answer("🟢 **Autopilot YOQILDI.**\n\nTungi self-diagnoz (02:00) ishlaydi va "
+                             "takliflar yaratadi. O'chirish: `/autopilot off`", parse_mode="Markdown")
+    elif arg in ("off", "ochir", "o'chir", "0", "false"):
+        await database.set_setting("autopilot_enabled", False)
+        await message.answer("⚪️ **Autopilot O'CHIRILDI.**\n\nTungi self-diagnoz to'xtaydi.",
+                             parse_mode="Markdown")
+    else:
+        cur = (await database.get_settings()).get("autopilot_enabled", False)
+        state_lbl = "🟢 YOQILGAN" if cur else "⚪️ O'CHIRILGAN"
+        await message.answer(f"⚙️ **Autopilot holati:** {state_lbl}\n\n"
+                             "`/autopilot on` — yoqish · `/autopilot off` — o'chirish",
+                             parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("impapprove:"))
+async def cb_improvement_approve(query: CallbackQuery) -> None:
+    """Gate 1 ✅ — approve. ONLY flips status to 'approved'; starts NO implementation."""
+    pid = query.data.split(":", 1)[1]
+    p = await database.get_improvement_proposal(pid)
+    if not p:
+        await query.answer("Taklif topilmadi.", show_alert=True)
+        return
+    if p.get("status") == "requires_manual":
+        await query.answer("Bu qo'lda spec talab qiladi — auto-tasdiqlanmaydi.", show_alert=True)
+        return
+    await database.update_proposal_status(pid, "approved")
+    await query.answer("✅ Tasdiqlandi")
+    try:
+        await query.message.edit_text(
+            "✅ **Tasdiqlandi** (status: approved)\n\n" + _format_proposal_card(p)
+            + "\n\n_Tayyor bo'lsangiz **🛠 Implement qil** — izolyatsiyalangan worktree'da "
+              "kod yoziladi va testlardan o'tkaziladi. Hech narsa avtomatik deploy bo'lmaydi._",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🛠 Implement qil", callback_data=f"siimpl:{pid}"),
+                InlineKeyboardButton(text="❌ Bekor", callback_data=f"sicancel:{pid}"),
+            ]]))
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("impreject:"))
+async def cb_improvement_reject(query: CallbackQuery) -> None:
+    """Gate 1 ❌ — reject. Sets status='rejected'; triggers nothing."""
+    pid = query.data.split(":", 1)[1]
+    if not await database.update_proposal_status(pid, "rejected"):
+        await query.answer("Taklif topilmadi.", show_alert=True)
+        return
+    await query.answer("❌ Rad etildi")
+    try:
+        await query.message.edit_text("❌ **Rad etildi** (status: rejected).", parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("impdetails:"))
+async def cb_improvement_details(query: CallbackQuery) -> None:
+    """📄 Batafsil — show the full proposal card."""
+    pid = query.data.split(":", 1)[1]
+    p = await database.get_improvement_proposal(pid)
+    if not p:
+        await query.answer("Taklif topilmadi.", show_alert=True)
+        return
+    await query.answer()
+    try:
+        await query.message.edit_text(_format_proposal_card(p, full=True), parse_mode="Markdown",
+                                      reply_markup=_proposal_keyboard(p))
+    except TelegramBadRequest:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate 2–3 wiring: approve → implement → deploy → result. HIGHEST-STAKES path.
+# Each step is a SEPARATE explicit button press (a human gate); NOTHING is
+# automatic. Approving only marks 'approved'; the principal must then tap
+# 🛠 Implement (write code in a throwaway worktree, enforce protected paths, run
+# the test gate) and, after reviewing the diff, 🚀 Deploy (push + merge + write the
+# signal the VM deployer consumes — supervised deploy with auto-rollback). The
+# bot never restarts/deploys itself in-process: that is the deployer's job, so it
+# survives the bot dying. Every step is audited (database.log_si_audit) and the
+# deploy result is reported by _deploy_result_sweep even across the mid-deploy
+# restart. Worktree + branch are derived deterministically from the proposal id,
+# so no in-memory state is needed between button presses.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _si_data_path(name: str) -> str:
+    """A path next to the DB — equals <repo>/data on the VM, matching the deployer's
+    SIGNAL_FILE/RESULT_FILE (REPO/data/...)."""
+    return os.path.join(os.path.dirname(os.path.abspath(config.DATABASE_PATH)), name)
+
+
+def _format_diffstat(diff: str) -> str:
+    """Compact +N/-N file summary from a unified diff (for the review card)."""
+    if not diff or not diff.strip():
+        return "—"
+    lines = diff.splitlines()
+    files = sum(1 for ln in lines if ln.startswith("+++ "))
+    adds = sum(1 for ln in lines if ln.startswith("+") and not ln.startswith("+++"))
+    dels = sum(1 for ln in lines if ln.startswith("-") and not ln.startswith("---"))
+    return f"{max(files, 1)} fayl · +{adds}/-{dels} qator"
+
+
+def _si_gate2_keyboard(pid: str) -> InlineKeyboardMarkup:
+    """Post-implementation review: inspect the diff, then Deploy or cancel."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Deploy qil", callback_data=f"sideploy:{pid}"),
+         InlineKeyboardButton(text="👁 Diff", callback_data=f"sidiff:{pid}")],
+        [InlineKeyboardButton(text="❌ Bekor qil", callback_data=f"sicancel:{pid}")],
+    ])
+
+
+async def _si_notify(bot: Bot, text: str,
+                     reply_markup: "InlineKeyboardMarkup | None" = None) -> None:
+    """Proactive Markdown message to the principal from a background SI worker.
+    Falls back to plain text on a parse error; never raises."""
+    try:
+        await bot.send_message(config.PRINCIPAL_USER_ID, text,
+                               parse_mode="Markdown", reply_markup=reply_markup)
+    except TelegramBadRequest:
+        try:
+            await bot.send_message(config.PRINCIPAL_USER_ID, text, reply_markup=reply_markup)
+        except Exception:
+            logger.exception("SI notify failed")
+    except Exception:
+        logger.exception("SI notify failed")
+
+
+async def _si_run_implementation(bot: Bot, proposal: dict) -> None:
+    """Gate-2 background worker: turn an APPROVED proposal into a reviewed diff in an
+    isolated worktree. NEVER deploys. dev_agent.prepare enforces protected paths +
+    the test gate and audits every step; here we just report the outcome."""
+    import dev_agent
+    pid = proposal.get("id", "?")
+    try:
+        res = await dev_agent.prepare(proposal)
+    except Exception as e:
+        logger.exception("SI implementation crashed")
+        await database.log_si_audit("implement_crash", pid, f"{type(e).__name__}: {e}")
+        await _si_notify(bot, f"⚠️ **Implementatsiya xatosi** (#{pid})\n\n"
+                              f"`{type(e).__name__}`. Worktree tozalandi, hech narsa deploy bo'lmadi.")
+        return
+    if res.ok:
+        await _si_notify(
+            bot,
+            f"✅ **Kod tayyor — ko'rib chiqing** (#{pid})\n\n"
+            f"📋 {proposal.get('title', '—')}\n"
+            f"🌿 `{res.branch}`\n"
+            f"🧪 Testlar: yashil\n"
+            f"📝 {_format_diffstat(res.diff)}\n\n"
+            "_`👁 Diff` bilan ko'ring. Tayyor bo'lsangiz **🚀 Deploy qil** — branch "
+            "merge qilinadi va VM deployer nazorat ostida yangilaydi. Bekor qilsangiz "
+            "worktree tozalanadi, hech narsa o'zgarmaydi._",
+            reply_markup=_si_gate2_keyboard(pid))
+        return
+    # ── failure paths — explain, never deploy ──
+    if res.protected_hits:
+        await _si_notify(bot, f"⛔️ **Himoyalangan fayl tegildi** (#{pid})\n\n"
+                              f"`{', '.join(res.protected_hits)}` — bu fayllar avtomatik "
+                              "o'zgartirilmaydi. Taklif **qo'lda spec** uchun belgilandi.")
+    elif res.test_summary and not res.tests_passed:
+        await _si_notify(bot, f"🧪 **Testlar yiqildi — deploy bloklandi** (#{pid})\n\n"
+                              f"```\n{res.test_summary[:1200]}\n```\n_Kod deploy qilinmadi._")
+    else:
+        await _si_notify(bot, f"ℹ️ **Implementatsiya bajarilmadi** (#{pid})\n\n{res.reason or '—'}")
+
+
+async def _si_run_deploy(bot: Bot, proposal: dict) -> None:
+    """Gate-3 background worker: record a health baseline, push + merge the prepared
+    branch, then write the deploy_request signal the VM deployer consumes. It does
+    NOT restart/deploy here — the standalone deployer does that (and rolls back on
+    failure), so the supervision survives the bot being killed mid-deploy."""
+    import dev_agent
+    pid = proposal.get("id", "?")
+    branch = f"si/{pid}"
+    worktree = dev_agent._worktree_path(branch)
+    if not os.path.exists(worktree):
+        await _si_notify(bot, f"⚠️ **Deploy bekor** (#{pid})\n\nTayyor worktree topilmadi "
+                              "(ehtimol bekor qilingan). Qayta **🛠 Implement** qiling.")
+        return
+    # Phase 6 baseline — capture health BEFORE the new code goes live; suggest-only
+    # regression detection (deploy_feedback) compares against this.
+    try:
+        import feedback
+        import metrics
+        feedback.record_baseline(pid, await metrics.collect_signals(days=7))
+    except Exception:
+        logger.exception("baseline capture failed (continuing deploy)")
+
+    title = (proposal.get("title") or "improvement")[:72]
+    commit_msg = (f"si({pid}): {title}\n\n"
+                  "Supervised self-improvement — approved by the principal (Gate 1-3).")
+    ok, msg = await dev_agent.push_branch(branch, worktree, commit_msg)
+    if not ok:
+        await database.log_si_audit("push_failed", pid, (msg or "")[:500])
+        await _si_notify(bot, f"⛔️ **Push muvaffaqiyatsiz** (#{pid})\n\n`{(msg or '')[:300]}`\n"
+                              "_Hech narsa deploy bo'lmadi._")
+        return
+    await database.update_proposal_status(pid, "pr_open")
+    ok, url = await dev_agent.open_and_merge_pr(
+        branch, title=f"[SI] {title}",
+        body=f"Supervised self-improvement proposal #{pid}.\n\n"
+             f"{proposal.get('proposed_change', '')}",
+        auto_merge=True)
+    if not ok:
+        await database.log_si_audit("pr_failed", pid, (url or "")[:500])
+        await _si_notify(bot, f"⛔️ **PR/merge muvaffaqiyatsiz** (#{pid})\n\n"
+                              f"Branch `{branch}` push qilindi, ammo merge bo'lmadi — qo'lda "
+                              f"ko'rib chiqing.\n`{(url or '')[:200]}`")
+        return
+    await database.update_proposal_status(pid, "merged")
+    await database.log_si_audit("merged", pid, url or "")
+    # write the deploy signal the VM deployer's .path unit watches
+    try:
+        with open(_si_data_path("deploy_request.json"), "w") as f:
+            json.dump({"target": None, "proposal_id": pid}, f)
+        await database.log_si_audit("deploy_signal_written", pid)
+    except Exception as e:
+        logger.exception("writing deploy signal failed")
+        await _si_notify(bot, f"⚠️ **Deploy signali yozilmadi** (#{pid})\n\n"
+                              f"`{type(e).__name__}`. Merge bo'ldi, lekin deployer ishga tushmadi.")
+        return
+    try:                                  # changes are merged → worktree no longer needed
+        await dev_agent.cleanup_worktree(worktree)
+    except Exception:
+        pass
+    pr_line = f"\n🔗 PR: {url}" if url else ""
+    await _si_notify(bot, f"🚀 **Merge + deploy signali yuborildi** (#{pid}){pr_line}\n\n"
+                          "VM deployer nazorat ostida yangilamoqda — buzilsa avtomatik eski "
+                          "versiyaga qaytadi. Bot qayta ishga tushishi mumkin; natija tayyor "
+                          "bo'lganda xabar beraman.")
+
+
+@router.callback_query(F.data.startswith("siimpl:"))
+async def cb_si_implement(query: CallbackQuery) -> None:
+    """Gate-2 🛠 — start implementation of an approved proposal (runs in background)."""
+    pid = query.data.split(":", 1)[1]
+    p = await database.get_improvement_proposal(pid)
+    if not p:
+        await query.answer("Taklif topilmadi.", show_alert=True)
+        return
+    if p.get("status") != "approved":
+        await query.answer("Faqat tasdiqlangan taklif implement qilinadi.", show_alert=True)
+        return
+    await query.answer("🛠 Implementatsiya boshlandi")
+    await database.log_si_audit("implement_requested", pid)
+    try:
+        await query.message.edit_text(
+            f"⏳ **Implementatsiya boshlandi** (#{pid})\n\n"
+            "Izolyatsiyalangan worktree'da kod yozilmoqda va testlar tekshirilmoqda. "
+            "Tayyor bo'lganda diff bilan xabar beraman.", parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass
+    asyncio.create_task(_si_run_implementation(query.bot, p))
+
+
+@router.callback_query(F.data.startswith("sidiff:"))
+async def cb_si_diff(query: CallbackQuery) -> None:
+    """👁 — show the prepared diff (truncated to Telegram message limits)."""
+    import dev_agent
+    pid = query.data.split(":", 1)[1]
+    worktree = dev_agent._worktree_path(f"si/{pid}")
+    if not os.path.exists(worktree):
+        await query.answer("Worktree topilmadi (tozalangan yoki deploy bo'lgan).", show_alert=True)
+        return
+    await query.answer()
+    diff = await dev_agent.get_diff(worktree)
+    if not diff.strip():
+        diff = "(diff bo'sh)"
+    chunk, more = diff[:3500], ("\n\n… (qisqartirildi)" if len(diff) > 3500 else "")
+    await _si_notify(query.bot, f"👁 **Diff — #{pid}**\n\n```diff\n{chunk}\n```{more}")
+
+
+@router.callback_query(F.data.startswith("sicancel:"))
+async def cb_si_cancel(query: CallbackQuery) -> None:
+    """❌ — cancel a prepared change: clean up the worktree, mark the proposal rejected.
+    Nothing was pushed/deployed, so this fully unwinds the attempt."""
+    import dev_agent
+    pid = query.data.split(":", 1)[1]
+    worktree = dev_agent._worktree_path(f"si/{pid}")
+    try:
+        if os.path.exists(worktree):
+            await dev_agent.cleanup_worktree(worktree)
+    except Exception:
+        logger.exception("cancel cleanup failed")
+    await database.update_proposal_status(pid, "rejected")
+    await database.log_si_audit("deploy_cancelled", pid)
+    await query.answer("❌ Bekor qilindi")
+    try:
+        await query.message.edit_text(f"❌ **Bekor qilindi** (#{pid})\n\n"
+            "Worktree tozalandi, hech narsa deploy bo'lmadi.", parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("sideploy:"))
+async def cb_si_deploy(query: CallbackQuery) -> None:
+    """Gate-3 🚀 — push + merge + signal the supervised deployer (runs in background).
+    Allowed only for a successfully-prepared proposal (status 'in_progress')."""
+    pid = query.data.split(":", 1)[1]
+    p = await database.get_improvement_proposal(pid)
+    if not p:
+        await query.answer("Taklif topilmadi.", show_alert=True)
+        return
+    if p.get("status") != "in_progress":
+        await query.answer("Avval 🛠 Implement qiling (tayyor diff yo'q).", show_alert=True)
+        return
+    await query.answer("🚀 Deploy boshlandi")
+    await database.log_si_audit("deploy_requested", pid)
+    try:
+        await query.message.edit_text(
+            f"🚀 **Deploy boshlandi** (#{pid})\n\n"
+            "Branch push → PR merge → deploy signali. VM deployer nazorat ostida "
+            "yangilaydi (buzilsa avtomatik orqaga qaytaradi). Natijani kutamiz.",
+            parse_mode="Markdown")
+    except TelegramBadRequest:
+        pass
+    asyncio.create_task(_si_run_deploy(query.bot, p))
 
 
 # All reply-keyboard button labels (collected from the *BTN* constants above) —

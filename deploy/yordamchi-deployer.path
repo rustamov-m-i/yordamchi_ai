@@ -1,0 +1,20 @@
+# Watches the deploy_request signal the bot writes on Gate-5/6 approval. When it
+# appears, systemd starts the (oneshot) deployer, which consumes the signal and runs
+# the supervised deploy + auto-rollback. After the deployer removes the signal, this
+# path unit re-arms for the next request.
+#
+# Install (on the VM):
+#   sudo cp deploy/yordamchi-deployer.service /etc/systemd/system/
+#   sudo cp deploy/yordamchi-deployer.path    /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now yordamchi-deployer.path
+
+[Unit]
+Description=Watch for Yordamchi deploy requests
+
+[Path]
+PathExists=/opt/yordamchi/data/deploy_request.json
+Unit=yordamchi-deployer.service
+
+[Install]
+WantedBy=multi-user.target

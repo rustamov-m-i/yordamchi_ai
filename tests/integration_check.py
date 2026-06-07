@@ -621,6 +621,19 @@ async def main():
     check("weekdays: dam olishni o'tkazadi (Juma 12-iyun → Dushanba 15-iyun)",
           database.compute_next_recurrence("2026-06-12T12:00:00+05:00", "weekdays")[:10] == "2026-06-15")
 
+    print("\n── Reply-kbd tartibi: Barchasi + Asosiy menyu alohida, qolgani 2 tadan ──")
+    _h = [[b.text for b in row] for row in handlers._two_per_row(["a", "b", "c", "d", "e"], solo={"c"})]
+    check("_two_per_row: solo alohida + qolgani juft",
+          ["c"] in _h and ["a", "b"] in _h and ["d", "e"] in _h)
+    _rk = [[b.text for b in row] for row in handlers.reminders_section_reply_keyboard().keyboard]
+    check("kbd Eslatma: 📋 Barchasi alohida qator", [handlers.RBTN_REMINDERS_ALL] in _rk)
+    check("kbd Eslatma: ⬅️ Asosiy menyu alohida qator", [handlers.BTN_BACK_MAIN] in _rk)
+    check("kbd Eslatma: filtrlar 2 tadan ([Bugun, Yuborilgan])",
+          [handlers.RBTN_REMINDERS_TODAY, handlers.RBTN_REMINDERS_SENT] in _rk)
+    _tk = [[b.text for b in row] for row in handlers.tasks_section_reply_keyboard().keyboard]
+    check("kbd Vazifa: Barchasi + Asosiy menyu alohida",
+          [handlers.TBTN_TASKS_ALL] in _tk and [handlers.BTN_BACK_MAIN] in _tk)
+
     print("\n── Eslatma tahrir: matn + OVOZ ishlaydi (bug tuzatildi) ──")
     class _ReFakeState:
         def __init__(s, d): s._d = d

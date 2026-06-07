@@ -186,6 +186,41 @@ class YordamchiScheduler:
             id="proactive_dependency_check",
             replace_existing=True,
         )
+        # Nightly 02:00 — self-improvement diagnosis (Channel A). OFF by default
+        # (autopilot_enabled); costs nothing until enabled via Phase-3 /autopilot.
+        self.scheduler.add_job(
+            self._self_diagnose,
+            CronTrigger(hour=2, minute=0, timezone=config.TIMEZONE),
+            id="self_diagnose",
+            replace_existing=True,
+        )
+        # Every 30s — liveness heartbeat for the supervised deployer (Phase 5).
+        self.scheduler.add_job(
+            self._heartbeat_sweep,
+            IntervalTrigger(seconds=30),
+            id="heartbeat",
+            replace_existing=True,
+            next_run_time=datetime.now(database.TZ) + timedelta(seconds=5),
+        )
+        # Every 25s — pick up the supervised deployer's result file and report the
+        # deploy outcome (deployed / auto-rolled-back). Frequent because the deployer
+        # restarts the bot mid-deploy; the new process reads the result.
+        self.scheduler.add_job(
+            self._deploy_result_sweep,
+            IntervalTrigger(seconds=25),
+            id="deploy_result_sweep",
+            replace_existing=True,
+            next_run_time=datetime.now(database.TZ) + timedelta(seconds=10),
+        )
+        # Daily 04:00 — post-deploy feedback (Phase 6, suggest-only). Compares a
+        # deployed proposal's baseline vs current health; on regression it only
+        # CREATES a 'consider reverting' proposal — it never reverts anything.
+        self.scheduler.add_job(
+            self._deploy_feedback,
+            CronTrigger(hour=4, minute=0, timezone=config.TIMEZONE),
+            id="deploy_feedback",
+            replace_existing=True,
+        )
         # Daily 09:30 — delegation auto-chase: nudge about tasks delegated to
         # others that have been open too long. Pushes only when stale ones exist.
         self.scheduler.add_job(
@@ -510,6 +545,104 @@ class YordamchiScheduler:
                 await self._send("🔗 **VAZIFA BOG'LANISHLARI**\n\n" + text)
         except Exception:
             logger.exception("Proactive dependency check failed")
+
+    async def _self_diagnose(self) -> None:
+        """Nightly Channel-A self-improvement diagnosis. OFF by default — costs
+        nothing until the principal enables it via Phase-3 /autopilot. Stores
+        proposals in improvement_proposals; surfacing is Phase 3 (no push here)."""
+        try:
+            settings = await database.get_settings()
+        except Exception:
+            logger.exception("self_diagnose: settings read failed; skipping")
+            return
+        if not settings.get("autopilot_enabled", False):
+            logger.info("self_diagnose skipped — autopilot disabled")
+            return
+        try:
+            import diagnosis
+            ids = await diagnosis.run_and_store(days=7)
+            logger.info("self_diagnose: %d proposal(s) created", len(ids))
+        except Exception:
+            logger.exception("self_diagnose failed")
+
+    async def _heartbeat_sweep(self) -> None:
+        """Touch the liveness heartbeat file so the supervised deployer (Phase 5)
+        can confirm the bot is actually alive after a restart. Best-effort."""
+        try:
+            import heartbeat
+            heartbeat.write_heartbeat()
+        except Exception:
+            pass
+
+    async def _deploy_feedback(self) -> None:
+        """Phase 6 (suggest-only): for proposals deployed past the review window with
+        a recorded baseline, compare baseline vs current health; on regression CREATE
+        a 'consider reverting' proposal. NEVER reverts — it only suggests."""
+        try:
+            import feedback
+            import metrics
+            deployed = await database.list_improvement_proposals(status_in=["deployed"], limit=20)
+            if not deployed:
+                return
+            after = feedback.compact_signals(await metrics.collect_signals(days=7))
+            for p in deployed:
+                before = feedback.load_baseline(p["id"])
+                if before:
+                    await feedback.run_feedback(p, before, after)
+        except Exception:
+            logger.exception("deploy_feedback failed")
+
+    async def _deploy_result_sweep(self) -> None:
+        """Pick up the deployer's result file (written on the VM after a supervised
+        deploy), update the proposal status, notify the principal, then CONSUME the
+        file (so it is never reported twice). Runs frequently on purpose: the
+        deployer RESTARTS the bot mid-deploy, so the result is read by the freshly
+        restarted process — an in-process wait would not survive that restart."""
+        import json
+        import os
+        path = os.path.join(os.path.dirname(os.path.abspath(config.DATABASE_PATH)),
+                            "deploy_result.json")
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path) as f:
+                res = json.load(f)
+        except Exception:
+            try:
+                os.remove(path)   # unreadable/corrupt — drop it
+            except OSError:
+                pass
+            return
+        try:
+            os.remove(path)       # consume first — report exactly once
+        except OSError:
+            pass
+        pid = res.get("proposal_id")
+        status = res.get("status")
+        healthy = res.get("healthy")
+        try:
+            if status == "deployed" and pid:
+                await database.update_proposal_status(pid, "deployed")
+                await database.log_si_audit("deploy_succeeded", pid, "healthy")
+                await self._send(
+                    f"✅ **Deploy muvaffaqiyatli** (#{pid})\n\n"
+                    "Yangilanish jonli va bot sog'lom. Keyingi kunlarda ko'rsatkichlarni "
+                    "kuzataman — regressiya bo'lsa, revert taklif qilaman.",
+                    bypass_quiet_hours=True)
+            elif status == "rolled_back" and pid:
+                await database.update_proposal_status(pid, "reverted")
+                await database.log_si_audit("deploy_rolled_back", pid, f"healthy={healthy}")
+                tail = ("Bot eski ishlaydigan versiyada — barqaror." if healthy else
+                        "⚠️ Diqqat: rollbackdan keyin ham bot nosog'lom — qo'lda tekshiring.")
+                await self._send(
+                    f"↩️ **Deploy buzildi — avtomatik orqaga qaytarildi** (#{pid})\n\n{tail}",
+                    bypass_quiet_hours=True)
+            else:
+                await self._send(
+                    f"ℹ️ **Deploy natijasi:** {status} (#{pid or '—'}), healthy={healthy}",
+                    bypass_quiet_hours=True)
+        except Exception:
+            logger.exception("deploy_result_sweep notify failed")
 
     async def _stale_delegation_digest(self) -> None:
         """Daily delegation auto-chase — surface tasks delegated to others that
