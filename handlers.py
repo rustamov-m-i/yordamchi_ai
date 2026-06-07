@@ -5706,6 +5706,60 @@ async def cb_si_audit(query: CallbackQuery) -> None:
         pass
 
 
+# ── /deploy — manual supervised deploy of the latest main ──────────────────────
+# For changes made OUTSIDE the /improve flow (e.g. a careful session pushes to
+# main). Writes the same signal the deployer consumes → it pulls main, restarts,
+# health-checks, and auto-rolls-back on failure. Confirmation-gated.
+@router.message(Command("deploy"))
+async def cmd_deploy(message: Message) -> None:
+    """Trigger a supervised deploy of the latest main via the deployer."""
+    await _safe_answer(
+        message,
+        "🚀 **Deploy — eng so'nggi `main`**\n\n"
+        "Deployer eng so'nggi kodni tortadi (`git pull`), botni qayta ishga tushiradi "
+        "va sog'lig'ini tekshiradi. Buzilsa — **avtomatik orqaga qaytaradi**.\n\n"
+        "Davom etamizmi?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🚀 Ha, deploy", callback_data="mdeploy:yes"),
+            InlineKeyboardButton(text="✕ Yo'q", callback_data="mdeploy:no"),
+        ]]))
+
+
+@router.callback_query(F.data == "mdeploy:yes")
+async def cb_manual_deploy(query: CallbackQuery) -> None:
+    """Write the deploy signal (target=None → git pull main). The VM deployer does the
+    supervised restart + rollback; _deploy_result_sweep reports the outcome."""
+    try:
+        with open(_si_data_path("deploy_request.json"), "w") as f:
+            json.dump({"target": None, "proposal_id": "manual"}, f)
+        await database.log_si_audit("manual_deploy_requested", "manual")
+        ok, detail = True, ""
+    except Exception as e:
+        logger.exception("manual deploy signal write failed")
+        ok, detail = False, type(e).__name__
+    await query.answer("🚀 Deploy boshlandi" if ok else "Xato")
+    try:
+        if ok:
+            await query.message.edit_text(
+                "🚀 **Deploy signali yuborildi**\n\n"
+                "Deployer eng so'nggi `main`ni tortib, botni qayta ishga tushiryapti "
+                "(health-check + rollback bilan). Natijani xabar qilaman.",
+                parse_mode="Markdown")
+        else:
+            await query.message.edit_text(f"⚠️ Signal yozilmadi ({detail}).", parse_mode=None)
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == "mdeploy:no")
+async def cb_manual_deploy_cancel(query: CallbackQuery) -> None:
+    await query.answer("Bekor qilindi")
+    try:
+        await query.message.edit_text("✕ Deploy bekor qilindi.", parse_mode=None)
+    except TelegramBadRequest:
+        pass
+
+
 # All reply-keyboard button labels (collected from the *BTN* constants above) —
 # used to stop a tapped navigation button from being captured as a note.
 _RESERVED_LABELS = {v for k, v in dict(globals()).items()

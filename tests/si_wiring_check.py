@@ -364,6 +364,26 @@ async def main():
     await handlers.cb_si_audit(qbad)
     check("I: noma'lum pid → alert", bool(qbad.answered) and qbad.answered[-1][1].get("show_alert"))
 
+    print("\n[ J. /deploy — qo'lda supervised deploy (signal yozish) ]")
+    md = FakeMsg("/deploy")
+    await handlers.cmd_deploy(md)
+    dcbs = kb_cbs(md.answers[-1][1]) if md.answers else []
+    check("J: /deploy tasdiq tugmalari (mdeploy:yes/no)",
+          "mdeploy:yes" in dcbs and "mdeploy:no" in dcbs, f"{dcbs}")
+    sig_path = handlers._si_data_path("deploy_request.json")
+    if os.path.exists(sig_path):
+        os.remove(sig_path)
+    qyes = FakeQuery("mdeploy:yes")
+    await handlers.cb_manual_deploy(qyes)
+    check("J: tasdiqlanganda signal yozildi", os.path.exists(sig_path))
+    sig = json.load(open(sig_path)) if os.path.exists(sig_path) else {}
+    check("J: signal target=None (main'ni pull qiladi)", sig.get("target") is None, f"{sig}")
+    check("J: signal proposal_id=manual", sig.get("proposal_id") == "manual")
+    qno = FakeQuery("mdeploy:no")
+    await handlers.cb_manual_deploy_cancel(qno)
+    check("J: 'Yo'q' → bekor", bool(qno.answered)
+          and any("bekor" in str(a[0]).lower() for a in qno.message.answers))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:
