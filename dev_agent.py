@@ -333,7 +333,10 @@ async def open_and_merge_pr(branch: str, title: str, body: str = "",
             url = (getattr(c, "stdout", "") or "").strip()
 
         if auto_merge:
-            m = runner(["gh", "pr", "merge", branch, "--merge", "--delete-branch"],
+            # No --delete-branch: this branch is checked out in our /tmp worktree, so
+            # gh's local branch delete fails ("Cannot delete branch ... checked out")
+            # and wrongly reports the merge as failed. The branch lingers harmlessly.
+            m = runner(["gh", "pr", "merge", branch, "--merge"],
                        cwd=ROOT, capture_output=True, text=True)
             if getattr(m, "returncode", 0) != 0:
                 return False, _out(m) or url

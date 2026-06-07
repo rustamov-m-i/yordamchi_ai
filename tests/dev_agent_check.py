@@ -105,8 +105,11 @@ def test_push_pr_commands():
     check("pr: gh pr create chaqirildi", any(a[:3] == ["gh", "pr", "create"] for a in calls))
     check("pr: auto_merge=False → merge YO'Q", not any(a[:3] == ["gh", "pr", "merge"] for a in calls))
     calls.clear()
-    asyncio.run(dev_agent.open_and_merge_pr("si/imp-1", "Title", runner=fake, auto_merge=True))
+    okm, _ = asyncio.run(dev_agent.open_and_merge_pr("si/imp-1", "Title", runner=fake, auto_merge=True))
     check("pr: auto_merge=True → merge chaqirildi", any(a[:3] == ["gh", "pr", "merge"] for a in calls))
+    check("pr: merge ok → ok=True", okm is True)
+    check("pr: --delete-branch ISHLATILMAYDI (worktree checkout konflikti oldini oladi)",
+          not any("--delete-branch" in a for a in calls), f"{calls}")
 
 
 async def _prep_scenarios():
