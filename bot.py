@@ -83,6 +83,7 @@ async def _register_bot_commands(bot: Bot) -> None:
         BotCommand(command="improvements", description="💡 Yaxshilanish takliflari"),
         BotCommand(command="improve", description="✍️ Yaxshilanish so'rovi"),
         BotCommand(command="autopilot", description="🤖 Self-improve: on/off"),
+        BotCommand(command="silog", description="📜 Self-improve: holat + audit"),
         BotCommand(command="backup", description="💾 Backup yaratish"),
         BotCommand(command="cancel", description="✕ Joriy amalni bekor qilish"),
         BotCommand(command="help", description="Yordam"),

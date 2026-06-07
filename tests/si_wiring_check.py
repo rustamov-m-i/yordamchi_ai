@@ -326,6 +326,33 @@ async def main():
     await sched3._deploy_result_sweep()
     check("H3: fayl yo'q → xabar yo'q", not sched3.bot.sent)
 
+    print("\n[ I. /silog — holat + audit ko'rinishi (read-only) ]")
+    check("I: bo'sh → 'hech qanday taklif'", "hech qanday" in handlers._format_silog_text([]))
+    props = await database.list_improvement_proposals(limit=20)
+    txt = handlers._format_silog_text(props)
+    check("I: sarlavha bor", "Self-improvement — holat" in txt)
+    check("I: 'Tugaganlar' bo'limi bor", "Tugaganlar" in txt, txt[:200])
+    check("I: deployed badge (✅) bor", "✅" in txt)
+    kcbs = kb_cbs(handlers._silog_keyboard(props))
+    check("I: siaudit tugmalari bor", any(c.startswith("siaudit:") for c in kcbs), f"{kcbs}")
+    check("I: 'silog:refresh' tugmasi bor", "silog:refresh" in kcbs)
+    ms = FakeMsg("/silog")
+    await handlers.cmd_silog(ms)
+    check("I: /silog xabar yubordi", bool(ms.answers))
+    qr = FakeQuery("silog:refresh")
+    await handlers.cb_silog_refresh(qr)
+    check("I: refresh javob + edit", bool(qr.answered)
+          and any(a[0].startswith("EDIT:") for a in qr.message.answers))
+    # hpid (H1) deployed → audit zanjirida 'deploy_succeeded' bo'lishi kerak
+    qa2 = FakeQuery(f"siaudit:{hpid}")
+    await handlers.cb_si_audit(qa2)
+    audit_txt = qa2.message.answers[-1][0] if qa2.message.answers else ""
+    check("I: audit ko'rinishi pid + sarlavha", hpid in audit_txt and "audit zanjiri" in audit_txt)
+    check("I: audit 'deploy_succeeded' ko'rsatadi", "deploy_succeeded" in audit_txt, audit_txt[:150])
+    qbad = FakeQuery("siaudit:imp-yoqnarsa")
+    await handlers.cb_si_audit(qbad)
+    check("I: noma'lum pid → alert", bool(qbad.answered) and qbad.answered[-1][1].get("show_alert"))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:
