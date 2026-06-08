@@ -2083,30 +2083,34 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
 # ─────────────────────── COMMAND HANDLERS ───────────────────────
 
 
+def _time_greeting() -> str:
+    """Time-of-day greeting in the principal's timezone (Asia/Tashkent).
+    Evening uses 'Xayrli kech'; late night falls back to neutral 'Salom'
+    ('Xayrli tun' reads as a goodbye, not a greeting)."""
+    h = datetime.now(database.TZ).hour
+    if 5 <= h < 11:
+        return "Xayrli tong"
+    if 11 <= h < 17:
+        return "Xayrli kun"
+    if 17 <= h < 22:
+        return "Xayrli kech"
+    return "Salom"
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     # /start is the universal "I'm confused, reset" command — clear any FSM
     # state so a user stuck mid-flow can recover without finding a Back button.
     # It also serves as onboarding: a concise tour of what the bot does + examples.
     await state.clear()
+    name = (message.from_user.full_name if message.from_user else "").strip() or "Maqsud Rustamov"
     await message.answer(
-        "Salom! Maqsud Rustamov 👋\n"
-        "🤝 **Yordamchi — shaxsiy AI yordamchingiz**\n\n"
-        "Vazifa, eslatma, uchrashuv va qaydlaringizni boshqaraman. "
-        "Oddiy til yoki ovoz bilan yozing — qolganini o'zim bajaraman.\n\n"
-        "**Imkoniyatlar:**\n"
-        "📌 Vazifalar — muddat · ijrochi · ustuvorlik · kategoriya\n"
-        "⏰ Eslatmalar — vaqtli ping (bir martalik yoki takroriy)\n"
-        "🤝 Uchrashuvlar — kalendar · tayyorgarlik · bayonnoma\n"
-        "📝 Qaydlar — tez fikr ilib olish (GTD inbox)\n"
-        "👥 Ijrochilar · 🚨 Risklar · 📊 Statistika · 🎛 Cockpit\n\n"
-        "**Shunchaki yozing yoki ayting:**\n"
-        "• _«Ertaga 15:00 da Aziz bilan uchrashuv»_\n"
-        "• _«Juma kuni hisobotni topshirish — muhim»_\n"
-        "• _«30 daqiqadan keyin dori ichishni eslat»_\n\n"
-        "🎙 Ovozli xabar ham yuboring — avtomatik tushunaman.\n"
-        "Buyruqlar: /help  ·  Boshqaruv paneli: /cockpit",
-        parse_mode="Markdown",
+        f"{_time_greeting()}, {name}! 👋\n\n"
+        "🤝 Yordamchi Pro — shaxsiy AI yordamchingiz.\n\n"
+        "Vazifa · eslatma · uchrashuv · qayd — yozing yoki ayting,\n"
+        "qolganini o'zim qilaman.\n\n"
+        "/help · /cockpit",
+        parse_mode=None,
         reply_markup=main_reply_keyboard(),
     )
 

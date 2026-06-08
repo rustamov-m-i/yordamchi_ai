@@ -401,10 +401,12 @@ async def test_handlers_surface():
     # /start onboarding message greets by name before the title
     import inspect
     start_src = inspect.getsource(handlers.cmd_start)
-    salom_idx = start_src.find("Salom! Maqsud Rustamov 👋")
+    salom_idx = start_src.find("_time_greeting")
     title_idx = start_src.find("shaxsiy AI yordamchingiz")
-    t("handlers", "cmd_start greets 'Salom! Maqsud Rustamov 👋' before the title",
+    t("handlers", "cmd_start: vaqt-salomi + ism, title'dan oldin",
       salom_idx != -1 and title_idx != -1 and salom_idx < title_idx)
+    t("handlers", "_time_greeting kun qismiga qarab to'g'ri salom qaytaradi",
+      handlers._time_greeting() in {"Xayrli tong", "Xayrli kun", "Xayrli kech", "Salom"})
 
     # Edit FSM exists
     t("handlers", "PlanFSM + TaskEditFSM defined",

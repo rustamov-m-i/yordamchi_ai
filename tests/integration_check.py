@@ -501,7 +501,8 @@ async def main():
     check("B: _create_db_backup mavjud", hasattr(handlers, "_create_db_backup"))
     check("B: cb_undo_delete + _UNDO_BACKUPS",
           hasattr(handlers, "cb_undo_delete") and hasattr(handlers, "_UNDO_BACKUPS"))
-    check("C1: /start onboarding (imkoniyatlar tavsifi)", "Imkoniyatlar" in _src)
+    check("C1: /start onboarding (Yordamchi Pro + nima qila olishi)",
+          "yozing yoki ayting" in _src and "Yordamchi Pro" in _src)
     check("C2: database.list_recent_actions", hasattr(database, "list_recent_actions"))
     check("C2: diagnostikada 'So'nggi amallar' bo'limi", "So'nggi amallar" in _src)
     check("D: database.list_stale_delegations", hasattr(database, "list_stale_delegations"))
