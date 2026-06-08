@@ -85,6 +85,8 @@ async def _register_bot_commands(bot: Bot) -> None:
         BotCommand(command="autopilot", description="🤖 Self-improve: on/off"),
         BotCommand(command="silog", description="📜 Self-improve: holat + audit"),
         BotCommand(command="deploy", description="🚀 Eng so'nggi main'ni deploy qilish"),
+        BotCommand(command="freeze", description="🧊 Avtonom tizimni to'xtatish"),
+        BotCommand(command="unfreeze", description="🟢 Avtonom tizimni davom ettirish"),
         BotCommand(command="backup", description="💾 Backup yaratish"),
         BotCommand(command="cancel", description="✕ Joriy amalni bekor qilish"),
         BotCommand(command="help", description="Yordam"),

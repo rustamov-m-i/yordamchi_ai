@@ -5530,6 +5530,44 @@ async def _si_run_deploy(bot: Bot, proposal: dict) -> None:
                           "bo'lganda xabar beraman.")
 
 
+# ── /freeze — kill-switch for the autonomous self-improvement loop ──────────────
+# Pauses 🛠 Implement, 🚀 Deploy and the nightly diagnosis so a session can change
+# code + /deploy without the bot ALSO writing to main (the divergence problem we
+# hit repeatedly). Proposals can still be created (they queue); nothing
+# executes/deploys while frozen. One source of truth at a time.
+async def _si_is_frozen() -> bool:
+    try:
+        return bool((await database.get_settings()).get("si_frozen", False))
+    except Exception:
+        return False
+
+
+_SI_FROZEN_ALERT = "🧊 Tizim muzlatilgan — /unfreeze bilan davom eting."
+
+
+@router.message(Command("freeze"))
+async def cmd_freeze(message: Message) -> None:
+    """Kill-switch: pause the autonomous self-improvement loop."""
+    await database.set_setting("si_frozen", True)
+    await database.log_si_audit("frozen", None, "kill-switch ON")
+    await message.answer(
+        "🧊 **Muzlatildi.**\n\n"
+        "Avtonom o'z-o'zini yaxshilash to'xtadi: 🛠 Implement, 🚀 Deploy va tungi "
+        "diagnoz ishlamaydi. Takliflar yaratilaveradi (navbatда turadi).\n\n"
+        "Davom ettirish: /unfreeze", parse_mode="Markdown")
+
+
+@router.message(Command("unfreeze"))
+async def cmd_unfreeze(message: Message) -> None:
+    """Resume the autonomous self-improvement loop."""
+    await database.set_setting("si_frozen", False)
+    await database.log_si_audit("unfrozen", None, "kill-switch OFF")
+    await message.answer(
+        "🟢 **Muzlatish olib tashlandi.**\n\n"
+        "Avtonom tizim yana faol — Implement / Deploy / tungi diagnoz ishlaydi.",
+        parse_mode="Markdown")
+
+
 @router.callback_query(F.data.startswith("siimpl:"))
 async def cb_si_implement(query: CallbackQuery) -> None:
     """Gate-2 🛠 — start implementation of an approved proposal (runs in background)."""
@@ -5540,6 +5578,9 @@ async def cb_si_implement(query: CallbackQuery) -> None:
         return
     if p.get("status") != "approved":
         await query.answer("Faqat tasdiqlangan taklif implement qilinadi.", show_alert=True)
+        return
+    if await _si_is_frozen():
+        await query.answer(_SI_FROZEN_ALERT, show_alert=True)
         return
     await query.answer("🛠 Implementatsiya boshlandi")
     await database.log_si_audit("implement_requested", pid)
@@ -5604,6 +5645,9 @@ async def cb_si_deploy(query: CallbackQuery) -> None:
     if p.get("status") != "in_progress":
         await query.answer("Avval 🛠 Implement qiling (tayyor diff yo'q).", show_alert=True)
         return
+    if await _si_is_frozen():
+        await query.answer(_SI_FROZEN_ALERT, show_alert=True)
+        return
     await query.answer("🚀 Deploy boshlandi")
     await database.log_si_audit("deploy_requested", pid)
     try:
@@ -5630,12 +5674,14 @@ _SI_STATUS_BADGE = {
 _SI_ACTIVE_STATUSES = {"new", "approved", "in_progress", "pr_open", "merged"}
 
 
-def _format_silog_text(props: list) -> str:
+def _format_silog_text(props: list, frozen: bool = False) -> str:
     """The /silog dashboard: in-flight proposals + recently completed ones.
     PLAIN text (sent WITHOUT parse_mode): statuses ('in_progress') and user titles
     ('check_followups …') contain underscores that legacy Markdown mis-parses as
     italics → 'can't find end of entity'. No markup here = no parse errors ever."""
     lines = ["📜 Self-improvement — holat", ""]
+    if frozen:
+        lines += ["🧊 MUZLATILGAN — Implement/Deploy to'xtatilgan (/unfreeze).", ""]
     if not props:
         lines.append("Hozircha hech qanday taklif yo'q.")
         return "\n".join(lines)
@@ -5673,8 +5719,8 @@ def _silog_keyboard(props: list) -> InlineKeyboardMarkup:
 async def cmd_silog(message: Message) -> None:
     """Self-improvement status + audit view (read-only)."""
     props = await database.list_improvement_proposals(limit=20)
-    await _safe_answer(message, _format_silog_text(props), parse_mode=None,
-                       reply_markup=_silog_keyboard(props))
+    await _safe_answer(message, _format_silog_text(props, frozen=await _si_is_frozen()),
+                       parse_mode=None, reply_markup=_silog_keyboard(props))
 
 
 @router.callback_query(F.data == "silog:refresh")
@@ -5682,8 +5728,8 @@ async def cb_silog_refresh(query: CallbackQuery) -> None:
     props = await database.list_improvement_proposals(limit=20)
     await query.answer("🔄 Yangilandi")
     try:
-        await query.message.edit_text(_format_silog_text(props), parse_mode=None,
-                                      reply_markup=_silog_keyboard(props))
+        await query.message.edit_text(_format_silog_text(props, frozen=await _si_is_frozen()),
+                                      parse_mode=None, reply_markup=_silog_keyboard(props))
     except TelegramBadRequest:
         pass
 
@@ -5743,6 +5789,9 @@ async def cmd_deploy(message: Message) -> None:
 async def cb_manual_deploy(query: CallbackQuery) -> None:
     """Write the deploy signal (target=None → git pull main). The VM deployer does the
     supervised restart + rollback; _deploy_result_sweep reports the outcome."""
+    if await _si_is_frozen():
+        await query.answer(_SI_FROZEN_ALERT, show_alert=True)
+        return
     try:
         with open(_si_data_path("deploy_request.json"), "w") as f:
             json.dump({"target": None, "proposal_id": "manual"}, f)

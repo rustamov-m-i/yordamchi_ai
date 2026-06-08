@@ -561,6 +561,9 @@ class YordamchiScheduler:
         if not settings.get("autopilot_enabled", False):
             logger.info("self_diagnose skipped — autopilot disabled")
             return
+        if settings.get("si_frozen", False):
+            logger.info("self_diagnose skipped — frozen (/unfreeze to resume)")
+            return
         try:
             import diagnosis
             ids = await diagnosis.run_and_store(days=7)

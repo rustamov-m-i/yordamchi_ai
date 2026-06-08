@@ -384,6 +384,27 @@ async def main():
     check("J: 'Yo'q' → bekor", bool(qno.answered)
           and any("bekor" in str(a[0]).lower() for a in qno.message.answers))
 
+    print("\n[ K. /freeze kill-switch — avtonom loop'ni to'xtatadi (divergensiya) ]")
+    await handlers.cmd_freeze(FakeMsg("/freeze"))
+    check("K: /freeze → si_frozen=True", (await database.get_settings()).get("si_frozen") is True)
+    check("K: _si_is_frozen() True", await handlers._si_is_frozen())
+    # frozen → implement bloklanadi (status o'zgarmaydi, real prepare ishga tushmaydi)
+    fp = await _mk()
+    qfi = FakeQuery(f"siimpl:{fp['id']}")
+    await handlers.cb_si_implement(qfi)
+    check("K: frozen → implement bloklandi (alert)",
+          bool(qfi.answered) and qfi.answered[-1][1].get("show_alert"))
+    check("K: frozen → status approved qoldi", (await database.get_improvement_proposal(fp["id"]))["status"] == "approved")
+    # frozen → /deploy signal yozilmaydi
+    if os.path.exists(_signal_path()):
+        os.remove(_signal_path())
+    qfd = FakeQuery("mdeploy:yes")
+    await handlers.cb_manual_deploy(qfd)
+    check("K: frozen → /deploy signal yozilmadi", not os.path.exists(_signal_path()))
+    check("K: /silog frozen banner", "MUZLATILGAN" in handlers._format_silog_text([], frozen=True))
+    await handlers.cmd_unfreeze(FakeMsg("/unfreeze"))
+    check("K: /unfreeze → si_frozen=False", not (await database.get_settings()).get("si_frozen", False))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:
