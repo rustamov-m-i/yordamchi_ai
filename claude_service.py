@@ -129,6 +129,19 @@ def _pick_model(complexity: Optional[str], internal_directive: Optional[str]) ->
     return config.CLAUDE_MODEL
 
 
+# The numbered task list the principal last saw (position → id/title). Lets the LLM
+# resolve "10-vazifani tahrirla" — referencing a task by its displayed list number.
+# In-memory + single-process (single principal); transient by design.
+_last_task_view: list = []
+
+
+def set_last_task_view(items: list) -> None:
+    """Remember the numbered task list just shown, so a later 'N-vazifa' reference
+    resolves to the right task. Called by the handler that renders the list."""
+    global _last_task_view
+    _last_task_view = (items or [])[:25]
+
+
 async def _build_state_block() -> str:
     """Dynamic, DB-backed snapshot appended after the cached system prompt.
 
@@ -236,6 +249,11 @@ async def _build_state_block() -> str:
         "mos kelmasa category QO'YMANG (yangi kategoriya O'YLAB TOPMANG)",
         ("  " + " · ".join(_cat_names)) if _cat_names else "  (hali kategoriya yo'q)",
         "",
+        *(["## OXIRGI KO'RSATILGAN RO'YXAT (raqam → vazifa) — \"N-vazifa\" / \"N-chi\" / "
+           "\"o'ninchi vazifa\" yoki ro'yxatdan keyin oddiy \"N\" SHU raqamni bildiradi "
+           "(\"N ta vazifa\" = miqdor, boshqacha):",
+           *(f"  {it['n']}. «{it['title']}» (id: {it['id']})" for it in _last_task_view), ""]
+          if _last_task_view else []),
         f"## OVERDUE TASKS ({len(overdue)})",
         *(task_line(t) for t in overdue[:10]),
         "  (none)" if not overdue else "",

@@ -267,6 +267,16 @@ async def main():
     check("create_task: NOMA'LUM kategoriya tushiriladi (uncategorized, sprawl yo'q)",
           bool(_tn) and not (_tn.get("category") or ""), f"{_tn.get('category') if _tn else None}")
 
+    # Reference-by-number: the last shown numbered list is exposed to the LLM so
+    # "10-vazifani tahrirla" resolves to the right task id.
+    import claude_service as _cs
+    _cs.set_last_task_view([{"n": 7, "id": "tX7", "title": "Rekvizit tayyorlash"}])
+    _sb = await _cs._build_state_block()
+    check("ref-by-number: state'da 'OXIRGI KO'RSATILGAN RO'YXAT'", "OXIRGI KO'RSATILGAN" in _sb)
+    check("ref-by-number: raqam+id+title ko'rinadi",
+          "7." in _sb and "tX7" in _sb and "Rekvizit" in _sb, _sb[-400:])
+    _cs.set_last_task_view([])
+
     print("\n── Import round-trip dedup (yangilash, dublikat emas) ──")
     _t = await database.create_task({"title": "Dedup sinov", "priority": "P2", "status": "todo"})
     _a2 = handlers._structured_tasks_from_table(
@@ -679,7 +689,9 @@ async def main():
         await handlers.handle_reminder_edit_value(
             _ReFakeMsg(text=None, voice=True), _ReFakeState({"reminder_id": _rid, "field": "time"}))
         _r = await database.get_reminder(_rid)
-        check("Tahrir: OVOZ orqali vaqt saqlanadi", bool(_r) and _r["remind_at"][:10] != "2026-06-10")
+        # Full-value compare (not just date) so it's robust when "ertaga" happens to
+        # equal the original date — the voice edit still changes the TIME (10:00→09:00).
+        check("Tahrir: OVOZ orqali vaqt saqlanadi", bool(_r) and _r["remind_at"] != "2026-06-10T10:00:00+05:00")
         import aiosqlite as _sq3
         async with _sq3.connect(config.DATABASE_PATH) as _db3:
             await _db3.execute("DELETE FROM reminders WHERE id=?", (_rid,)); await _db3.commit()

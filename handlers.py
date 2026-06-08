@@ -4293,6 +4293,11 @@ def tasks_compact_keyboard(
         InlineKeyboardButton(text=str(start + i + 1), callback_data=f"taskopen:{t['id']}")
         for i, t in enumerate(page_tasks)
     ]
+    # Remember this numbered view so the LLM can resolve a later "N-vazifani tahrirla"
+    # (reference a task by its DISPLAYED number) → the right task id.
+    claude_service.set_last_task_view(
+        [{"n": start + i + 1, "id": t["id"], "title": (t.get("title") or "—")[:50]}
+         for i, t in enumerate(page_tasks)])
     if nums:
         for i in range(0, len(nums), 5):
             rows.append(nums[i:i+5])
