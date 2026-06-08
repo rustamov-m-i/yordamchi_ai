@@ -1067,6 +1067,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
         "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
         "note": [], "_failed": [], "_refresh": [], "_conflict": [],
     }
+    _existing_cats: "set | None" = None   # lazy allowlist for create_task categories (B)
 
     for action in actions:
         atype = action.get("type", "")
@@ -1075,6 +1076,15 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
 
         try:
             if atype == "create_task":
+                # B (no auto-create categories): accept only an EXISTING category;
+                # otherwise leave the task uncategorized. The LLM must reuse, never
+                # invent, on create_task — new categories come only from
+                # create_category. Stops auto-category sprawl.
+                if (data.get("category") or "").strip():
+                    if _existing_cats is None:
+                        _existing_cats = {c.casefold() for c in await database.existing_category_names()}
+                    if data["category"].strip().casefold() not in _existing_cats:
+                        data["category"] = None
                 tid = await database.create_task(data)
                 created_ids["task"].append(tid)
                 await _upsert_contacts([data.get("assignee") or ""])

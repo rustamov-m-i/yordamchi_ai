@@ -155,6 +155,10 @@ async def _build_state_block() -> str:
     recent_notes = await database.list_notes(status="inbox", limit=8)
     contacts = await database.list_contacts()
     corrections = await database.list_recent_corrections(limit=5)
+    # Existing categories shown explicitly so Claude REUSES them on create_task and
+    # never invents new ones (auto-category sprawl). The app enforces this too.
+    _categories = await database.list_categories()
+    _cat_names = [c["name"] for c in _categories if c.get("name") and c["name"] != "(boshqa)"]
 
     def task_line(t: dict) -> str:
         deadline = t.get("deadline") or "no deadline"
@@ -228,6 +232,10 @@ async def _build_state_block() -> str:
         f"## ACTIVE TASKS ({len(active_tasks)} total, showing up to 25)",
         *(task_line(t) for t in active_tasks[:25]),
         "  (none)" if not active_tasks else "",
+        f"## KATEGORIYALAR ({len(_cat_names)}) — create_task'da FAQAT shulardan birini tanlang; "
+        "mos kelmasa category QO'YMANG (yangi kategoriya O'YLAB TOPMANG)",
+        ("  " + " · ".join(_cat_names)) if _cat_names else "  (hali kategoriya yo'q)",
+        "",
         f"## OVERDUE TASKS ({len(overdue)})",
         *(task_line(t) for t in overdue[:10]),
         "  (none)" if not overdue else "",

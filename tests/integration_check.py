@@ -254,6 +254,19 @@ async def main():
     await handlers._execute_actions([{"type": "delete_category", "data": {"category": "DelKat"}}])
     check("action delete_category: metadata o'chadi", (await database.get_category("DelKat")) is None)
 
+    # create_task category guard (B): reuse EXISTING only — never auto-create new
+    await database.create_category("GuardKat")
+    _ig = await handlers._execute_actions([{"type": "create_task",
+        "data": {"title": "Guard mavjud", "priority": "P2", "category": "GuardKat"}}])
+    _tg = await database.get_task(_ig["task"][0])
+    check("create_task: mavjud kategoriya saqlanadi",
+          bool(_tg) and _tg.get("category") == "GuardKat", f"{_tg.get('category') if _tg else None}")
+    _in = await handlers._execute_actions([{"type": "create_task",
+        "data": {"title": "Guard yangi", "priority": "P2", "category": "YoqBunaqaKat999"}}])
+    _tn = await database.get_task(_in["task"][0])
+    check("create_task: NOMA'LUM kategoriya tushiriladi (uncategorized, sprawl yo'q)",
+          bool(_tn) and not (_tn.get("category") or ""), f"{_tn.get('category') if _tn else None}")
+
     print("\n── Import round-trip dedup (yangilash, dublikat emas) ──")
     _t = await database.create_task({"title": "Dedup sinov", "priority": "P2", "status": "todo"})
     _a2 = handlers._structured_tasks_from_table(

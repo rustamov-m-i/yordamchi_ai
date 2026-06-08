@@ -911,6 +911,15 @@ async def list_categories(include_archived: bool = False) -> list[dict]:
     return out
 
 
+async def existing_category_names() -> set:
+    """Set of REAL category names (managed + in-use), excluding the '(boshqa)'
+    placeholder. The supervised allowlist for auto-categorization: on create_task
+    the LLM may only assign one of these — it must NEVER invent a new category
+    (that caused category sprawl). New categories come only from create_category."""
+    return {c["name"] for c in await list_categories()
+            if c.get("name") and c["name"] != "(boshqa)"}
+
+
 async def move_category(name: str, direction: str) -> bool:
     """Reorder a category up/down by swapping sort_order with its active neighbour."""
     if name == "(boshqa)":
