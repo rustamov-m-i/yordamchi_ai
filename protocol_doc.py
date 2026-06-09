@@ -278,3 +278,189 @@ def build_docx(fields: dict, script: str = "latin") -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ── PDF (reportlab — lazy; Debian/macOS Unicode TTF; graceful degradation) ──
+_PDF_FONTS = None  # cache: (regular_name, bold_name)
+
+_TTF_REGULAR = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",                 # Debian/Ubuntu
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",                    # macOS
+    "/Library/Fonts/Arial.ttf",
+]
+_TTF_BOLD = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+]
+
+
+def pdf_available() -> bool:
+    """True if reportlab is importable (PDF can be generated)."""
+    try:
+        import reportlab  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _register_pdf_fonts():
+    """Register a Cyrillic-capable Unicode TTF (so Kiril renders, not boxes).
+    Falls back to Helvetica (Latin-only) when no TTF is found — Cyrillic PDFs
+    then need a system font installed. Cached (re-registration errors)."""
+    global _PDF_FONTS
+    if _PDF_FONTS is not None:
+        return _PDF_FONTS
+    import os
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    reg = next((p for p in _TTF_REGULAR if os.path.exists(p)), None)
+    if reg:
+        bold = next((p for p in _TTF_BOLD if os.path.exists(p)), None)
+        try:
+            pdfmetrics.registerFont(TTFont("PDoc", reg))
+            pdfmetrics.registerFont(TTFont("PDoc-Bold", bold or reg))
+            _PDF_FONTS = ("PDoc", "PDoc-Bold")
+            return _PDF_FONTS
+        except Exception:
+            pass
+    _PDF_FONTS = ("Helvetica", "Helvetica-Bold")  # Latin-only fallback
+    return _PDF_FONTS
+
+
+def build_pdf(fields: dict, script: str = "latin") -> bytes:
+    """Agrobank korporativ bayonnomasini PDF bayt sifatida qaytaradi (Word bilan
+    bir xil dizayn). reportlab yo'q bo'lsa aniq xato beradi (handler ushlaydi)."""
+    try:
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_RIGHT, TA_LEFT
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Table,
+                                        TableStyle, Spacer)
+    except ImportError as e:
+        raise RuntimeError(
+            "PDF uchun 'reportlab' o'rnatilmagan. Serverda bir marta:\n"
+            "  ~/yordamchi_ai/venv/bin/python -m pip install reportlab"
+        ) from e
+
+    from xml.sax.saxutils import escape as _esc
+
+    FONT, FONT_B = _register_pdf_fonts()
+    navy = colors.HexColor("#" + NAVY)
+    zebra = colors.HexColor("#" + ZEBRA)
+    gray = colors.HexColor("#" + GRAY)
+    gray2 = colors.HexColor("#" + GRAY2)
+    white = colors.white
+    grid = colors.HexColor("#BBBBBB")
+
+    def tx(text: str) -> str:
+        return _esc(translit.transliterate(text or "", script))
+
+    def st(name, size, bold=False, color=colors.black, align=TA_LEFT, lead=None):
+        return ParagraphStyle(name, fontName=(FONT_B if bold else FONT), fontSize=size,
+                              textColor=color, alignment=align, leading=lead or size * 1.3)
+
+    s_org = st("org", 13, bold=True, color=navy, align=TA_CENTER)
+    s_dept = st("dept", 10, color=gray, align=TA_CENTER)
+    s_title = st("title", 15, bold=True, align=TA_CENTER)
+    s_sub = st("sub", 10, color=gray, align=TA_CENTER)
+    s_place = st("place", 11)
+    s_date = st("date", 11, align=TA_RIGHT)
+    s_head = st("head", 11, bold=True, color=navy)
+    s_body = st("body", 11, align=TA_JUSTIFY)
+    s_izoh = st("izoh", 9, color=gray2)
+    s_th = st("th", 10, bold=True, color=white, align=TA_CENTER)
+    s_num = st("num", 10, bold=True, color=navy, align=TA_CENTER)
+    s_cell = st("cell", 10)
+    s_sig = st("sig", 9, color=gray2, align=TA_RIGHT)
+
+    def P(text, style):
+        return Paragraph(tx(text), style)
+
+    story = []
+    story.append(P(fields.get("org_name") or "", s_org))
+    if fields.get("org_dept"):
+        story.append(P(fields["org_dept"], s_dept))
+    story.append(Spacer(1, 8))
+    story.append(P("BAYONNOMA № ____", s_title))
+    if fields.get("subtitle"):
+        story.append(P(fields["subtitle"], s_sub))
+    story.append(Spacer(1, 8))
+
+    pd = Table([[P(fields.get("place") or "", s_place), P(fields.get("date_str") or "", s_date)]],
+               colWidths=[8.25 * cm, 8.25 * cm])
+    pd.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                            ("TOPPADDING", (0, 0), (-1, -1), 0),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+    story.append(pd)
+    story.append(Spacer(1, 6))
+
+    if fields.get("mavzu"):
+        story.append(Paragraph(f'<b>{_esc(translit.transliterate("Mavzu: ", script))}</b>'
+                               + tx(fields["mavzu"]), s_body))
+    if fields.get("participants"):
+        story.append(Spacer(1, 4))
+        story.append(P("Uchrashuv ishtirokchilari:", s_head))
+        for nm in fields["participants"]:
+            story.append(P(f"—  {nm}", s_body))
+    if fields.get("agenda"):
+        story.append(Spacer(1, 4))
+        story.append(P("Kun tartibi:", s_head))
+        story.append(P(fields["agenda"], s_body))
+
+    story.append(Spacer(1, 6))
+    story.append(P("Muhokama qilindi va quyidagi topshiriqlar belgilandi:", s_head))
+    story.append(P(_IZOH, s_izoh))
+    story.append(Spacer(1, 4))
+
+    data = [[P(h, s_th) for h in _HEADERS]]
+    for idx, t in enumerate(fields.get("tasks") or [], 1):
+        data.append([
+            P(str(idx), s_num),
+            P(t.get("title") or "—", s_cell),
+            P(t.get("assignee") or "—", s_cell),
+            P(_fmt_deadline(t.get("deadline")), s_cell),
+        ])
+    tbl = Table(data, colWidths=[1.2 * cm, 9.55 * cm, 3.25 * cm, 3.75 * cm], repeatRows=1)
+    ts = TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), navy),
+        ("GRID", (0, 0), (-1, -1), 0.5, grid),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ])
+    for i in range(2, len(data), 2):  # even task rows → zebra
+        ts.add("BACKGROUND", (0, i), (-1, i), zebra)
+    tbl.setStyle(ts)
+    story.append(tbl)
+
+    if fields.get("participants"):
+        story.append(Spacer(1, 10))
+        story.append(P("Ishtirokchilar imzosi:", s_head))
+        sig_rows = [[P(nm, s_cell), P("______________  imzo", s_sig)]
+                    for nm in fields["participants"]]
+        sg = Table(sig_rows, colWidths=[9.88 * cm, 6.63 * cm])
+        sg.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+        story.append(sg)
+
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f'<b>{_esc(translit.transliterate("Bayonnomani tuzdi: ", script))}</b>'
+                           + tx((fields.get("author") or "") + "  _______________________"), s_body))
+
+    buf = io.BytesIO()
+    SimpleDocTemplate(
+        buf, pagesize=(21.59 * cm, 27.94 * cm),
+        leftMargin=2.54 * cm, rightMargin=1.3 * cm,
+        topMargin=2.54 * cm, bottomMargin=2.54 * cm,
+        title="Bayonnoma",
+    ).build(story)
+    return buf.getvalue()

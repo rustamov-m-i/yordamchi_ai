@@ -118,6 +118,28 @@ def main() -> None:
     check("cyrillic: navy header fill intact",
           _cell_fill(doc_c.tables[1].rows[0].cells[0]) == protocol_doc.NAVY)
 
+    print("\n── build_pdf ──")
+    if not protocol_doc.pdf_available():
+        check("reportlab o'rnatilgan (PDF)", False, "reportlab yo'q — PDF testlari o'tkazib yuborildi")
+    else:
+        pdf = protocol_doc.build_pdf(f, script="latin")
+        check("PDF magic %PDF", isinstance(pdf, bytes) and pdf[:4] == b"%PDF", str(pdf[:8]))
+        check("PDF non-trivial size", len(pdf) > 2000, str(len(pdf)))
+        pdf_c = protocol_doc.build_pdf(f, script="cyrillic")
+        check("PDF (cyrillic) %PDF", pdf_c[:4] == b"%PDF")
+        try:
+            from pypdf import PdfReader
+            rl = PdfReader(io.BytesIO(pdf))
+            ptxt = "\n".join((pg.extract_text() or "") for pg in rl.pages)
+            check("PDF text: AGROBANK", "AGROBANK" in ptxt, ptxt[:80])
+            check("PDF text: BAYONNOMA", "BAYONNOMA" in ptxt)
+            check("PDF text: Toshkent", "Toshkent" in ptxt)
+            rc = PdfReader(io.BytesIO(pdf_c))
+            ctxt = "\n".join((pg.extract_text() or "") for pg in rc.pages)
+            check("PDF (cyrillic) text: Кирилcha gliflar", ("Тошкент" in ctxt or "БАЁННОМА" in ctxt or "Мавзу" in ctxt), ctxt[:80])
+        except ImportError:
+            check("pypdf mavjud (matn tekshiruvi)", False, "pypdf yo'q — matn tekshiruvi o'tkazib yuborildi")
+
     print("\n" + "=" * 50)
     print(f"NATIJA:  ✅ {_PASS} o'tdi   ❌ {_FAIL} yiqildi")
     if _FAILED:
