@@ -165,6 +165,10 @@ _TASKS_SECTION_FILTERS = {
 # Last task filter the principal viewed — so an opened task's "⬅️ Ro'yxatga"
 # returns to THAT filter, not always "active". Single-user bot → module state ok.
 _last_task_filter: str = "active"
+# Same idea for meetings — an opened meeting's "⬅️ Ro'yxatga" returns to the
+# filter it was opened from (was hard-coded to "week", which jarred when you'd
+# filtered by "tomorrow"/"today").
+_last_meeting_filter: str = "week"
 
 MBTN_MEETINGS_WEEK = "Haftalik"
 MBTN_MEETINGS_TODAY = "Bugun"
@@ -765,7 +769,7 @@ def meeting_inline_actions(meeting: dict) -> InlineKeyboardMarkup:
         else:
             rows.append([InlineKeyboardButton(text="📝 Bayonnoma yaratish", callback_data=f"protocol:{mid}")])
         rows.append([InlineKeyboardButton(text="↺ Bo'ldi'ni bekor qilish", callback_data=f"meeting_undone:{mid}")])
-        rows.append([back_button("meetingfilter:week", "⬅️ Ro'yxatga")])
+        rows.append([back_button(f"meetingfilter:{_last_meeting_filter or 'week'}", "⬅️ Ro'yxatga")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Bo'ldi", callback_data=f"meeting_done:{mid}")],
@@ -774,7 +778,7 @@ def meeting_inline_actions(meeting: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"meeting_edit:{mid}"),
             InlineKeyboardButton(text="✕ Bekor qilish", callback_data=f"meeting_cancel:{mid}"),
         ],
-        [back_button("meetingfilter:week")],
+        [back_button(f"meetingfilter:{_last_meeting_filter or 'week'}")],
     ])
 
 
@@ -2673,6 +2677,7 @@ def _import_preview_keyboard(page: int, total_pages: int, switch_uid: str = "") 
         nav = []
         if page > 0:
             nav.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"imppage:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1} / {total_pages}", callback_data="noop"))
         if page < total_pages - 1:
             nav.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"imppage:{page + 1}"))
         rows.append(nav)
@@ -4491,10 +4496,10 @@ def reminders_compact_keyboard(
         nav: list[InlineKeyboardButton] = []
         if page > 1:
             nav.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"remfilter:{current_filter}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
         if page < total_pages:
             nav.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"remfilter:{current_filter}:{page + 1}"))
-        if nav:
-            rows.append(nav)
+        rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
@@ -4689,11 +4694,11 @@ def notes_compact_keyboard(notes: list[dict], current_filter: str = "inbox",
     if total_pages > 1:
         nav: list[InlineKeyboardButton] = []
         if page > 1:
-            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"notesfilter:{current_filter}:{page - 1}"))
+            nav.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"notesfilter:{current_filter}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
         if page < total_pages:
-            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"notesfilter:{current_filter}:{page + 1}"))
-        if nav:
-            rows.append(nav)
+            nav.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"notesfilter:{current_filter}:{page + 1}"))
+        rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
@@ -7021,13 +7026,13 @@ def meetings_filter_keyboard(
                 text="⬅️ Oldingi",
                 callback_data=f"meetingfilter:{current}:page:{page - 1}",
             ))
+        nav.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
         if page < total_pages:
             nav.append(InlineKeyboardButton(
                 text="Keyingi ➡️",
                 callback_data=f"meetingfilter:{current}:page:{page + 1}",
             ))
-        if nav:
-            rows.append(nav)
+        rows.append(nav)
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -7035,6 +7040,8 @@ def meetings_filter_keyboard(
 async def _render_meetings_for_filter(message: Message, filt: str = "week",
                                        edit_existing: bool = False,
                                        page: int = 1) -> None:
+    global _last_meeting_filter
+    _last_meeting_filter = filt
     now = datetime.now(database.TZ)
     today_start = database.TZ.localize(datetime.combine(now.date(), datetime.min.time()))
 

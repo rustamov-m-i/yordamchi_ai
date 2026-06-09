@@ -322,6 +322,44 @@ async def test_task_card_buttons() -> None:
     _txt_fut = handlers._format_tasks_compact(_fut_tasks, "Aktiv", stats=_stats_calm)
     t("list", "Kechikish: kelajakdagi vazifada chiqmaydi", "Kechikish" not in _txt_fut)
 
+    section("3d. CROSS-SECTION: PAGINATION INDICATOR + BACK-BUTTON")
+
+    def _ind(kb):
+        return [b.text for r in kb.inline_keyboard for b in r if "/" in b.text]
+
+    def _noop_cbs(kb):
+        return [b.callback_data for r in kb.inline_keyboard for b in r if "/" in b.text]
+
+    _imp = handlers._import_preview_keyboard(0, 3)  # 0-indexed → "1 / 3"
+    t("page", "Import preview: '1 / 3' ko'rsatkich", "1 / 3" in _ind(_imp))
+
+    _rems = [{"id": f"r{i}", "title": f"R{i}", "remind_at": None, "status": "scheduled"} for i in range(25)]
+    _rkb = handlers.reminders_compact_keyboard(_rems, current_filter="all", page=2)
+    t("page", "Reminders: '2 / 3' ko'rsatkich", "2 / 3" in _ind(_rkb))
+
+    _notes = [{"id": f"n{i}", "title": f"N{i}"} for i in range(25)]
+    _nkb = handlers.notes_compact_keyboard(_notes, current_filter="inbox", page=2)
+    _nlbls = [b.text for r in _nkb.inline_keyboard for b in r]
+    t("page", "Notes: '2 / 3' ko'rsatkich", "2 / 3" in _ind(_nkb))
+    t("page", "Notes: to'liq 'Oldingi/Keyingi' yorliqlari (emoji-only emas)",
+      any("Oldingi" in l for l in _nlbls) and any("Keyingi" in l for l in _nlbls))
+
+    _mkb = handlers.meetings_filter_keyboard(current="week", meetings=[], page=2, total_pages=3)
+    t("page", "Meetings: '2 / 3' ko'rsatkich", "2 / 3" in _ind(_mkb))
+
+    t("page", "Paginatsiya ko'rsatkichlari bosilmaydi (noop)",
+      _noop_cbs(_imp) == ["noop"] and _noop_cbs(_rkb) == ["noop"]
+      and _noop_cbs(_nkb) == ["noop"] and _noop_cbs(_mkb) == ["noop"])
+
+    # Meeting back-button preserves the last viewed filter (was hard-coded 'week').
+    handlers._last_meeting_filter = "tomorrow"
+    _mact = handlers.meeting_inline_actions({"id": "m1"})
+    _back_cbs = [b.callback_data for r in _mact.inline_keyboard for b in r
+                 if "meetingfilter" in (b.callback_data or "")]
+    t("page", "Meeting back-button joriy filterni saqlaydi (week emas)",
+      any("meetingfilter:tomorrow" in c for c in _back_cbs))
+    handlers._last_meeting_filter = "week"  # reset module state
+
 
 # ─────────────── 4. Vazifa yaratish ───────────────
 async def test_creation_flow() -> None:

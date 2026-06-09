@@ -488,7 +488,8 @@ async def main():
     check("list inline'da filtr-pills YO'Q", not ({"📥 Inbox", "⚙️ Ishlangan", "📦 Arxiv"} & _list_inline))
     check("list inline ∩ reply = bo'sh", not (_list_inline & _reply), str(_list_inline & _reply))
     check("detail inline ∩ reply = bo'sh", not (_det_inline & _reply), str(_det_inline & _reply))
-    check("list inline'da pagination saqlangan", "➡️" in _list_inline)
+    check("list inline'da pagination saqlangan (to'liq 'Keyingi' yorlig'i)",
+          any("Keyingi" in b for b in _list_inline))
     check("list inline'da drill-down raqamlar bor", "1" in _list_inline)
 
     print("\n── Qaydlar takomillashtirish (A · B3 Ishlandi · B4 yosh · C6 split) ──")
