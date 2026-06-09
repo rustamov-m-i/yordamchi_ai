@@ -310,8 +310,46 @@ def _extract_partial_user_message(buf: str) -> Optional[str]:
     return "".join(out)
 
 
+def _repair_json(text: str) -> str:
+    """Best-effort repair of the most common LLM JSON flaw: an UNESCAPED double-quote
+    inside a string value — e.g. a task title «"Pulli Gap"» makes json.loads raise
+    'Expecting , delimiter'. Walking the text, while inside a string a quote that is
+    NOT a structural delimiter (the next non-space char is one of , : } ] or EOF) is
+    content → escape it. Structural quotes and existing escapes are left intact."""
+    out: list = []
+    in_str = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if not in_str:
+            out.append(c)
+            if c == '"':
+                in_str = True
+            i += 1
+            continue
+        if c == "\\":                         # keep existing escape pairs intact
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j >= n or text[j] in ",:}]":   # structural close
+                out.append('"')
+                in_str = False
+            else:                             # content quote → escape it
+                out.append('\\"')
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _extract_json(text: str) -> Optional[dict]:
-    """Robust JSON extraction. Strips code fences and finds the first valid JSON object."""
+    """Robust JSON extraction. Strips code fences, finds the JSON object, and repairs
+    unescaped quotes inside string values before giving up."""
     text = text.strip()
     fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
     if fence:
@@ -324,10 +362,15 @@ def _extract_json(text: str) -> Optional[dict]:
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
+    candidate = text[start : end + 1]
     try:
-        return json.loads(text[start : end + 1])
+        return json.loads(candidate)
     except json.JSONDecodeError:
-        logger.exception("Failed to parse JSON from Claude response: %s", text[:500])
+        pass
+    try:                                       # repair unescaped inner quotes, retry once
+        return json.loads(_repair_json(candidate))
+    except json.JSONDecodeError:
+        logger.warning("JSON parse failed even after repair: %s", candidate[:300])
         return None
 
 

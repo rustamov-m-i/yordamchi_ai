@@ -277,6 +277,15 @@ async def main():
           "7." in _sb and "tX7" in _sb and "Rekvizit" in _sb, _sb[-400:])
     _cs.set_last_task_view([])
 
+    # JSON repair: unescaped double-quotes inside a string value (real bug: a task
+    # title «"Pulli Gap"» broke json.loads → command silently failed).
+    _bad = '{"intent":"A","actions":[],"user_message":"«"Pulli Gap" shartnoma»","buttons":[]}'
+    _p = _cs._extract_json(_bad)
+    check("json-repair: buzuq qo'shtirnoqli JSON tiklandi", bool(_p) and _p.get("intent") == "A", f"{_p}")
+    check("json-repair: user_message saqlandi", bool(_p) and "Pulli Gap" in (_p.get("user_message") or ""))
+    check("json-repair: to'g'ri JSON buzilmaydi",
+          (_cs._extract_json('{"intent":"B","user_message":"oddiy matn"}') or {}).get("intent") == "B")
+
     print("\n── Import round-trip dedup (yangilash, dublikat emas) ──")
     _t = await database.create_task({"title": "Dedup sinov", "priority": "P2", "status": "todo"})
     _a2 = handlers._structured_tasks_from_table(
