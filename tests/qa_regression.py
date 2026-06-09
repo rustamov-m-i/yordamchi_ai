@@ -467,6 +467,18 @@ async def test_create_action_preview_format():
       "Bekzod" in preview and "Alisher" in preview)
     t("preview", "non-destructive action excluded",
       "Should be skipped" not in preview)
+    # Transcript echo: original_input is shown ABOVE the confirm header so a
+    # mis-heard voice command is visible before it executes.
+    preview_voice = await handlers._format_create_preview(
+        [a for a in actions if a["type"] in handlers._DESTRUCTIVE_ACTION_TYPES],
+        original_input="Bekzodga marketing rejasini ertaga top",
+    )
+    t("preview", "original_input echoed in preview",
+      "Eshitildi" in preview_voice and "marketing rejasini" in preview_voice)
+    t("preview", "echo sits above the confirm header",
+      preview_voice.index("Eshitildi") < preview_voice.index("TASDIQLAYSIZMI"))
+    t("preview", "no echo when original_input omitted (back-compat)",
+      "Eshitildi" not in preview)
 
 
 async def test_today_tasks_strict_deadline_filter():
@@ -675,6 +687,28 @@ def test_destructive_action_types():
       actual == expected, f"got={actual}")
 
 
+async def test_update_task_always_confirms():
+    """update_task overwrites an existing field with NO undo, so — like deletes —
+    it ALWAYS confirms via _UPDATE_ACTION_TYPES, independent of
+    confirm_create_actions. The confirm preview shows an old→new diff."""
+    section("15b. update_task — always-confirm gate + old→new preview")
+    import inspect
+    t("update", "_UPDATE_ACTION_TYPES contains update_task",
+      "update_task" in handlers._UPDATE_ACTION_TYPES)
+    src = inspect.getsource(handlers._process_and_reply)
+    flat = src.replace(" ", "")
+    t("update", "gate adds field_updates to to_confirm unconditionally",
+      "field_updates=[a" in flat and "to_confirm=list(bulk_deletes)" in flat
+      and "+list(field_updates)" in flat)
+    preview = await handlers._format_create_preview(
+        [{"type": "update_task", "id": "t-x",
+          "data": {"priority": "P0", "deadline": "2030-01-01T09:00:00+05:00"}}],
+    )
+    t("update", "edit preview header present", "Tahrirlanadi" in preview)
+    t("update", "shows old→new arrow", "→" in preview)
+    t("update", "warns the old value is overwritten", "saqlanmaydi" in preview)
+
+
 async def test_aisha_provider_chain():
     """Aisha integration regression — verifies the provider chain wiring
     (Aisha → Muxlisa → Whisper) without actually calling the network.
@@ -829,6 +863,60 @@ def test_icons_module_palette():
       ic_mod.PRIORITY_BADGE.get("P0") == "🔴")
 
 
+async def test_parity_actions():
+    """Bot-wide button↔voice/text parity: every new action is handled by
+    _execute_actions, documented in the contract, and (for the safe ones) works
+    end-to-end through _execute_actions against the real DB."""
+    section("17. Button↔voice parity — new actions")
+    import inspect
+    src = inspect.getsource(handlers._execute_actions)
+    mutating = ["reopen_task", "complete_reminder", "update_reminder", "delete_reminder",
+                "complete_meeting", "update_meeting", "note_to_task", "note_to_reminder",
+                "update_note", "delete_note", "update_category", "move_category", "update_setting"]
+    for a in mutating:
+        t("parity", f"_execute_actions handles {a}", f'"{a}"' in src)
+    for a in mutating + ["show_stats", "run_plan"]:
+        t("parity", f"contract documents {a}", a in config.SYSTEM_PROMPT)
+    t("parity", "show_stats render-routed", "show_stats" in handlers._SHOW_ACTION_TYPES)
+    t("parity", "run_plan render-routed", "run_plan" in handlers._SHOW_ACTION_TYPES)
+    t("parity", "delete_reminder always-confirms",
+      "delete_reminder" in handlers._SINGLE_DELETE_ACTION_TYPES)
+    t("parity", "delete_note always-confirms",
+      "delete_note" in handlers._SINGLE_DELETE_ACTION_TYPES)
+
+    # Functional round-trips through _execute_actions (real DB).
+    tid = await database.create_task({"title": "AUDIT_parity_reopen", "priority": "P2", "status": "todo"})
+    await database.complete_task(tid)
+    await handlers._execute_actions([{"type": "reopen_task", "id": tid}])
+    task = await database.get_task(tid)
+    t("parity", "reopen_task → status back to todo", bool(task) and task["status"] == "todo")
+    await database.delete_task(tid, source="audit_cleanup")
+
+    rid = await database.create_reminder({
+        "title": "AUDIT_parity_rem",
+        "remind_at": (datetime.now(database.TZ) + timedelta(hours=2)).isoformat()})
+    await handlers._execute_actions([{"type": "complete_reminder", "id": rid}])
+    rem = await database.get_reminder(rid)
+    t("parity", "complete_reminder → no longer scheduled",
+      bool(rem) and rem.get("status") != "scheduled")
+
+    before = (await database.get_settings()).get("notifications_enabled", True)
+    await handlers._execute_actions(
+        [{"type": "update_setting", "data": {"key": "notifications_enabled", "value": False}}])
+    t("parity", "update_setting flips notifications_enabled",
+      (await database.get_settings()).get("notifications_enabled") is False)
+    await database.set_setting("notifications_enabled", before)  # restore
+
+    nid = await database.create_note(
+        {"content": "AUDIT_parity_note body", "title": "AUDIT_parity_note", "source": "manual"})
+    res = await handlers._execute_actions([{"type": "note_to_task", "id": nid}])
+    t("parity", "note_to_task created a task from the note", bool(res.get("task")))
+    if res.get("task"):
+        await database.delete_task(res["task"][0], source="audit_cleanup")
+    await handlers._execute_actions([{"type": "delete_note", "id": nid}])
+    t("parity", "delete_note removed the note", await database.get_note(nid) is None)
+
+
 async def main():
     config.ensure_paths()
     await database.init()
@@ -855,6 +943,8 @@ async def main():
     test_voice_and_create_confirm_settings()
     await test_create_action_preview_format()
     test_destructive_action_types()
+    await test_update_task_always_confirms()
+    await test_parity_actions()
     await test_today_tasks_strict_deadline_filter()
     test_maybe_refresh_section_present()
     await test_notes_crud_roundtrip()

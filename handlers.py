@@ -1081,6 +1081,55 @@ async def _upsert_contacts(names: list[str]) -> int:
     return created
 
 
+# Settings reachable by voice/text via the `update_setting` action.
+_SETTING_BOOL_KEYS = {"notifications_enabled", "voice_auto_confirm",
+                      "confirm_create_actions", "quiet_hours_enabled"}
+_SETTING_TIME_KEYS = {"morning_briefing_time", "evening_summary_time",
+                      "quiet_hours_start", "quiet_hours_end"}
+_SETTING_INT_KEYS = {"meeting_reminder_min", "task_reminder_hours"}
+_BRIEFING_TIME_KEYS = {"morning_briefing_time", "evening_summary_time"}
+
+
+def _coerce_setting_value(key: str, value):
+    """Coerce a Claude-provided setting value to the type the DB expects.
+    Returns (ok, coerced_value)."""
+    if key in _SETTING_BOOL_KEYS:
+        if isinstance(value, bool):
+            return True, value
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on", "yoq", "yoqilgan", "ha"):
+            return True, True
+        if s in ("0", "false", "no", "off", "ochir", "o'chirilgan", "yo'q"):
+            return True, False
+        return False, None
+    if key in _SETTING_INT_KEYS:
+        try:
+            return True, int(value)
+        except (TypeError, ValueError):
+            return False, None
+    if key in _SETTING_TIME_KEYS:
+        s = str(value).strip()
+        return (True, s) if re.match(r"^\d{1,2}:\d{2}$", s) else (False, None)
+    return False, None
+
+
+async def _apply_setting_action(data: dict) -> None:
+    """Handle the `update_setting` action — voice/text parity for settings toggles.
+    Whitelisted keys only; briefing-time keys reschedule the scheduler live."""
+    key = (data.get("key") or "").strip()
+    if key not in (_SETTING_BOOL_KEYS | _SETTING_TIME_KEYS | _SETTING_INT_KEYS):
+        logger.warning("update_setting: unsupported key %r", key)
+        return
+    ok, value = _coerce_setting_value(key, data.get("value"))
+    if not ok:
+        logger.warning("update_setting: bad value for %r: %r", key, data.get("value"))
+        return
+    await database.set_setting(key, value)
+    if key in _BRIEFING_TIME_KEYS:
+        await _reschedule_briefings_live()
+    logger.info("update_setting via voice/text: %s = %r", key, value)
+
+
 async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     """Execute Claude-returned actions. Return map of type → list of affected IDs.
     Side effect: assignees on create_task/update_task and participants on
@@ -1228,6 +1277,82 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                     n = await database.rename_category(frm, cat)
                     created_ids["_refresh"].append("task")
                     logger.info("Reassigned %d tasks: %r → %r", n, frm, cat)
+            # ── Parity actions: every button operation also reachable by voice/text ──
+            elif atype == "reopen_task" and target_id:
+                await database.update_task(target_id, {"status": "todo"}, source="reopen")
+                created_ids["task"].append(target_id)
+            elif atype == "complete_reminder" and target_id:
+                await database.complete_reminder(target_id)
+                created_ids["reminder"].append(target_id)
+            elif atype == "update_reminder" and target_id:
+                # Covers snooze (remind_at), title/note/recurrence edits.
+                await database.update_reminder(target_id, data)
+                created_ids["reminder"].append(target_id)
+            elif atype == "delete_reminder" and target_id:
+                await database.cancel_reminder(target_id)
+            elif atype == "complete_meeting" and target_id:
+                if data.get("undo"):
+                    await database.uncomplete_meeting(target_id)
+                else:
+                    await database.complete_meeting(target_id)
+                created_ids["meeting"].append(target_id)
+            elif atype == "update_meeting" and target_id:
+                # Reschedule (datetime_start/end), duration, title, participants…
+                await database.update_meeting(target_id, data)
+                created_ids["meeting"].append(target_id)
+                if data.get("assignee") or data.get("participants"):
+                    await _upsert_contacts(list(data.get("participants") or []))
+            elif atype == "note_to_task" and target_id:
+                note = await database.get_note(target_id)
+                if note:
+                    n_title = (note.get("title") or note.get("content", "Qayddan vazifa")).strip()[:200]
+                    n_desc = (note.get("content") or "").strip()
+                    if n_desc == n_title:
+                        n_desc = None
+                    n_tags = list(note.get("tags") or []) + [f"note:{target_id}"]
+                    ntid = await database.create_task({
+                        "title": n_title, "description": n_desc,
+                        "priority": data.get("priority") or "P2", "status": "todo",
+                        "tags": n_tags, "source": "note",
+                        "deadline": data.get("deadline"), "assignee": data.get("assignee"),
+                    })
+                    created_ids["task"].append(ntid)
+                    await database.mark_note_processed(target_id, "task", ntid)
+            elif atype == "note_to_reminder" and target_id:
+                note = await database.get_note(target_id)
+                if note and data.get("remind_at"):
+                    nrid = await database.create_reminder({
+                        "title": (note.get("title") or note.get("content", "Eslatma")).strip()[:200],
+                        "note": note.get("content"), "remind_at": data.get("remind_at"),
+                        "source": "note",
+                    })
+                    created_ids["reminder"].append(nrid)
+                    await database.mark_note_processed(target_id, "reminder", nrid)
+            elif atype == "update_note" and target_id:
+                # status changes: processed (done) / archived / inbox (restore), or edit.
+                await database.update_note(target_id, data)
+                created_ids["note"].append(target_id)
+                created_ids["_refresh"].append("note")
+            elif atype == "delete_note" and target_id:
+                await database.delete_note(target_id)
+                created_ids["_refresh"].append("note")
+            elif atype == "update_category":
+                cat = (data.get("category") or "").strip()
+                if cat:
+                    await database.update_category(
+                        cat, new_name=(data.get("new_name") or None),
+                        icon=(data.get("icon") or None))
+                    if "archived" in data:
+                        await database.archive_category(cat, bool(data.get("archived")))
+                    created_ids["_refresh"].append("task")
+            elif atype == "move_category":
+                cat = (data.get("category") or "").strip()
+                direction = (data.get("direction") or "").strip().lower()
+                if cat and direction in ("up", "down"):
+                    await database.move_category(cat, direction)
+                    created_ids["_refresh"].append("task")
+            elif atype == "update_setting":
+                await _apply_setting_action(data)
             elif atype == "none":
                 pass
             else:
@@ -1477,6 +1602,10 @@ _STREAM_EDIT_MIN_DELTA_CHARS = 24    # don't spam edits for tiny additions
 
 _DESTRUCTIVE_ACTION_TYPES = {"create_task", "schedule_meeting"}
 
+# Field edits overwrite an existing task's value with NO undo, so — like deletes —
+# they ALWAYS confirm, independent of the confirm_create_actions setting.
+_UPDATE_ACTION_TYPES = {"update_task"}
+
 # Most tasks/meetings creatable from a single CHAT message. A pasted list of ~14 is
 # realistic; beyond ~20 the JSON response risks truncation and the confirm card
 # grows unwieldy. We keep the first N and tell the principal to resend the rest.
@@ -1504,7 +1633,7 @@ _BULK_DELETE_LABEL = {
 
 # Single delete/cancel via voice/text. ALWAYS confirm (a mis-heard "X'ni o'chir"
 # shouldn't silently delete) — independent of the confirm_create_actions setting.
-_SINGLE_DELETE_ACTION_TYPES = {"delete_task", "cancel_meeting"}
+_SINGLE_DELETE_ACTION_TYPES = {"delete_task", "cancel_meeting", "delete_reminder", "delete_note"}
 
 # Category-scoped destructive actions. ALWAYS confirm — delete_category clears a
 # label off many tasks; delete_tasks_by_category wipes them. Previewed with the
@@ -1732,7 +1861,7 @@ async def _render_free_slots(message: Message, action: dict) -> None:
 
 _SHOW_ACTION_TYPES = {
     "show_tasks", "show_meetings", "show_notes", "show_reminders", "show_contacts",
-    "show_free_slots",
+    "show_free_slots", "show_stats", "run_plan",
 }
 
 
@@ -1765,13 +1894,48 @@ async def _render_show_action(message: Message, state: "FSMContext | None", acti
         await cmd_reminders(message, state)
     elif atype == "show_contacts":
         await cmd_team(message, state)
+    elif atype == "show_stats":
+        d = action.get("data") or {}
+        try:
+            days = int(d.get("days", 7))
+        except (TypeError, ValueError):
+            days = 7
+        is_report = bool(d.get("report"))
+        if days not in ((7, 30) if is_report else (1, 7, 30)):
+            days = 7
+        label = {1: "Bugun", 7: "Oxirgi 7 kun", 30: "Oxirgi 30 kun"}.get(days, "Oxirgi 7 kun")
+        stats = await database.executive_stats(days=days)
+        text = _format_executive_report(stats, label) if is_report else _format_stats_dashboard(stats, label)
+        await _safe_answer(message, text, parse_mode="Markdown")
+    elif atype == "run_plan":
+        await _run_planning_session(message, (action.get("data") or {}).get("situation") or "")
 
 
-async def _format_create_preview(actions: list[dict]) -> str:
-    """Render a confirm-prompt preview for create / bulk-delete actions, shown
+# Editable fields shown (Uzbek) in the update_task old→new confirm diff.
+_EDIT_FIELD_UZ = {
+    "title": "Sarlavha", "description": "Tavsif", "deadline": "Muddat",
+    "priority": "Ustuvorlik", "status": "Status", "assignee": "Ijrochi",
+    "tags": "Teglar", "category": "Kategoriya",
+}
+
+
+async def _format_create_preview(actions: list[dict], original_input: str | None = None) -> str:
+    """Render a confirm-prompt preview for create / edit / delete actions, shown
     before execution. Bulk deletes show the LIVE row count so the user sees
-    exactly how much would be wiped."""
-    lines = ["⚠️ **TASDIQLAYSIZMI?**", ""]
+    exactly how much would be wiped.
+
+    When `original_input` is given (the user's typed text or voice transcript), it
+    is shown ABOVE the prompt so the principal can verify WHAT WAS UNDERSTOOD
+    before confirming — critical for voice, where a mis-transcription would
+    otherwise act silently."""
+    lines: list[str] = []
+    if original_input:
+        src = original_input.strip()
+        if len(src) > 600:
+            src = src[:600] + "…"
+        lines.append(f"🎙 **Eshitildi:** {_escape_markdown(src)}")
+        lines.append("")
+    lines += ["⚠️ **TASDIQLAYSIZMI?**", ""]
     # When many tasks/meetings are created at once (e.g. a pasted list of 14),
     # the full 6-line card per item overflows Telegram's 4096-char message limit
     # and is hard to scan. Switch to one compact line per item past this count.
@@ -1804,13 +1968,31 @@ async def _format_create_preview(actions: list[dict]) -> str:
                 start_label = start
             lines.append(f"🤝 {create_idx}. {title} — 🕐 {start_label}")
             continue
-        if t == "update_task":  # import round-trip: existing task edited in Excel
+        if t == "update_task":  # an EDIT — show changed fields old→new (no undo → always confirm)
             try:
                 task = await database.get_task(a.get("id"))
             except Exception:
                 task = None
-            title = (task or {}).get("title") or (d.get("title") or a.get("id", "—"))
-            lines.append(f"✏️ **Yangilanadi:** {title}")
+            cur = task or {}
+            title = cur.get("title") or d.get("title") or a.get("id", "—")
+            lines.append(f"✏️ **Tahrirlanadi:** {title}")
+            for k, v in d.items():
+                if k not in _EDIT_FIELD_UZ:
+                    continue
+                old = cur.get(k)
+                if k == "priority":
+                    old, v = _PRIORITY_LABEL_UZ.get(old, old), _PRIORITY_LABEL_UZ.get(v, v)
+                elif k == "status":
+                    old, v = _STATUS_LABEL_UZ.get(old, old), _STATUS_LABEL_UZ.get(v, v)
+                elif k == "deadline":
+                    old = _format_deadline_short(old)[0] if old else "—"
+                    v = _format_deadline_short(v)[0] if v else "—"
+                elif k == "tags":
+                    old = ", ".join(old) if isinstance(old, list) else old
+                    v = ", ".join(v) if isinstance(v, list) else v
+                old = "—" if old in (None, "", []) else old
+                lines.append(f"   {_EDIT_FIELD_UZ[k]}: {old} → {v}")
+            lines.append("   _Eski qiymat saqlanmaydi._")
             lines.append("")
             continue
         if t == "delete_category":
@@ -1850,6 +2032,26 @@ async def _format_create_preview(actions: list[dict]) -> str:
                 m = None
             title = (m or {}).get("title", a.get("id", "—"))
             lines.append(f"🗑 **Uchrashuv bekor qilinadi:** {title}")
+            lines.append("   _Qaytarib bo'lmaydi._")
+            lines.append("")
+            continue
+        if t == "delete_reminder":
+            try:
+                r = await database.get_reminder(a.get("id"))
+            except Exception:
+                r = None
+            title = (r or {}).get("title", a.get("id", "—"))
+            lines.append(f"🗑 **Eslatma o'chiriladi:** {title}")
+            lines.append("   _Qaytarib bo'lmaydi._")
+            lines.append("")
+            continue
+        if t == "delete_note":
+            try:
+                nt = await database.get_note(a.get("id"))
+            except Exception:
+                nt = None
+            title = (nt or {}).get("title") or ((nt or {}).get("content") or a.get("id", "—"))[:50]
+            lines.append(f"🗑 **Qayd o'chiriladi:** {title}")
             lines.append("   _Qaytarib bo'lmaydi._")
             lines.append("")
             continue
@@ -2045,42 +2247,45 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
         bulk_deletes = [a for a in actions if a.get("type") in _BULK_DELETE_ACTION_TYPES]
         single_deletes = [a for a in actions if a.get("type") in _SINGLE_DELETE_ACTION_TYPES]
         cat_deletes = [a for a in actions if a.get("type") in _CATEGORY_DELETE_ACTION_TYPES]
-        # Deletes ALWAYS confirm (irreversible). Creates confirm only if the
+        field_updates = [a for a in actions if a.get("type") in _UPDATE_ACTION_TYPES]
+        # Deletes AND field-edits ALWAYS confirm: both are irreversible (an edit
+        # overwrites the old value with no undo). Creates confirm only if the
         # confirm_create_actions setting is on.
-        to_confirm = list(bulk_deletes) + list(single_deletes) + list(cat_deletes)
+        to_confirm = list(bulk_deletes) + list(single_deletes) + list(cat_deletes) + list(field_updates)
         if _settings.get("confirm_create_actions", True):
             to_confirm += [a for a in actions if a.get("type") in _DESTRUCTIVE_ACTION_TYPES]
         if state is not None and to_confirm:
-            if True:
-                preview = await _format_create_preview(to_confirm) + _overflow_note
-                confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="acts_confirm"),
-                    InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
-                ]])
-                # Remember the prior section state so cb_actions_confirm can
-                # restore it and re-render the section after the deferred execute.
+            # Show the user the original input (transcript/typed text) above the
+            # preview so a mis-heard voice command is caught before it executes.
+            preview = await _format_create_preview(to_confirm, original_input=user_text) + _overflow_note
+            confirm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Tasdiqlayman", callback_data="acts_confirm"),
+                InlineKeyboardButton(text="✕ Bekor qilish", callback_data="acts_cancel"),
+            ]])
+            # Remember the prior section state so cb_actions_confirm can
+            # restore it and re-render the section after the deferred execute.
+            try:
+                prior_state = await state.get_state()
+            except Exception:
+                prior_state = None
+            await state.set_state(CreateActionConfirmFSM.awaiting)
+            await state.update_data(
+                pending_response=final_response,
+                _prior_section=prior_state,
+            )
+            if progress_msg is not None:
                 try:
-                    prior_state = await state.get_state()
-                except Exception:
-                    prior_state = None
-                await state.set_state(CreateActionConfirmFSM.awaiting)
-                await state.update_data(
-                    pending_response=final_response,
-                    _prior_section=prior_state,
-                )
-                if progress_msg is not None:
-                    try:
-                        await progress_msg.edit_text(
-                            preview, parse_mode="Markdown", reply_markup=confirm_kb
-                        )
-                    except TelegramBadRequest:
-                        await _safe_answer(message, preview,
-                                            reply_markup=confirm_kb, parse_mode="Markdown")
-                else:
+                    await progress_msg.edit_text(
+                        preview, parse_mode="Markdown", reply_markup=confirm_kb
+                    )
+                except TelegramBadRequest:
                     await _safe_answer(message, preview,
                                         reply_markup=confirm_kb, parse_mode="Markdown")
-                await database.complete_pending_action(pending_id)
-                return
+            else:
+                await _safe_answer(message, preview,
+                                    reply_markup=confirm_kb, parse_mode="Markdown")
+            await database.complete_pending_action(pending_id)
+            return
 
         ids_by_type = await _execute_actions(actions)
         keyboard = _build_keyboard(final_response.get("buttons", []), ids_by_type,
@@ -7394,7 +7599,10 @@ async def handle_meeting_followup_voice(message: Message, state: FSMContext, bot
     if not transcript:
         await message.answer("Ovozni o'qiy olmadim. Matn bilan qayta yuboring.")
         return
-    await message.answer(f"_🎙 Tushundim:_ {_escape_markdown(transcript[:500])}", parse_mode="Markdown")
+    _fu_shown = transcript.strip()
+    if len(_fu_shown) > 600:
+        _fu_shown = _fu_shown[:600] + "…"
+    await message.answer(f"_🎙 Tushundim:_ {_escape_markdown(_fu_shown)}", parse_mode="Markdown")
     await _run_meeting_followup_extraction(message, meeting, transcript)
 
 
@@ -8815,6 +9023,27 @@ async def cb_search_back(query: CallbackQuery) -> None:
 
 _NEWTASK_PRIORITY_MAP = {"P0": "Shoshilinch", "P1": "Muhim", "P2": "Rejadagi", "P3": "Oddiy"}
 
+# Voice/text → priority code. Longest phrase wins (so "juda muhim" → P0, not P1).
+_PRIORITY_WORDS = {
+    "shoshilinch": "P0", "juda muhim": "P0", "zudlik": "P0", "zarur": "P0",
+    "favqulodda": "P0", "tezkor": "P0",
+    "muhim": "P1", "kerakli": "P1",
+    "rejadagi": "P2", "rejali": "P2", "oddiy": "P2", "o'rtacha": "P2",
+    "past ustuvorlik": "P3", "muhim emas": "P3", "shoshilmaydi": "P3", "past": "P3",
+}
+
+
+def _parse_priority_word(text: str) -> str | None:
+    """Map an Uzbek priority word/phrase (or raw 'P0'..'P3') to a priority code.
+    Returns None when nothing matches so the caller can re-prompt."""
+    s = (text or "").strip().lower()
+    if s in {"p0", "p1", "p2", "p3"}:
+        return s.upper()
+    for phrase in sorted(_PRIORITY_WORDS, key=len, reverse=True):
+        if phrase in s:
+            return _PRIORITY_WORDS[phrase]
+    return None
+
 
 def _newtask_summary(data: dict) -> str:
     """Render the running summary shown above each form step."""
@@ -8970,6 +9199,34 @@ async def newtask_priority(query: CallbackQuery, state: FSMContext) -> None:
     except TelegramBadRequest:
         await _safe_answer(query.message, text, parse_mode="Markdown",
                             reply_markup=_newtask_deadline_kb())
+
+
+@router.message(StateFilter(NewTaskFSM.awaiting_priority), F.text | F.voice)
+async def newtask_priority_typed(message: Message, state: FSMContext) -> None:
+    """Voice/text parity for the priority step — saying «shoshilinch» (or typing
+    it) lands the same P0-P3 outcome as tapping the inline button. Mirrors
+    newtask_priority's state transition exactly."""
+    _msg_text = await _get_text_or_transcribe(message, bot=message.bot)
+    if _msg_text is None:
+        return
+    pri = _parse_priority_word(message.text or "")
+    if not pri:
+        await _safe_answer(
+            message,
+            "⚡ Ustuvorlikni ayting yoki tugmadan tanlang: "
+            "«shoshilinch», «muhim», «rejadagi» yoki «oddiy».",
+            parse_mode="Markdown", reply_markup=_newtask_priority_kb(),
+        )
+        return
+    await state.update_data(priority=pri)
+    await state.set_state(NewTaskFSM.awaiting_deadline)
+    data = await state.get_data()
+    await _safe_answer(
+        message,
+        f"{_newtask_summary(data)}\n" + _SEP + "\n\n"
+        "3️⃣ **Muddat** tanlang yoki o'tkazib yuboring:",
+        parse_mode="Markdown", reply_markup=_newtask_deadline_kb(),
+    )
 
 
 def _newtask_compute_day(key: str) -> tuple[str | None, str | None]:
@@ -9268,6 +9525,29 @@ async def newtask_confirm(query: CallbackQuery, state: FSMContext) -> None:
         payload["deadline"] = data["deadline"]
     if data.get("assignee"):
         payload["assignee"] = data["assignee"]
+
+    # Past-deadline guard: warn once and require an explicit "create anyway" tap.
+    # Overdue items are legitimate (there's an "O'tgan" view), so we warn, not block.
+    if payload.get("deadline") and database.is_past_deadline(payload["deadline"]) \
+            and not data.get("_confirm_past"):
+        await state.update_data(_confirm_past=True)
+        await query.answer()
+        dl_label, _ = _format_deadline_short(payload["deadline"])
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Baribir yaratish", callback_data="newtask:confirm")],
+            [InlineKeyboardButton(text="✕ Bekor qilish", callback_data="newtask:cancel")],
+        ])
+        try:
+            await query.message.edit_text(
+                f"⚠️ **Muddat o'tib ketgan** ({dl_label})\n\n"
+                "Bu vazifaning muddati o'tmishda. Baribir yaratilsinmi?",
+                parse_mode="Markdown", reply_markup=kb)
+        except TelegramBadRequest:
+            await _safe_answer(
+                query.message,
+                f"⚠️ Muddat o'tib ketgan ({dl_label}). Baribir yaratilsinmi?",
+                reply_markup=kb)
+        return
 
     tid = await database.create_task(payload)
     await state.clear()
@@ -10350,8 +10630,13 @@ async def handle_voice(message: Message, bot: Bot, state: FSMContext) -> None:
         # then immediately dispatch to Claude without an extra tap. Any
         # destructive action (create_task / schedule_meeting) still gets a
         # confirm prompt downstream via confirm_create_actions.
+        # Show the FULL transcript (600-char safety cap) so the user sees exactly
+        # what was heard — a non-destructive action runs immediately afterward.
+        _shown = transcript.strip()
+        if len(_shown) > 600:
+            _shown = _shown[:600] + "…"
         await message.answer(
-            f"_🎙 Tushundim:_ {_escape_markdown(transcript[:400])}",
+            f"_🎙 Tushundim:_ {_escape_markdown(_shown)}",
             parse_mode="Markdown",
         )
         await _process_and_reply(message, transcript, state=state)
@@ -11262,15 +11547,62 @@ async def cb_task_del_confirm(query: CallbackQuery) -> None:
         await _safe_answer(query.message, text, parse_mode="Markdown", reply_markup=kb)
 
 
+# Single-task delete undo: full deleted-task dict + timestamp, keyed by an opaque
+# token. Lighter than _UNDO_BACKUPS (no full-DB copy) — restored via restore_task.
+_UNDO_TASKS: dict[str, tuple[dict, datetime]] = {}
+_UNDO_TASK_TTL = timedelta(minutes=5)
+
+
+def _undo_task_gc() -> None:
+    """Drop undo entries older than the TTL so the dict can't grow unbounded."""
+    cutoff = datetime.now(database.TZ) - _UNDO_TASK_TTL
+    for k in [k for k, (_, ts) in _UNDO_TASKS.items() if ts < cutoff]:
+        _UNDO_TASKS.pop(k, None)
+
+
 @router.callback_query(F.data.startswith("task_del_do:"))
 async def cb_task_del_do(query: CallbackQuery) -> None:
-    """Execute task deletion after confirmation."""
+    """Execute task deletion after confirmation, offering a one-tap undo."""
     tid = query.data.split(":", 1)[1]
+    snapshot = await database.get_task(tid)   # capture BEFORE delete for undo
     await database.delete_task(tid)
     await query.answer("✅ Vazifa o'chirildi")
+    kb = single_back_keyboard("taskfilter:active")
+    if snapshot:
+        _undo_task_gc()
+        token = database.new_id("undo-")
+        _UNDO_TASKS[token] = (snapshot, datetime.now(database.TZ))
+        undo_row = [InlineKeyboardButton(text="↩️ Qaytarish",
+                                         callback_data=f"undotask:{token}")]
+        kb = InlineKeyboardMarkup(inline_keyboard=[undo_row] + list(kb.inline_keyboard))
+    try:
+        await query.message.edit_text("🗑 Vazifa o'chirildi.", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("undotask:"))
+async def cb_undo_task_delete(query: CallbackQuery) -> None:
+    """'↩️ Qaytarish' after a single-task delete — re-insert the captured row with
+    its original id. Mirrors the bulk-delete undo, but per-task (no DB snapshot)."""
+    token = query.data.split(":", 1)[1]
+    entry = _UNDO_TASKS.pop(token, None)
+    if not entry:
+        await query.answer("Qaytarish muddati o'tdi.", show_alert=True)
+        return
+    snapshot, _ts = entry
+    try:
+        ok = await database.restore_task(snapshot)
+    except Exception as e:
+        await query.message.answer(_humanize_error(e))
+        return
+    if not ok:
+        await query.answer("Allaqachon tiklangan.", show_alert=True)
+        return
+    await query.answer("↩️ Tiklandi ✅")
     try:
         await query.message.edit_text(
-            "🗑 Vazifa o'chirildi.",
+            "↩️ Vazifa tiklandi.",
             reply_markup=single_back_keyboard("taskfilter:active"),
         )
     except TelegramBadRequest:
@@ -12888,6 +13220,7 @@ async def handle_edit_value(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
     raw = message.text.strip()
+    past_note = ""
 
     if field == "title":
         await database.update_task(tid, {"title": raw[:200]}, source="edit")
@@ -12903,6 +13236,10 @@ async def handle_edit_value(message: Message, state: FSMContext) -> None:
         parsed, reason = await _parse_deadline_natural(raw)
         if parsed:
             await database.update_task(tid, {"deadline": parsed}, source="edit")
+            # Editing to a past date is a legitimate overdue-correction — save it,
+            # but flag it so the user notices if it wasn't intended.
+            if database.is_past_deadline(parsed):
+                past_note = "⚠️ Diqqat: muddat o'tmishda.\n\n"
         else:
             await _safe_answer(message, _deadline_error_message(reason, kind="deadline"),
                                parse_mode="Markdown")
@@ -12911,7 +13248,7 @@ async def handle_edit_value(message: Message, state: FSMContext) -> None:
 
     task = await database.get_task(tid)
     if task:
-        await _safe_answer(message, "✅ Saqlandi\n\n" + _format_task_card(task),
+        await _safe_answer(message, past_note + "✅ Saqlandi\n\n" + _format_task_card(task),
                            parse_mode="Markdown", reply_markup=_task_card_kb_with_back(task))
 
 

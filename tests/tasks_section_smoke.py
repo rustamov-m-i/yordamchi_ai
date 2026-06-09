@@ -443,6 +443,17 @@ async def test_creation_flow() -> None:
     t("create", "newtask summary shows Shoshilinch for P0",
       "X" in summary and "Shoshilinch" in summary)
 
+    # Voice/text parity at the priority step (A3): a spoken/typed word lands the
+    # same P0-P3 as the inline button.
+    for word, expect in (("shoshilinch", "P0"), ("juda muhim", "P0"), ("muhim", "P1"),
+                         ("rejadagi", "P2"), ("oddiy", "P2"), ("past", "P3"), ("p1", "P1")):
+        t("create", f"_parse_priority_word('{word}') → {expect}",
+          handlers._parse_priority_word(word) == expect)
+    t("create", "_parse_priority_word unknown → None",
+      handlers._parse_priority_word("salom dunyo") is None)
+    t("create", "awaiting_priority has a text/voice handler (newtask_priority_typed)",
+      callable(getattr(handlers, "newtask_priority_typed", None)))
+
 
 # ─────────────── 5. Tahrir + 6. Ijrochi + 7. Qidiruv ───────────────
 async def test_edit_assignee_search() -> None:
@@ -612,6 +623,64 @@ async def test_recurring_edges() -> None:
         await database.delete_task(child["id"], source="audit_cleanup")
     await database.delete_task(tid, source="audit_cleanup")
 
+    # B3: a recurring task with NO deadline must STILL spawn its next child
+    # (base falls back to completion time instead of silently stopping).
+    tid2 = await database.create_task({
+        "title": "AUDIT_rec_nulldl", "priority": "P2", "recurrence_rule": "daily",
+    })
+    await database.complete_task(tid2)
+    kids = await database.list_recurring_tasks(limit=50)
+    child2 = next((c for c in kids if c.get("recurrence_parent_id") == tid2), None)
+    t("recurring", "NULL-deadline recurring still spawns a child", child2 is not None)
+    if child2:
+        dl = database.parse_iso_dt(child2.get("deadline"))
+        t("recurring", "NULL-deadline child gets a future deadline",
+          dl is not None and dl > now)
+        await database.delete_task(child2["id"], source="audit_cleanup")
+    await database.delete_task(tid2, source="audit_cleanup")
+
+
+async def test_single_delete_undo() -> None:
+    section("8b. SINGLE-DELETE UNDO (restore_task round-trip)")
+    from datetime import datetime, timedelta
+    now = datetime.now(database.TZ)
+    tid = await database.create_task({
+        "title": "AUDIT_undo_del", "priority": "P1", "description": "tavsif",
+        "deadline": (now + timedelta(days=1)).isoformat(),
+        "tags": ["audit", "undo"], "assignee": "Bekzod",
+    })
+    snap = await database.get_task(tid)
+    await database.delete_task(tid)
+    t("undo", "task gone after delete", await database.get_task(tid) is None)
+    ok = await database.restore_task(snap)
+    t("undo", "restore_task returns True", ok is True)
+    restored = await database.get_task(tid)
+    t("undo", "restored with ORIGINAL id",
+      restored is not None and restored["id"] == tid)
+    if restored:
+        t("undo", "title/priority/assignee preserved",
+          restored["title"] == "AUDIT_undo_del" and restored["priority"] == "P1"
+          and restored["assignee"] == "Bekzod")
+        t("undo", "tags preserved", restored.get("tags") == ["audit", "undo"])
+        t("undo", "deadline preserved", restored.get("deadline") == snap.get("deadline"))
+    t("undo", "double restore is a no-op (False)",
+      await database.restore_task(snap) is False)
+    await database.delete_task(tid, source="audit_cleanup")
+
+
+async def test_past_deadline_validation() -> None:
+    section("8c. PAST-DEADLINE helper (is_past_deadline)")
+    from datetime import datetime, timedelta
+    now = datetime.now(database.TZ)
+    t("pastdl", "None → False", database.is_past_deadline(None) is False)
+    t("pastdl", "past → True",
+      database.is_past_deadline((now - timedelta(hours=2)).isoformat()) is True)
+    t("pastdl", "future → False",
+      database.is_past_deadline((now + timedelta(hours=2)).isoformat()) is False)
+    t("pastdl", "garbage → False", database.is_past_deadline("noma'lum") is False)
+    t("pastdl", "within grace window → False",
+      database.is_past_deadline((now - timedelta(seconds=10)).isoformat()) is False)
+
 
 # ─────────────── 9. Task reminder ───────────────
 async def test_reminders_logic() -> None:
@@ -694,6 +763,8 @@ async def main() -> None:
     await test_creation_flow()
     await test_edit_assignee_search()
     await test_recurring_edges()
+    await test_single_delete_undo()
+    await test_past_deadline_validation()
     await test_reminders_logic()
     await test_bugfix_b4_toast()
 

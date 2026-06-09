@@ -540,6 +540,16 @@ def parse_iso_dt(iso: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def is_past_deadline(iso: Optional[str], *, grace_minutes: int = 1) -> bool:
+    """True if `iso` parses to a time already in the past (small grace window so a
+    'now + a few seconds' round-trip isn't flagged). Missing/unparseable inputs
+    return False — absence of a deadline is never 'past'."""
+    dt = parse_iso_dt(iso)
+    if dt is None:
+        return False
+    return dt < datetime.now(TZ) - timedelta(minutes=grace_minutes)
+
+
 def _add_months(dt: datetime, months: int) -> datetime:
     month = dt.month - 1 + months
     year = dt.year + month // 12
@@ -582,7 +592,13 @@ async def create_next_recurring_task(completed_task: dict) -> Optional[str]:
     rule = normalize_recurrence_rule(completed_task.get("recurrence_rule"))
     if not rule:
         return None
-    next_deadline = compute_next_recurrence(completed_task.get("deadline"), rule)
+    # Base the next occurrence on the original deadline when set; otherwise (undated
+    # recurring task, or empty/unparseable deadline) fall back to the completion time
+    # (now) so an undated recurring chain never silently stops.
+    base = completed_task.get("deadline")
+    if not parse_iso_dt(base):
+        base = now_iso()
+    next_deadline = compute_next_recurrence(base, rule)
     if not next_deadline:
         return None
     next_data = {
@@ -615,6 +631,48 @@ async def delete_task(task_id: str, source: str = "manual") -> bool:
                                 old_value=title, source=source)
         await db.commit()
         return cur.rowcount > 0
+
+
+async def restore_task(task: dict) -> bool:
+    """Re-insert a previously deleted task with its ORIGINAL id (so chat buttons
+    and task_history rows stay valid). Returns False if a row with that id already
+    exists — guards a double-tap of the undo button. `task` is a dict as returned
+    by get_task (tags is a list)."""
+    tid = task.get("id")
+    if not tid:
+        return False
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM tasks WHERE id = ?", (tid,))
+        if await cur.fetchone():
+            return False  # already restored
+        tags = task.get("tags", [])
+        await db.execute(
+            """INSERT INTO tasks (id, title, description, deadline, priority, status, tags, category, assignee,
+                                  recurrence_rule, recurrence_next_at, recurrence_parent_id,
+                                  source, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                tid,
+                task.get("title", "Vazifa"),
+                task.get("description"),
+                task.get("deadline"),
+                task.get("priority", "P2"),
+                task.get("status", "todo"),
+                json.dumps(tags if isinstance(tags, list) else [], ensure_ascii=False),
+                (task.get("category") or None),
+                task.get("assignee"),
+                task.get("recurrence_rule"),
+                task.get("recurrence_next_at"),
+                task.get("recurrence_parent_id"),
+                task.get("source", "manual"),
+                task.get("created_at") or now_iso(),
+                now_iso(),
+            ),
+        )
+        await _log_history(db, tid, "restore", field=None,
+                           new_value=task.get("title"), source="undo_delete")
+        await db.commit()
+        return True
 
 
 # ─────────────── BULK DELETE (voice/text "barchasini o'chir" — always confirmed in handler) ───────────────

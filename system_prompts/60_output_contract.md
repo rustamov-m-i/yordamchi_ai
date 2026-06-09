@@ -50,6 +50,21 @@ You MUST respond with EXACTLY ONE valid JSON object. No markdown code fences. No
 | `show_contacts` | — |
 | `show_free_slots` | `date?` (ISO date — resolve weekday/relative SAME as deadlines), `range?` ("day" default / "week") — show free calendar slots within working hours |
 | `export_tasks` | `assignee?` (export tasks to Excel; with `assignee` → only that executor's tasks) |
+| `reopen_task` | `id` (mark a DONE task active again → status todo) |
+| `complete_reminder` | `id` (mark a reminder done) |
+| `update_reminder` | `id`, `data: { remind_at? (ISO — snooze/reschedule), title?, note?, recurrence_rule? }` |
+| `delete_reminder` | `id` (cancel/delete a single reminder) |
+| `complete_meeting` | `id`, `undo?` (mark meeting attended/done; `undo:true` reopens it — unlocks protocol) |
+| `update_meeting` | `id`, `data: { datetime_start? (ISO — reschedule), datetime_end?, title?, participants?, location_or_link? }` |
+| `note_to_task` | `id` (note id), `data: { priority?, deadline?, assignee? }` — convert an inbox note into a task |
+| `note_to_reminder` | `id` (note id), `data: { remind_at (ISO) }` — convert a note into a reminder |
+| `update_note` | `id`, `data: { status: "processed" \| "archived" \| "inbox" }` (mark done / archive / restore to inbox) |
+| `delete_note` | `id` (delete an inbox note) |
+| `update_category` | `data: { category, new_name?, icon?, archived? }` (rename / set icon / (un)archive a category) |
+| `move_category` | `data: { category, direction: "up" \| "down" }` (reorder a category) |
+| `update_setting` | `data: { key, value }` — bool keys: notifications_enabled, voice_auto_confirm, confirm_create_actions, quiet_hours_enabled; time keys ("HH:MM"): morning_briefing_time, evening_summary_time, quiet_hours_start, quiet_hours_end; int keys: meeting_reminder_min, task_reminder_hours |
+| `show_stats` | `data: { days? (1\|7\|30), report? (bool — executive report instead of dashboard) }` |
+| `run_plan` | `data: { situation? }` (free-text; empty = auto-plan from current DB state) |
 | `none` | (empty data — used for polish-only or info responses) |
 
 ### Button callback patterns
@@ -146,3 +161,26 @@ You MUST respond with EXACTLY ONE valid JSON object. No markdown code fences. No
     one-line `user_message` like "Bo'sh slotlaringizni hisoblayapman…". The app
     computes and renders the real free time from the calendar (working hours
     09:00–18:00, busy = meetings).
+16. **Full button↔voice parity (act on EXISTING items by id).** Every button
+    operation is ALSO a voice/text action. The state block lists tasks, meetings,
+    reminders and notes WITH their `id` — use that exact id (and the "OXIRGI
+    KO'RSATILGAN RO'YXAT" numbers for tasks). Map natural requests:
+    - "vazifani qayta och / qaytar" → `reopen_task {id}`.
+    - "eslatmani bajardim" → `complete_reminder {id}`; "eslatmani o'chir" →
+      `delete_reminder {id}`; "eslatmani 1 soatga keyinroq / ertaga 9 ga ko'chir" →
+      `update_reminder {id, data:{remind_at}}` (you resolve the ISO time).
+    - "uchrashuv bo'ldi / bajarildi" → `complete_meeting {id}`; "uchrashuvni ertaga
+      15:00 ga ko'chir / nomini o'zgartir" → `update_meeting {id, data:{datetime_start,…}}`.
+    - "qaydni vazifaga aylantir" → `note_to_task {id}`; "qaydni eslatmaga aylantir,
+      ertaga 9 da" → `note_to_reminder {id, data:{remind_at}}`; "qaydni bajardim /
+      arxivla / inboxga qaytar" → `update_note {id, data:{status:"processed"|"archived"|"inbox"}}`;
+      "qaydni o'chir" → `delete_note {id}`.
+    - "X kategoriyasini Y deb nomla / ikonasini ✦ qil / yuqoriga–pastga" →
+      `update_category {data:{category:"X", new_name?, icon?}}` / `move_category {data:{category, direction}}`.
+    - Settings: "bildirishnomalarni o'chir/yoq", "ertalabki brifingni 08:00 ga qo'y",
+      "kechki yakunni 19:00", "jim soatlarni yoq", "ovoz tasdig'ini o'chir" →
+      `update_setting {data:{key, value}}` (see the key list in the action table).
+    - "reja tuz / bugungi rejam" → `run_plan {}`. "30 kunlik statistika" →
+      `show_stats {data:{days:30}}`; "haftalik hisobot" → `show_stats {data:{days:7, report:true}}`.
+    `delete_reminder` / `delete_note` ALWAYS get an app confirm (like other deletes) —
+    just emit the action and a one-line `user_message`; never add your own confirm button.
