@@ -672,17 +672,27 @@ class ReminderEditFSM(StatesGroup):
 
 
 def task_edit_menu(task: dict) -> InlineKeyboardMarkup:
-    """Menu of editable fields for a task — used by 📝 Tahrir flow."""
+    """Menu of editable fields for a task — used by 📝 Tahrir flow. Fields are laid
+    out 2-per-row (matching the Tasks section reply-kbd convention) so the menu
+    stays compact (5 rows) instead of sprawling one-field-per-row (was 9 rows)."""
     tid = task["id"]
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📝 Sarlavha", callback_data=f"editfield:{tid}:title")],
-        [InlineKeyboardButton(text="📄 Tavsif", callback_data=f"editfield:{tid}:description")],
-        [InlineKeyboardButton(text="⚡ Prioritet", callback_data=f"editfield:{tid}:priority")],
-        [InlineKeyboardButton(text="📅 Deadline", callback_data=f"editfield:{tid}:deadline")],
-        [InlineKeyboardButton(text="👤 Ijrochi", callback_data=f"set_assignee:{tid}")],
-        [InlineKeyboardButton(text="📊 Status", callback_data=f"editfield:{tid}:status")],
-        [InlineKeyboardButton(text="🏷 Teglar", callback_data=f"editfield:{tid}:tags")],
-        [InlineKeyboardButton(text="📁 Kategoriya", callback_data=f"editfield:{tid}:category")],
+        [
+            InlineKeyboardButton(text="📝 Sarlavha", callback_data=f"editfield:{tid}:title"),
+            InlineKeyboardButton(text="📄 Tavsif", callback_data=f"editfield:{tid}:description"),
+        ],
+        [
+            InlineKeyboardButton(text="⚡ Prioritet", callback_data=f"editfield:{tid}:priority"),
+            InlineKeyboardButton(text="📅 Deadline", callback_data=f"editfield:{tid}:deadline"),
+        ],
+        [
+            InlineKeyboardButton(text="👤 Ijrochi", callback_data=f"set_assignee:{tid}"),
+            InlineKeyboardButton(text="📊 Status", callback_data=f"editfield:{tid}:status"),
+        ],
+        [
+            InlineKeyboardButton(text="🏷 Teglar", callback_data=f"editfield:{tid}:tags"),
+            InlineKeyboardButton(text="📁 Kategoriya", callback_data=f"editfield:{tid}:category"),
+        ],
         [InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"taskopen:{tid}")],
     ])
 
@@ -4316,13 +4326,15 @@ def tasks_compact_keyboard(
                 text="⬅️ Oldingi",
                 callback_data=f"taskfilter:{current_filter}:{page-1}",
             ))
+        # Non-clickable position indicator between the arrows ("2 / 5"). The "noop"
+        # callback has no handler → caught by cb_fallback, which just dismisses it.
+        pag_row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data="noop"))
         if page < total_pages:
             pag_row.append(InlineKeyboardButton(
                 text="Keyingi ➡️",
                 callback_data=f"taskfilter:{current_filter}:{page+1}",
             ))
-        if pag_row:
-            rows.append(pag_row)
+        rows.append(pag_row)
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -11323,6 +11335,52 @@ async def cb_uncomplete(query: CallbackQuery) -> None:
             pass
 
 
+def _snooze_deadline(task: dict, when: str) -> datetime:
+    """Compute a new deadline for a one-tap reschedule. The clock time is preserved
+    from the task's existing deadline (else defaults to 18:00 — end of workday).
+    Base is ALWAYS relative to now (snooze = push it forward from today)."""
+    now = datetime.now(database.TZ)
+    cur = _parse_dt_safe(task.get("deadline"))
+    hh, mm = (cur.hour, cur.minute) if cur else (18, 0)
+    if when == "week":
+        base = now + timedelta(days=7)
+    elif when == "monday":
+        # the coming Monday; if today is already Monday, jump a full week ahead
+        base = now + timedelta(days=((7 - now.weekday()) % 7) or 7)
+    else:  # "tomorrow" (default)
+        base = now + timedelta(days=1)
+    return base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+
+@router.callback_query(F.data.startswith("snooze:"))
+async def cb_task_snooze(query: CallbackQuery) -> None:
+    """One-tap reschedule from the task card — moves the deadline to tomorrow /
+    +1 week / next Monday (keeping the clock time), then re-renders the card."""
+    try:
+        _, tid, when = query.data.split(":", 2)
+    except ValueError:
+        await query.answer()
+        return
+    task = await database.get_task(tid)
+    if not task:
+        await query.answer("Vazifa topilmadi", show_alert=True)
+        return
+    new_dt = _snooze_deadline(task, when)
+    ok = await database.update_task(tid, {"deadline": new_dt.isoformat()}, source="snooze")
+    if not ok:
+        await query.answer("Saqlanmadi", show_alert=True)
+        return
+    task = await database.get_task(tid)
+    await query.answer(f"📅 Muddat: {_task_deadline_chip(task)}")
+    try:
+        await query.message.edit_text(
+            _format_task_card(task), parse_mode="Markdown",
+            reply_markup=_task_card_kb_with_back(task),
+        )
+    except TelegramBadRequest:
+        pass
+
+
 @router.callback_query(F.data.startswith("task_detail:"))
 async def cb_task_detail(query: CallbackQuery) -> None:
     """⋯ Batafsil — show the full action menu for a task."""
@@ -12927,23 +12985,36 @@ async def _parse_deadline_natural(text: str) -> tuple[str | None, str | None]:
 
 
 def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
-    """Opened task card — direct actions, NO extra '⋯ Batafsil' step:
-    [✅ Bajarildi / ↺ Qaytarish] [✏️ Tahrir] [🗑 O'chirish], then ⬅️ Ro'yxatga (back to
-    the filter the card was opened from). Field edits + 👤 Ijrochi live under ✏️ Tahrir."""
+    """Opened task card — direct actions, NO extra '⋯ Batafsil' step.
+      Row 1: [✅ Bajarildi / ↺ Qaytarish] [✏️ Tahrir]
+      Row 2 (active tasks only): one-tap reschedule [📅 Ertaga] [📅 +1 hafta] [📅 Dushanba]
+      Row 3: [🗑 O'chirish] [⬅️ Ro'yxatga]  ← destructive sits away from ✅ (misclick guard)
+    Field edits + 👤 Ijrochi live under ✏️ Tahrir. 🗑 still goes through a confirm step."""
     tid = task["id"]
     back = f"taskfilter:{_last_task_filter or 'active'}"
-    if task.get("status") == "done":
+    is_done = task.get("status") == "done"
+    if is_done:
         primary = InlineKeyboardButton(text="↺ Qaytarish", callback_data=f"reopen:{tid}")
     else:
         primary = InlineKeyboardButton(text="✅ Bajarildi", callback_data=f"complete:{tid}")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            primary,
-            InlineKeyboardButton(text="✏️ Tahrir", callback_data=f"edit:{tid}"),
-            InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"task_del:{tid}"),
-        ],
-        [InlineKeyboardButton(text="⬅️ Ro'yxatga", callback_data=back)],
+    rows: list[list[InlineKeyboardButton]] = [
+        [primary, InlineKeyboardButton(text="✏️ Tahrir", callback_data=f"edit:{tid}")],
+    ]
+    # One-tap reschedule (snooze) — only meaningful for active tasks; a done task
+    # has no live deadline to push.
+    if not is_done:
+        rows.append([
+            InlineKeyboardButton(text="📅 Ertaga", callback_data=f"snooze:{tid}:tomorrow"),
+            InlineKeyboardButton(text="📅 +1 hafta", callback_data=f"snooze:{tid}:week"),
+            InlineKeyboardButton(text="📅 Dushanba", callback_data=f"snooze:{tid}:monday"),
+        ])
+    # Destructive action on its own row, away from ✅/✏️ (misclick guard). It still
+    # routes through cb_task_del_confirm, which asks before deleting.
+    rows.append([
+        InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"task_del:{tid}"),
+        InlineKeyboardButton(text="⬅️ Ro'yxatga", callback_data=back),
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query()

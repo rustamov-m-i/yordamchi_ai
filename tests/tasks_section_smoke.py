@@ -232,9 +232,14 @@ async def test_task_card_buttons() -> None:
     t("card", "Card has NO '⋯ Batafsil' (retired)",
       not any("Batafsil" in d for d in card_labels))
     # Field edits + Ijrochi moved into ✏️ Tahrir (task_edit_menu)
-    em_labels = [b.text for r in handlers.task_edit_menu({"id": "t-x"}).inline_keyboard for b in r]
+    em_kb = handlers.task_edit_menu({"id": "t-x"}).inline_keyboard
+    em_labels = [b.text for r in em_kb for b in r]
     for required in ("Deadline", "Prioritet", "Ijrochi"):
         t("card", f"Edit menu has '{required}'", any(required in d for d in em_labels))
+    # Edit menu is laid out 2-per-row (compact): 4 field-pairs + 1 Back row = 5 rows.
+    t("card", "Edit menu: 5 rows (2-per-row, was 9)", len(em_kb) == 5)
+    t("card", "Edit menu: 4 field rows have 2 buttons, Back row has 1",
+      all(len(r) == 2 for r in em_kb[:4]) and len(em_kb[-1]) == 1)
 
     # Card-with-back keyboard (used for taskopen / after assignee change)
     cwb = handlers._task_card_kb_with_back({"id": "t-x", "status": "todo"})
@@ -252,6 +257,45 @@ async def test_task_card_buttons() -> None:
     src = inspect.getsource(handlers.cb_complete)
     t("card", "B6: cb_complete re-renders card via _format_task_card",
       "_format_task_card" in src and "_task_card_kb_with_back" in src)
+
+    section("3b. CARD SNOOZE + DESTRUCTIVE SEPARATION + PAGINATION")
+
+    # Active card has a one-tap reschedule (snooze) row; done card does NOT.
+    active_kb = handlers._task_card_kb_with_back({"id": "t-x", "status": "todo"})
+    active_lbls = [b.text for r in active_kb.inline_keyboard for b in r]
+    for snz in ("Ertaga", "+1 hafta", "Dushanba"):
+        t("card", f"Active card snooze: '{snz}'", any(snz in l for l in active_lbls))
+    done_kb = handlers._task_card_kb_with_back({"id": "t-x", "status": "done"})
+    done_lbls = [b.text for r in done_kb.inline_keyboard for b in r]
+    t("card", "Done card has NO snooze row",
+      not any(s in l for l in done_lbls for s in ("Ertaga", "+1 hafta", "Dushanba")))
+    # 🗑 O'chirish is separated from ✅ Bajarildi (not in the same row → misclick guard).
+    row_with_complete = next((r for r in active_kb.inline_keyboard
+                              if any("Bajarildi" in b.text for b in r)), [])
+    t("card", "🗑 not in the same row as ✅ Bajarildi",
+      not any("chirish" in b.text for b in row_with_complete))
+    t("card", "snooze callback handler exists", hasattr(handlers, "cb_task_snooze"))
+
+    # _snooze_deadline: relative dates + clock-time handling (deterministic asserts).
+    from datetime import datetime, timedelta
+    _now = datetime.now(database.TZ)
+    _tmrw = handlers._snooze_deadline({"deadline": None}, "tomorrow")
+    t("card", "snooze 'tomorrow' → +1 kun, default 18:00",
+      _tmrw.date() == (_now + timedelta(days=1)).date() and _tmrw.hour == 18 and _tmrw.minute == 0)
+    _wk = handlers._snooze_deadline({"deadline": "2026-01-01T14:30:00+05:00"}, "week")
+    t("card", "snooze 'week' → +7 kun, soat saqlanadi (14:30)",
+      _wk.date() == (_now + timedelta(days=7)).date() and _wk.hour == 14 and _wk.minute == 30)
+    _mon = handlers._snooze_deadline({"deadline": None}, "monday")
+    t("card", "snooze 'monday' → Dushanba (weekday 0) va kelajakda",
+      _mon.weekday() == 0 and _mon > _now)
+
+    # Pagination indicator: >1 page → a non-clickable "page / total" button appears.
+    _many = [{"id": f"t{i}", "title": f"T{i}", "status": "todo"} for i in range(25)]
+    _pg_kb = handlers.tasks_compact_keyboard(_many, current_filter="active", page=2)
+    _pg_lbls = [b.text for r in _pg_kb.inline_keyboard for b in r]
+    t("card", "Pagination shows '2 / 3' indicator", any("2 / 3" in l for l in _pg_lbls))
+    _noop = [b.callback_data for r in _pg_kb.inline_keyboard for b in r if "/" in b.text]
+    t("card", "Indicator is non-clickable (callback 'noop')", _noop == ["noop"])
 
 
 # ─────────────── 4. Vazifa yaratish ───────────────
