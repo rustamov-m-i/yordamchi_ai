@@ -678,6 +678,11 @@ async def main():
               handlers.TBTN_TASKS_DONE, handlers.TBTN_TASKS_ALL,
               handlers.TBTN_TASKS_CATEGORIES, handlers.TBTN_TASKS_NEW,
               handlers.TBTN_TASKS_SEARCH, handlers.BTN_BACK_MAIN})
+    # Funksional guruhlash (Option D): amallar bir qatorda, navigatsiya bir qatorda.
+    check("kbd Vazifa: amallar birga (Yangi + Qidirish)",
+          [handlers.TBTN_TASKS_NEW, handlers.TBTN_TASKS_SEARCH] in _tk)
+    check("kbd Vazifa: navigatsiya birga (Kategoriyalar + Asosiy menyu)",
+          [handlers.TBTN_TASKS_CATEGORIES, handlers.BTN_BACK_MAIN] in _tk)
 
     print("\n── Eslatma tahrir: matn + OVOZ ishlaydi (bug tuzatildi) ──")
     class _ReFakeState:

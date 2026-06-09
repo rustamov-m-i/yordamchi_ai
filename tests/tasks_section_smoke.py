@@ -297,6 +297,31 @@ async def test_task_card_buttons() -> None:
     _noop = [b.callback_data for r in _pg_kb.inline_keyboard for b in r if "/" in b.text]
     t("card", "Indicator is non-clickable (callback 'noop')", _noop == ["noop"])
 
+    section("3c. LIST: DIQQAT BANNER + KECHIKISH (aging)")
+
+    _base_tasks = [{"id": "t1", "title": "X", "status": "todo", "priority": "P0", "deadline": None}]
+    _stats_alert = {"total": 5, "active": 5, "done": 0, "urgent": 1,
+                    "important": 2, "overdue": 2, "blocked": 0}
+    _txt_alert = handlers._format_tasks_compact(_base_tasks, "Aktiv", stats=_stats_alert)
+    t("list", "Diqqat banner: overdue+urgent ko'rsatiladi",
+      "Diqqat" in _txt_alert and "2 muddati o'tgan" in _txt_alert and "1 shoshilinch" in _txt_alert)
+    _stats_calm = {"total": 5, "active": 5, "done": 0, "urgent": 0,
+                   "important": 2, "overdue": 0, "blocked": 0}
+    _txt_calm = handlers._format_tasks_compact(_base_tasks, "Aktiv", stats=_stats_calm)
+    t("list", "Diqqat banner: o'tgan/shoshilinch yo'q bo'lsa chiqmaydi", "Diqqat" not in _txt_calm)
+
+    _past = (datetime.now(database.TZ) - timedelta(days=3)).isoformat()
+    _overdue_tasks = [{"id": "o1", "title": "Late", "status": "todo",
+                       "priority": "P1", "deadline": _past}]
+    _txt_over = handlers._format_tasks_compact(_overdue_tasks, "Aktiv", stats=_stats_alert)
+    t("list", "Kechikish: muddati o'tgan vazifada 'N kun' ko'rsatiladi",
+      "Kechikish" in _txt_over and "3 kun" in _txt_over)
+    _future = (datetime.now(database.TZ) + timedelta(days=2)).isoformat()
+    _fut_tasks = [{"id": "f1", "title": "Soon", "status": "todo",
+                   "priority": "P2", "deadline": _future}]
+    _txt_fut = handlers._format_tasks_compact(_fut_tasks, "Aktiv", stats=_stats_calm)
+    t("list", "Kechikish: kelajakdagi vazifada chiqmaydi", "Kechikish" not in _txt_fut)
+
 
 # ─────────────── 4. Vazifa yaratish ───────────────
 async def test_creation_flow() -> None:

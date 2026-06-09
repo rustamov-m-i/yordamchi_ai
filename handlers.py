@@ -330,16 +330,17 @@ def _two_per_row(labels: list[str], solo: set[str]) -> list[list[KeyboardButton]
 
 
 def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply kbd Vazifalar bo'limida — 2 tadan bir qatorda. Har tugma ekranning
-    yarmini oladi, shuning uchun uzun yorliqlar ('Vazifa qidirish') ham kesilmaydi.
-    Tartib: filtrlar yuqorida (hozir → diqqat → ko'rib chiqish), amallar pastda."""
+    """Reply kbd Vazifalar bo'limida — 2 tadan bir qatorda (uzun yorliqlar
+    kesilmasin). Funksiya bo'yicha guruhlangan: avval filtrlar (hozir → diqqat →
+    ko'rib chiqish), so'ng amallar (yangi + qidirish bir qatorda), so'ng
+    navigatsiya (kategoriyalar + asosiy menyu)."""
     return ReplyKeyboardMarkup(
         keyboard=_two_per_row(
-            [TBTN_TASKS_ACTIVE, TBTN_TASKS_TODAY,        # hozir / bugun
-             TBTN_TASKS_IMPORTANT, TBTN_TASKS_OVERDUE,   # diqqat: muhim / o'tgan
-             TBTN_TASKS_DONE, TBTN_TASKS_ALL,            # ko'rib chiqish: bajarilgan / barchasi
-             TBTN_TASKS_CATEGORIES, TBTN_TASKS_NEW,      # amallar: bo'limlar / yangi vazifa
-             TBTN_TASKS_SEARCH, BTN_BACK_MAIN],          # qidiruv / asosiy menyu
+            [TBTN_TASKS_ACTIVE, TBTN_TASKS_TODAY,        # filtr · hozir: aktiv / bugun
+             TBTN_TASKS_IMPORTANT, TBTN_TASKS_OVERDUE,   # filtr · diqqat: muhim / o'tgan
+             TBTN_TASKS_DONE, TBTN_TASKS_ALL,            # filtr · ko'rib chiqish: bajarilgan / barchasi
+             TBTN_TASKS_NEW, TBTN_TASKS_SEARCH,          # amallar: yangi vazifa / qidirish
+             TBTN_TASKS_CATEGORIES, BTN_BACK_MAIN],      # navigatsiya: kategoriyalar / asosiy menyu
             solo=set()),
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Filter tanlang yoki yangi vazifa...",
@@ -4172,6 +4173,16 @@ def _format_tasks_compact(
     ]
     if total_pages > 1:
         lines.append(f"Sahifa · {page} / {total_pages}")
+    # Diqqat banner — surface overdue/urgent at the very top so they aren't buried
+    # below higher-priority-but-not-urgent items. Uses the global overview counts.
+    if total > 0 and stats:
+        _alert = []
+        if stats.get("overdue"):
+            _alert.append(f"{stats['overdue']} muddati o'tgan")
+        if stats.get("urgent"):
+            _alert.append(f"{stats['urgent']} shoshilinch")
+        if _alert:
+            lines.append(f"⚠️  **Diqqat:** {' · '.join(_alert)}")
 
     if total == 0:
         lines.extend([
@@ -4224,6 +4235,13 @@ def _format_tasks_compact(
             f"      ⏳  Muddat:      {deadline}",
             f"      {muhimlik_emoji}  Muhimlik:    {muhimlik_name}",
         ]
+        # Overdue aging — how many days past the deadline. A sharp executive SLA
+        # signal: a task that's "🔴 Kechikish: 5 kun" reads as neglected at a glance.
+        _dl = _parse_dt_safe(task.get("deadline"))
+        if _dl and _dl < datetime.now(database.TZ):
+            _days_over = (datetime.now(database.TZ).date() - _dl.date()).days
+            if _days_over >= 1:
+                card.append(f"      🔴  Kechikish:   {_days_over} kun")
         # Full izoh (description) — aligned label; newlines collapsed so it stays
         # one logical block; Telegram wraps long text on its own.
         description = " ".join((task.get("description") or "").split())
