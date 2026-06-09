@@ -773,7 +773,14 @@ def meeting_inline_actions(meeting: dict) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=rows)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Bo'ldi", callback_data=f"meeting_done:{mid}")],
-        [InlineKeyboardButton(text="🔄 Vaqtni o'zgartirish", callback_data=f"reschedule:{mid}")],
+        # One-tap reschedule (like task snooze). Reuses the existing resched_preset
+        # handler (DB update + iCloud sync + re-render). "🔄 Vaqtni o'zgartirish"
+        # still opens the full 6-preset + manual picker for other times.
+        [
+            InlineKeyboardButton(text="📅 Ertaga 09:00", callback_data=f"resched_preset:{mid}:tomorrow_9"),
+            InlineKeyboardButton(text="📅 Keyingi hafta", callback_data=f"resched_preset:{mid}:next_week"),
+        ],
+        [InlineKeyboardButton(text="🔄 Boshqa vaqt", callback_data=f"reschedule:{mid}")],
         [
             InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"meeting_edit:{mid}"),
             InlineKeyboardButton(text="✕ Bekor qilish", callback_data=f"meeting_cancel:{mid}"),

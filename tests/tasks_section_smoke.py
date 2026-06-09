@@ -360,6 +360,25 @@ async def test_task_card_buttons() -> None:
       any("meetingfilter:tomorrow" in c for c in _back_cbs))
     handlers._last_meeting_filter = "week"  # reset module state
 
+    section("3e. MEETING ACTIONABILITY (1-tap reschedule + notification)")
+
+    _m_active = handlers.meeting_inline_actions({"id": "m9"})
+    _m_cbs = [b.callback_data for r in _m_active.inline_keyboard for b in r]
+    t("meet", "Active card: 1-tap 'Ertaga' preset", "resched_preset:m9:tomorrow_9" in _m_cbs)
+    t("meet", "Active card: 1-tap 'Keyingi hafta' preset", "resched_preset:m9:next_week" in _m_cbs)
+    t("meet", "Active card: to'liq reschedule picker ham bor", "reschedule:m9" in _m_cbs)
+    t("meet", "Active card: ✅ Bo'ldi + Bekor qilish",
+      "meeting_done:m9" in _m_cbs and "meeting_cancel:m9" in _m_cbs)
+
+    _m_done = handlers.meeting_inline_actions({"id": "m9", "completed_at": "2026-06-01T10:00:00+05:00"})
+    _md_cbs = [b.callback_data for r in _m_done.inline_keyboard for b in r]
+    t("meet", "Done card: reschedule presetlari YO'Q (uchrashuv o'tgan)",
+      not any("resched_preset" in (c or "") for c in _md_cbs))
+
+    _src = inspect.getsource(sched_mod.YordamchiScheduler._fire_meeting_reminder)
+    t("meet", "Meeting reminder: amalga yaroqli (meetingopen + reschedule + reply_markup)",
+      "meetingopen:" in _src and "reschedule:" in _src and "reply_markup=kb" in _src)
+
 
 # ─────────────── 4. Vazifa yaratish ───────────────
 async def test_creation_flow() -> None:

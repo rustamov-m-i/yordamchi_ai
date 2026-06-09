@@ -453,7 +453,15 @@ class YordamchiScheduler:
             text_lines.append(f"• Tayyorgarlik: {prep}")
         lead_label = lead_minutes or self.meeting_reminder_min
         text_lines[0] = f"📞 **{lead_label} daqiqa qoldi: {meeting['title']}**"
-        await self._send("\n".join(text_lines))
+        # Actionable buttons (was plain text). Reuse existing handlers so the
+        # principal can respond from the notification instead of hunting in the bot:
+        #   📋 Ko'rish → meetingopen (full card: Bo'ldi / reschedule / edit / cancel)
+        #   🔄 Surish  → reschedule (time-preset picker)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📋 Ko'rish", callback_data=f"meetingopen:{meeting_id}"),
+            InlineKeyboardButton(text="🔄 Vaqtni o'zgartirish", callback_data=f"reschedule:{meeting_id}"),
+        ]])
+        await self._send("\n".join(text_lines), reply_markup=kb)
 
     async def _meeting_prep_sweep(self) -> None:
         """Send a prep brief once for meetings starting in the next hour.
