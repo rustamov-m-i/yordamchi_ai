@@ -145,8 +145,8 @@ BTN_BACK_MAIN = "⬅️ Asosiy menyu"
 # Kontekst (qaysi bo'lim) SectionFSM state orqali aniqlanadi.
 TBTN_TASKS_ACTIVE = "🔵 Aktiv"
 TBTN_TASKS_TODAY = "📅 Bugun"
-TBTN_TASKS_OVERDUE = "⚠️ O'tgan"
-TBTN_TASKS_IMPORTANT = "⚡ Muhim"
+TBTN_TASKS_OVERDUE = "⌛ O'tgan"
+TBTN_TASKS_IMPORTANT = "⭐ Muhim"
 TBTN_TASKS_DONE = "✅ Bajarilgan"
 TBTN_TASKS_ALL = "📋 Barchasi"
 TBTN_TASKS_NEW = "➕ Yangi vazifa"
@@ -335,17 +335,18 @@ def _two_per_row(labels: list[str], solo: set[str]) -> list[list[KeyboardButton]
 
 def tasks_section_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply kbd Vazifalar bo'limida — 2 tadan bir qatorda (uzun yorliqlar
-    kesilmasin). Funksiya bo'yicha guruhlangan: avval filtrlar (hozir → diqqat →
-    ko'rib chiqish), so'ng amallar (yangi + qidirish bir qatorda), so'ng
-    navigatsiya (kategoriyalar + asosiy menyu)."""
+    kesilmasin). Vizual ierarxiya: 6 filtr 2 tadan; primary amal «➕ Yangi
+    vazifa» to'liq qator (solo) — ko'zga tashlanadi; «🔍 Qidirish» + «🗄
+    Kategoriyalar» juft; «⬅️ Asosiy menyu» to'liq qator (solo)."""
     return ReplyKeyboardMarkup(
         keyboard=_two_per_row(
             [TBTN_TASKS_ACTIVE, TBTN_TASKS_TODAY,        # filtr · hozir: aktiv / bugun
              TBTN_TASKS_IMPORTANT, TBTN_TASKS_OVERDUE,   # filtr · diqqat: muhim / o'tgan
              TBTN_TASKS_DONE, TBTN_TASKS_ALL,            # filtr · ko'rib chiqish: bajarilgan / barchasi
-             TBTN_TASKS_NEW, TBTN_TASKS_SEARCH,          # amallar: yangi vazifa / qidirish
-             TBTN_TASKS_CATEGORIES, BTN_BACK_MAIN],      # navigatsiya: kategoriyalar / asosiy menyu
-            solo=set()),
+             TBTN_TASKS_NEW,                             # primary amal — solo (to'liq qator)
+             TBTN_TASKS_SEARCH, TBTN_TASKS_CATEGORIES,   # qidirish + kategoriyalar (juft)
+             BTN_BACK_MAIN],                             # navigatsiya — solo (to'liq qator)
+            solo={TBTN_TASKS_NEW, BTN_BACK_MAIN}),
         resize_keyboard=True, is_persistent=True,
         input_field_placeholder="Filter tanlang yoki yangi vazifa...",
     )
