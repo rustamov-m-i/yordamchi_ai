@@ -379,6 +379,33 @@ async def test_task_card_buttons() -> None:
     t("meet", "Meeting reminder: amalga yaroqli (meetingopen + reschedule + reply_markup)",
       "meetingopen:" in _src and "reschedule:" in _src and "reply_markup=kb" in _src)
 
+    section("3f. BAYONNOMA EXPORT (Word/PDF + Lotin/Kiril)")
+
+    rk = handlers._protocol_result_kb("m1", 2, saved=False, tasks_done=False, script="lat")
+    rk_cbs = [b.callback_data for r in rk.inline_keyboard for b in r if b.callback_data]
+    rk_lbls = [b.text for r in rk.inline_keyboard for b in r]
+    t("proto", "result-kb: Word eksport (lat)", "proto_export:m1:word:lat" in rk_cbs)
+    t("proto", "result-kb: PDF eksport (lat)", "proto_export:m1:pdf:lat" in rk_cbs)
+    t("proto", "result-kb: yozuv toggle → Kiril", "proto_script:m1:res:kir" in rk_cbs)
+    t("proto", "result-kb: toggle yorlig'i '🔤 Kiril'", any("🔤 Kiril" in x for x in rk_lbls))
+
+    rk_k = handlers._protocol_result_kb("m1", 0, script="kir")
+    rk_k_cbs = [b.callback_data for r in rk_k.inline_keyboard for b in r if b.callback_data]
+    t("proto", "kir holatda: eksport kir + toggle → Lotin",
+      "proto_export:m1:word:kir" in rk_k_cbs and "proto_script:m1:res:lat" in rk_k_cbs)
+
+    vk = handlers._viewproto_kb("m2", "lat")
+    vk_cbs = [b.callback_data for r in vk.inline_keyboard for b in r if b.callback_data]
+    t("proto", "viewproto-kb: Word/PDF + view-toggle",
+      "proto_export:m2:word:lat" in vk_cbs and "proto_export:m2:pdf:lat" in vk_cbs
+      and "proto_script:m2:view:kir" in vk_cbs)
+
+    t("proto", "cb_protocol_export mavjud", hasattr(handlers, "cb_protocol_export"))
+    t("proto", "cb_protocol_script (toggle) mavjud", hasattr(handlers, "cb_protocol_script"))
+    _ex_src = inspect.getsource(handlers.cb_protocol_export)
+    t("proto", "export protocol_doc'ni ishlatadi (eski builder emas)",
+      "protocol_doc" in _ex_src and "build_pdf" in _ex_src and "build_docx" in _ex_src)
+
 
 # ─────────────── 4. Vazifa yaratish ───────────────
 async def test_creation_flow() -> None:

@@ -12387,9 +12387,34 @@ def _build_protocol_directive(meeting: dict, user_notes: str) -> str:
     )
 
 
-def _protocol_result_kb(mid: str, n_pending: int, saved: bool = False, tasks_done: bool = False) -> InlineKeyboardMarkup:
-    """Buttons under a generated protocol. Saving the bayonnoma and creating tasks
-    are DECOUPLED — each is its own button and disappears once done."""
+_SCRIPT_LABEL = {"lat": "Lotin", "kir": "Kiril"}
+
+
+def _proto_export_row(mid: str, script: str, ctx: str) -> list:
+    """[📄 Word] [📄 PDF] [🔤 <boshqa yozuv>] — eksport + Lotin/Kiril almashtirgich.
+    script: 'lat'/'kir' (joriy holat); ctx: 'res' (yangi natija kbd) / 'view' (saqlangan)."""
+    other = "kir" if script == "lat" else "lat"
+    return [
+        InlineKeyboardButton(text="📄 Word", callback_data=f"proto_export:{mid}:word:{script}"),
+        InlineKeyboardButton(text="📄 PDF", callback_data=f"proto_export:{mid}:pdf:{script}"),
+        InlineKeyboardButton(text=f"🔤 {_SCRIPT_LABEL[other]}", callback_data=f"proto_script:{mid}:{ctx}:{other}"),
+    ]
+
+
+def _viewproto_kb(mid: str, script: str = "lat") -> InlineKeyboardMarkup:
+    """Saqlangan bayonnoma ko'rinishidagi klaviatura: Word/PDF + yozuv + nusxa/ulashish."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _proto_export_row(mid, script, "view"),
+        [InlineKeyboardButton(text="📋 Nusxa", callback_data=f"proto_share:{mid}"),
+         InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"proto:{mid}")],
+        [back_button(f"meetingopen:{mid}", "⬅️ Orqaga")],
+    ])
+
+
+def _protocol_result_kb(mid: str, n_pending: int, saved: bool = False,
+                        tasks_done: bool = False, script: str = "lat") -> InlineKeyboardMarkup:
+    """Buttons under a generated protocol. Save + create-tasks are DECOUPLED.
+    Eksport qatori: Word/PDF + Lotin/Kiril almashtirgich (Agrobank shabloni)."""
     rows: list = []
     first = []
     if not saved:
@@ -12401,10 +12426,10 @@ def _protocol_result_kb(mid: str, n_pending: int, saved: bool = False, tasks_don
         rows.append(first)
     rows.append([
         InlineKeyboardButton(text="✏️ Tahrirlash", callback_data=f"proto_edit:{mid}"),
-        InlineKeyboardButton(text="📄 Word", callback_data=f"proto_export:{mid}"),
         InlineKeyboardButton(text="📋 Nusxa", callback_data=f"proto_share:{mid}"),
         InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"proto:{mid}"),
     ])
+    rows.append(_proto_export_row(mid, script, "res"))
     rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"meetingopen:{mid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -12764,31 +12789,68 @@ async def cb_protocol_tasks(query: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("proto_export:"))
 async def cb_protocol_export(query: CallbackQuery, state: FSMContext) -> None:
-    """Export the protocol as a Word (.docx) file. Uses the in-progress text from
-    state, or the saved protocol from the meeting record."""
-    mid = query.data.split(":", 1)[1]
+    """Export the bayonnoma as Word/PDF in the chosen script (Agrobank template).
+    Callback: proto_export:{mid}:{fmt}:{script}  (fmt=word|pdf, script=lat|kir).
+    Backward-compat: proto_export:{mid} → word/lat."""
+    parts = query.data.split(":")
+    mid = parts[1] if len(parts) > 1 else ""
+    fmt = parts[2] if len(parts) > 2 else "word"
+    script = "cyrillic" if (len(parts) > 3 and parts[3] == "kir") else "latin"
     data = await state.get_data()
     text = (data.get("protocol_text") or "").strip()
-    title = "Bayonnoma"
     m = await database.get_meeting(mid)
-    if m:
-        title = (m.get("title") or "Bayonnoma").strip()
-        if not text:
-            fu = m.get("follow_up_actions") or []
-            text = (fu[0] if (isinstance(fu, list) and fu) else str(fu or "")).strip()
-    if not text:
+    if m and not text:
+        fu = m.get("follow_up_actions") or []
+        text = (fu[0] if (isinstance(fu, list) and fu) else str(fu or "")).strip()
+    if not m or not text:
         await query.answer("Bayonnoma topilmadi — avval saqlang.", show_alert=True)
         return
     await query.answer("📄 Tayyorlayapman…")
     from aiogram.types import BufferedInputFile
     try:
-        proto_tasks = _proto_tasks_from_actions(data.get("pending_actions"))
-        blob = _build_protocol_docx_bytes(title, text, tasks=proto_tasks)
-        fname = f"bayonnoma_{datetime.now(database.TZ).strftime('%Y-%m-%d')}.docx"
-        await query.message.answer_document(BufferedInputFile(blob, filename=fname),
-                                            caption="📄 Bayonnoma (Word)")
+        import protocol_doc
+        proto_tasks = _proto_tasks_from_actions(data.get("pending_actions")) or _proto_tasks_from_text(text)
+        settings = await database.get_settings()
+        fields = protocol_doc.build_fields(m, text, proto_tasks, settings)
+        stamp = datetime.now(database.TZ).strftime("%Y-%m-%d")
+        if fmt == "pdf":
+            blob = protocol_doc.build_pdf(fields, script)
+            fname, caption = f"bayonnoma_{stamp}.pdf", "📄 Bayonnoma (PDF)"
+        else:
+            blob = protocol_doc.build_docx(fields, script)
+            fname, caption = f"bayonnoma_{stamp}.docx", "📄 Bayonnoma (Word)"
+        if script == "cyrillic":
+            caption += " · Kiril"
+        await query.message.answer_document(BufferedInputFile(blob, filename=fname), caption=caption)
+    except RuntimeError as e:
+        # reportlab o'rnatilmagan (PDF) — aniq xabar; Word ishlayveradi.
+        await query.message.answer(f"⚠️ {e}")
     except Exception as e:
         await query.message.answer(_humanize_error(e))
+
+
+@router.callback_query(F.data.startswith("proto_script:"))
+async def cb_protocol_script(query: CallbackQuery, state: FSMContext) -> None:
+    """Lotin/Kiril almashtirgich — bayonnoma klaviaturasini boshqa yozuvga qayta chizadi
+    (matn o'zgarmaydi; faqat Word/PDF eksport yozuvi + tugma yorlig'i)."""
+    parts = query.data.split(":")
+    if len(parts) < 4:
+        await query.answer()
+        return
+    mid, ctx, script = parts[1], parts[2], parts[3]
+    if ctx == "view":
+        kb = _viewproto_kb(mid, script)
+    else:
+        data = await state.get_data()
+        kb = _protocol_result_kb(mid, data.get("proto_pending_count", 0),
+                                 saved=data.get("proto_saved", False),
+                                 tasks_done=data.get("proto_tasks_done", False),
+                                 script=script)
+    try:
+        await query.message.edit_reply_markup(reply_markup=kb)
+        await query.answer(f"Yozuv: {_SCRIPT_LABEL.get(script, script)}")
+    except TelegramBadRequest:
+        await query.answer()
 
 
 @router.callback_query(F.data.startswith("viewproto:"))
@@ -12809,17 +12871,11 @@ async def cb_view_protocol(query: CallbackQuery) -> None:
         await query.answer("Bu uchrashuvda bayonnoma yo'q", show_alert=True)
         return
     await query.answer()
-    view_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Word", callback_data=f"proto_export:{mid}"),
-         InlineKeyboardButton(text="📋 Nusxa", callback_data=f"proto_share:{mid}"),
-        InlineKeyboardButton(text="📤 Ulashish", switch_inline_query=f"proto:{mid}")],
-        [back_button(f"meetingopen:{mid}", "⬅️ Orqaga")],
-    ])
     await _safe_answer(
         query.message,
         f"📄 **BAYONNOMA — {m.get('title', '')}**\n\n{text}",
         parse_mode="Markdown",
-        reply_markup=view_kb,
+        reply_markup=_viewproto_kb(mid, "lat"),
     )
 
 
