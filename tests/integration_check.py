@@ -199,6 +199,12 @@ async def main():
     check("Import: noma'lum ustun → [] (aqlli yo'lga)", handlers._structured_tasks_from_table([("Mahsulot", "Narx", "Soni"), ("Olma", "5000", "10")]) == [])
     check("Import: Mas'ul ustuni → ijrochi", (lambda a: bool(a) and a[0]["data"].get("assignee") == "O.X")(handlers._structured_tasks_from_table([("Vazifa", "Mas'ul"), ("Ish", "O.X")])))
     check("Import: izoh==ijrochi → izoh tushiriladi", (lambda a: bool(a) and not a[0]["data"].get("description"))(handlers._structured_tasks_from_table([("Vazifa", "Ijrochi", "Izoh"), ("Ish", "Aziz", "Aziz")])))
+    # Import is NOT held to the chat 20-cap (deterministic parse, no JSON-truncation risk).
+    # 25-row table → 25 actions; the import backstop is _MAX_IMPORT_TASKS (1000), not 20.
+    _big_table = [("Vazifa", "Ijrochi")] + [(f"Ish {i}", "Aziz") for i in range(25)]
+    _big_acts = handlers._structured_tasks_from_table(_big_table)
+    check("Import: 20+ qator cheklovsiz parse (25→25)", len(_big_acts) == 25, f"got {len(_big_acts)}")
+    check("Import backstop 1000 (chat-cap 20 dan yuqori)", handlers._MAX_IMPORT_TASKS == 1000 and handlers._MAX_IMPORT_TASKS > handlers._MAX_CREATE_ACTIONS_PER_MSG, f"{getattr(handlers, '_MAX_IMPORT_TASKS', None)}")
 
     print("\n── Kategoriyalar ──")
     _cid = await database.create_task({"title": "Kat sinov", "priority": "P1", "status": "todo", "category": "Shartnomalar"})

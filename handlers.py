@@ -1454,10 +1454,15 @@ _STREAM_EDIT_MIN_DELTA_CHARS = 24    # don't spam edits for tiny additions
 
 _DESTRUCTIVE_ACTION_TYPES = {"create_task", "schedule_meeting"}
 
-# Most tasks/meetings creatable from a single message. A pasted list of ~14 is
+# Most tasks/meetings creatable from a single CHAT message. A pasted list of ~14 is
 # realistic; beyond ~20 the JSON response risks truncation and the confirm card
 # grows unwieldy. We keep the first N and tell the principal to resend the rest.
 _MAX_CREATE_ACTIONS_PER_MSG = 20
+
+# FILE import (Excel/doc) is parsed deterministically (no LLM → no JSON truncation),
+# so it is NOT held to the chat cap. This is a high safety backstop only — it stops a
+# pathological/huge file from flooding the DB or hanging the turn, not real use.
+_MAX_IMPORT_TASKS = 1000
 
 # Mass-delete actions ("barchasini o'chir"). These ALWAYS require confirmation —
 # independent of the confirm_create_actions setting — because they're
@@ -3004,12 +3009,14 @@ async def _import_tasks_from_file_bytes(
             _by_title.setdefault(_k, _t["id"])
     _apply_title_dedup(actions, _by_title)
 
-    # ── Cap + preview + confirm (reuse the standard acts_confirm pipeline) ──
+    # ── Preview + confirm (reuse the standard acts_confirm pipeline) ──
+    # No 20-per-message chat cap here: file imports are parsed deterministically, so
+    # all rows are imported. Only a high safety backstop applies.
     overflow = ""
-    if len(actions) > _MAX_CREATE_ACTIONS_PER_MSG:
-        dropped = len(actions) - _MAX_CREATE_ACTIONS_PER_MSG
-        actions = actions[:_MAX_CREATE_ACTIONS_PER_MSG]
-        overflow = (f"\n\n⚠️ Bir importda {_MAX_CREATE_ACTIONS_PER_MSG} tagacha. "
+    if len(actions) > _MAX_IMPORT_TASKS:
+        dropped = len(actions) - _MAX_IMPORT_TASKS
+        actions = actions[:_MAX_IMPORT_TASKS]
+        overflow = (f"\n\n⚠️ Juda katta import — {_MAX_IMPORT_TASKS} tasi olindi. "
                     f"Qolgan {dropped} tasini alohida fayl bilan yuboring.")
 
     n_upd = sum(1 for a in actions if a.get("type") == "update_task")
