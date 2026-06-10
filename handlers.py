@@ -5777,12 +5777,39 @@ async def _si_notify(bot: Bot, text: str,
         logger.exception("SI notify failed")
 
 
+# In-flight SI worker tasks — tracked so /freeze can HARD-cancel a running
+# implement/deploy. The cooperative _si_frozen_abort() re-checks below are the
+# graceful stop (bail before the next mutating step); this set is the backstop for
+# a task already blocked on slow I/O (SDK call, git push).
+_si_inflight_tasks: set = set()
+
+
+def _si_spawn(coro) -> "asyncio.Task":
+    """Spawn an SI worker tracked for /freeze cancellation."""
+    task = asyncio.create_task(coro)
+    _si_inflight_tasks.add(task)
+    task.add_done_callback(_si_inflight_tasks.discard)
+    return task
+
+
+async def _si_frozen_abort(bot: Bot, pid: str, stage: str) -> bool:
+    """Kill-switch re-check at an SI await boundary. If frozen → log + notify +
+    return True so the worker bails BEFORE the next mutating/irreversible step."""
+    if await _si_is_frozen():
+        await database.log_si_audit("aborted_frozen", pid, stage)
+        await _si_notify(bot, f"🧊 **To'xtatildi** (#{pid}) — '{stage}' bosqichida tizim muzlatilgan.")
+        return True
+    return False
+
+
 async def _si_run_implementation(bot: Bot, proposal: dict) -> None:
     """Gate-2 background worker: turn an APPROVED proposal into a reviewed diff in an
     isolated worktree. NEVER deploys. dev_agent.prepare enforces protected paths +
     the test gate and audits every step; here we just report the outcome."""
     import dev_agent
     pid = proposal.get("id", "?")
+    if await _si_frozen_abort(bot, pid, "implement"):
+        return
     try:
         res = await dev_agent.prepare(proposal)
     except Exception as e:
@@ -5841,6 +5868,8 @@ async def _si_run_deploy(bot: Bot, proposal: dict) -> None:
     title = (proposal.get("title") or "improvement")[:72]
     commit_msg = (f"si({pid}): {title}\n\n"
                   "Supervised self-improvement — approved by the principal (Gate 1-3).")
+    if await _si_frozen_abort(bot, pid, "push"):
+        return
     ok, msg = await dev_agent.push_branch(branch, worktree, commit_msg)
     if not ok:
         await database.log_si_audit("push_failed", pid, (msg or "")[:500])
@@ -5848,6 +5877,8 @@ async def _si_run_deploy(bot: Bot, proposal: dict) -> None:
                               "_Hech narsa deploy bo'lmadi._")
         return
     await database.update_proposal_status(pid, "pr_open")
+    if await _si_frozen_abort(bot, pid, "merge"):
+        return
     ok, url = await dev_agent.open_and_merge_pr(
         branch, title=f"[SI] {title}",
         body=f"Supervised self-improvement proposal #{pid}.\n\n"
@@ -5861,6 +5892,8 @@ async def _si_run_deploy(bot: Bot, proposal: dict) -> None:
         return
     await database.update_proposal_status(pid, "merged")
     await database.log_si_audit("merged", pid, url or "")
+    if await _si_frozen_abort(bot, pid, "deploy-signal"):
+        return  # merged, but principal froze — do NOT trigger the live restart now
     # write the deploy signal the VM deployer's .path unit watches
     try:
         _write_deploy_signal({"target": None, "proposal_id": pid})
@@ -5898,13 +5931,19 @@ _SI_FROZEN_ALERT = "🧊 Tizim muzlatilgan — /unfreeze bilan davom eting."
 
 @router.message(Command("freeze"))
 async def cmd_freeze(message: Message) -> None:
-    """Kill-switch: pause the autonomous self-improvement loop."""
+    """Kill-switch: pause the autonomous loop AND hard-stop any in-flight worker."""
     await database.set_setting("si_frozen", True)
-    await database.log_si_audit("frozen", None, "kill-switch ON")
+    cancelled = 0
+    for task in list(_si_inflight_tasks):
+        if not task.done():
+            task.cancel()
+            cancelled += 1
+    await database.log_si_audit("frozen", None, f"kill-switch ON; cancelled={cancelled}")
+    stopped = f"\n\n⏹ {cancelled} ta ishlab turgan jarayon to'xtatildi." if cancelled else ""
     await message.answer(
         "🧊 **Muzlatildi.**\n\n"
         "Avtonom o'z-o'zini yaxshilash to'xtadi: 🛠 Implement, 🚀 Deploy va tungi "
-        "diagnoz ishlamaydi. Takliflar yaratilaveradi (navbatда turadi).\n\n"
+        "diagnoz ishlamaydi. Takliflar yaratilaveradi (navbatда turadi)." + stopped + "\n\n"
         "Davom ettirish: /unfreeze", parse_mode="Markdown")
 
 
@@ -5942,7 +5981,7 @@ async def cb_si_implement(query: CallbackQuery) -> None:
             "Tayyor bo'lganda diff bilan xabar beraman.", parse_mode="Markdown")
     except TelegramBadRequest:
         pass
-    asyncio.create_task(_si_run_implementation(query.bot, p))
+    _si_spawn(_si_run_implementation(query.bot, p))
 
 
 @router.callback_query(F.data.startswith("sidiff:"))
@@ -6009,7 +6048,7 @@ async def cb_si_deploy(query: CallbackQuery) -> None:
             parse_mode="Markdown")
     except TelegramBadRequest:
         pass
-    asyncio.create_task(_si_run_deploy(query.bot, p))
+    _si_spawn(_si_run_deploy(query.bot, p))
 
 
 # ── /silog — self-improvement status + audit trail (read-only, Telegram-native) ──

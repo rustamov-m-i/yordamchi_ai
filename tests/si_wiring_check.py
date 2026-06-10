@@ -419,6 +419,28 @@ async def main():
     except OSError:
         pass
 
+    print("\n[ M. /freeze in-flight SI ishni to'xtatadi (2b) ]")
+    import asyncio as _aio_m
+    import inspect as _insp_m
+
+    async def _never_m():
+        await _aio_m.sleep(30)
+    await database.set_setting("si_frozen", False)
+    _tm = handlers._si_spawn(_never_m())
+    check("M: _si_spawn in-flight set'ga qo'shadi", _tm in handlers._si_inflight_tasks)
+    await handlers.cmd_freeze(FakeMsg("/freeze"))
+    await _aio_m.sleep(0.05)  # let the cancellation propagate
+    check("M: /freeze in-flight ishni cancel qildi", _tm.cancelled() or _tm.done())
+    await handlers.cmd_unfreeze(FakeMsg("/unfreeze"))
+    check("M: _si_run_implementation frozen re-check qiladi",
+          "_si_frozen_abort" in _insp_m.getsource(handlers._si_run_implementation))
+    check("M: _si_run_deploy push/merge/signal oldidan re-check (≥3)",
+          _insp_m.getsource(handlers._si_run_deploy).count("_si_frozen_abort") >= 3)
+    _hsrc = open(handlers.__file__, encoding="utf-8").read()
+    check("M: SI ishlar _si_spawn bilan (xom create_task emas)",
+          "_si_spawn(_si_run_implementation" in _hsrc and "_si_spawn(_si_run_deploy" in _hsrc
+          and "asyncio.create_task(_si_run_" not in _hsrc)
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:
