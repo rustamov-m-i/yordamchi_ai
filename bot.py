@@ -37,6 +37,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("yordamchi")
 
+# Mask any secret VALUE (Telegram token / API keys / Apple password) in ALL log
+# output — a provider error traceback can otherwise leak auth headers/credentials.
+try:
+    import redaction
+    _n_masked = redaction.install_secret_log_redaction()
+    logger.info("Secret log redaction active (%d value(s) masked)", _n_masked)
+except Exception:
+    logger.warning("Secret log redaction setup failed (non-fatal)")
+
 # Single-instance guard: an exclusive advisory lock on a file in the data dir.
 # Prevents two bot processes from polling the same token at once (Telegram
 # returns "Conflict: terminated by other getUpdates" and both thrash). The lock

@@ -120,3 +120,61 @@ def estimate_cost(
         + cache_read_tokens * rates["cache_read"]
         + cache_creation_tokens * rates["cache_write"]
     ) / 1_000_000
+
+
+# ── Secret redaction in LOGS ──────────────────────────────────────────────────
+# A provider error (httpx/Anthropic/STT) can dump full request context — including
+# auth headers — into a traceback. This wraps every root log handler's formatter so
+# any known secret VALUE is masked in the final output (message, args, AND traceback)
+# — one global fix instead of auditing every logger.exception call site.
+import logging as _logging  # noqa: E402  (kept local to the log-redaction section)
+
+_SECRET_MASK = "‹redacted-secret›"
+
+
+def _collect_secrets() -> list:
+    """All non-trivial secret VALUES from config (auto-discovered by name, so new
+    keys are covered too): anything named *TOKEN*/*KEY*/*PASSWORD*/*SECRET*."""
+    try:
+        import config
+    except Exception:
+        return []
+    out = set()
+    for name in dir(config):
+        if any(k in name.upper() for k in ("TOKEN", "KEY", "PASSWORD", "SECRET")):
+            val = getattr(config, name, None)
+            if isinstance(val, str) and len(val.strip()) >= 8:
+                out.add(val.strip())
+    # longest-first so a key that contains another is masked whole
+    return sorted(out, key=len, reverse=True)
+
+
+class _RedactingFormatter(_logging.Formatter):
+    """Delegates to the original formatter, then masks any secret in the result."""
+
+    def __init__(self, base: _logging.Formatter, secrets: list):
+        super().__init__()
+        self._base = base
+        self._secrets = secrets
+
+    def format(self, record: "_logging.LogRecord") -> str:
+        s = self._base.format(record)
+        for sec in self._secrets:
+            if sec and sec in s:
+                s = s.replace(sec, _SECRET_MASK)
+        return s
+
+
+def install_secret_log_redaction() -> int:
+    """Wrap every root-logger handler so secrets never reach the log. Idempotent
+    (won't double-wrap). Returns the number of secrets being masked."""
+    secrets = _collect_secrets()
+    if not secrets:
+        return 0
+    root = _logging.getLogger()
+    for h in root.handlers:
+        if isinstance(h.formatter, _RedactingFormatter):
+            continue  # already wrapped
+        base = h.formatter or _logging.Formatter()
+        h.setFormatter(_RedactingFormatter(base, secrets))
+    return len(secrets)
