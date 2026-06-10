@@ -66,7 +66,14 @@ def _split_for_telegram(text: str, limit: int = _TG_SOFT_LIMIT) -> list[str]:
             else:
                 if line_buf:
                     parts.append(line_buf)
-                line_buf = line[:limit]
+                    line_buf = ""
+                # A single line longer than the limit — HARD-SPLIT into limit-sized
+                # pieces so no content is silently dropped (was: line[:limit], which
+                # lost the tail — e.g. long compliance/contract notes in a task).
+                while len(line) > limit:
+                    parts.append(line[:limit])
+                    line = line[limit:]
+                line_buf = line
         if line_buf:
             buf = line_buf
     if buf:

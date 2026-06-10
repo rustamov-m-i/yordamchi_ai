@@ -404,28 +404,40 @@ async def _transcribe_aisha(audio_bytes: bytes, filename: str, language: str) ->
 
 
 async def _transcribe_muxlisa(audio_bytes: bytes, filename: str, language: str) -> Optional[str]:
-    """Single Muxlisa call. Raises on network/HTTP error, returns text on success."""
+    """Muxlisa STT with retry/backoff on transient errors (mirrors Aisha) — a single
+    timeout no longer drops the voice command on the first hiccup."""
+    max_attempts = 4
+    transient_statuses = {429, 500, 502, 503, 504}
     async with httpx.AsyncClient(timeout=MUXLISA_TIMEOUT, verify=_muxlisa_verify()) as client:
         files = {"audio": (filename, audio_bytes, "audio/ogg")}
         data = {"language": language}
         headers = {"x-api-key": config.MUXLISA_API_KEY}
-        resp = await client.post(config.MUXLISA_STT_URL, files=files, data=data, headers=headers)
-
-    if resp.status_code != 200:
-        raise httpx.HTTPStatusError(
-            f"Muxlisa returned {resp.status_code}: {resp.text[:200]}",
-            request=resp.request,
-            response=resp,
-        )
-
-    try:
-        payload = resp.json()
-    except Exception:
-        raise ValueError(f"Muxlisa non-JSON response: {resp.text[:200]}")
-
-    text = (payload.get("text") or "").strip()
-    logger.info("Muxlisa transcript: %d chars", len(text))
-    return text
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = await client.post(config.MUXLISA_STT_URL, files=files, data=data, headers=headers)
+                if resp.status_code != 200:
+                    if resp.status_code in transient_statuses and attempt < max_attempts:
+                        logger.warning("Muxlisa transient HTTP %s on attempt %d; retrying",
+                                       resp.status_code, attempt)
+                        await asyncio.sleep(0.75 * attempt)
+                        continue
+                    raise httpx.HTTPStatusError(
+                        f"Muxlisa returned {resp.status_code}: {resp.text[:200]}",
+                        request=resp.request, response=resp)
+                try:
+                    payload = resp.json()
+                except Exception:
+                    raise ValueError(f"Muxlisa non-JSON response: {resp.text[:200]}")
+                text = (payload.get("text") or "").strip()
+                logger.info("Muxlisa transcript: %d chars", len(text))
+                return text
+            except (httpx.TransportError, httpx.HTTPStatusError) as e:
+                if attempt < max_attempts and isinstance(e, httpx.TransportError):
+                    logger.warning("Muxlisa transport error on attempt %d: %s; retrying",
+                                   attempt, type(e).__name__)
+                    await asyncio.sleep(1 * attempt)
+                    continue
+                raise
 
 
 async def _transcribe_whisper(audio_bytes: bytes, filename: str, audio_hash: str) -> Optional[str]:

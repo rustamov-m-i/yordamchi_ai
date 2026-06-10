@@ -730,6 +730,19 @@ async def main():
     check("Ovoz: '_process_and_reply(message, message.text' qolmadi (ovoz Claude'ga)",
           "_process_and_reply(message, message.text" not in _src)
 
+    print("\n── Batch-4a UX: truncation (kontent yo'qolmaydi) + Muxlisa retry ──")
+    _long_line = "X" * 9000  # one line far over the Telegram soft limit
+    _chunks = handlers._split_for_telegram(_long_line)
+    check("truncation: uzun bitta qator bo'linadi (1 emas)", len(_chunks) >= 2, str(len(_chunks)))
+    check("truncation: HECH kontent yo'qolmaydi (join == asl)", "".join(_chunks) == _long_line)
+    check("truncation: har chunk limitdan oshmaydi",
+          all(len(c) <= handlers._TG_SOFT_LIMIT for c in _chunks))
+    import voice_service as _vs4
+    import inspect as _ins4
+    _muxsrc = _ins4.getsource(_vs4._transcribe_muxlisa)
+    check("Muxlisa STT retry/backoff bor (max_attempts + transient)",
+          "max_attempts" in _muxsrc and "transient_statuses" in _muxsrc and "asyncio.sleep" in _muxsrc)
+
     print("\n── Batch-1 tuzatishlar: recurrence / cascade / NULL-end / bulk-count ──")
     from datetime import datetime as _dt2, timedelta as _td2
     _now2 = _dt2.now(database.TZ)
