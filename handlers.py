@@ -1018,8 +1018,23 @@ async def auth_callback_middleware(handler, event: CallbackQuery, data):
 # ─────────────────────── ACTION EXECUTOR ───────────────────────
 
 
+def _icloud_push_payload(meeting_id: str, data: dict, end_iso: "str | None") -> dict:
+    """Retry-queue payload matching _icloud_retry_sweep's reader (dt_start/dt_end/…)."""
+    return {
+        "title": data.get("title", "Uchrashuv"),
+        "dt_start": data.get("datetime_start"),
+        "dt_end": end_iso or data.get("datetime_end") or data.get("datetime_start"),
+        "participants": data.get("participants"),
+        "location": data.get("location_or_link"),
+        "description": data.get("agenda"),
+    }
+
+
 async def _push_meeting_to_icloud(meeting_id: str, data: dict) -> None:
-    """Background-task push: doesn't block the bot's reply to the user."""
+    """Background-task push: doesn't block the bot's reply. On failure (no UID or an
+    exception) it ENQUEUES a retry so the scheduler's _icloud_retry_sweep recovers it
+    — otherwise a failed push left the meeting permanently 'kutilmoqda' (silent gap)."""
+    end_iso = None
     try:
         start_dt = datetime.fromisoformat(data["datetime_start"])
         end_iso = data.get("datetime_end") or (start_dt + timedelta(hours=1)).isoformat()
@@ -1037,9 +1052,18 @@ async def _push_meeting_to_icloud(meeting_id: str, data: dict) -> None:
                 await db.commit()
             logger.info("iCloud sync complete for %s", meeting_id)
         else:
-            logger.warning("iCloud push returned no UID for %s", meeting_id)
-    except Exception:
-        logger.exception("Background iCloud push failed for %s", meeting_id)
+            logger.warning("iCloud push returned no UID for %s — queuing retry", meeting_id)
+            await database.enqueue_icloud_retry(
+                "push", meeting_id, _icloud_push_payload(meeting_id, data, end_iso),
+                "push returned None")
+    except Exception as e:
+        logger.exception("Background iCloud push failed for %s — queuing retry", meeting_id)
+        try:
+            await database.enqueue_icloud_retry(
+                "push", meeting_id, _icloud_push_payload(meeting_id, data, end_iso),
+                f"{type(e).__name__}: {e}")
+        except Exception:
+            logger.exception("enqueue_icloud_retry also failed for %s", meeting_id)
 
 
 _SELF_ASSIGNEE_NAMES = {"men", "o'zim", "ozim", "o'z", "oz", ""}

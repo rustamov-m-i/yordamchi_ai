@@ -248,6 +248,16 @@ async def main() -> None:
         await dispatcher.stop_polling()
     except Exception:
         pass
+    # Drain in-flight fire-and-forget tasks (e.g. an iCloud push mid-commit) with a
+    # short grace window — otherwise the loop closes under them and the push is lost
+    # before it can persist its UID or enqueue a retry. Bounded so shutdown never hangs.
+    bg = [t for t in handlers._background_tasks if not t.done()]
+    if bg:
+        logger.info("Draining %d background task(s) (grace 5s)...", len(bg))
+        try:
+            await asyncio.wait_for(asyncio.gather(*bg, return_exceptions=True), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Background tasks unfinished after 5s — proceeding")
     scheduler.stop()
     await bot.session.close()
     logger.info("Stopped cleanly.")
