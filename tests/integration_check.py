@@ -191,6 +191,43 @@ async def main():
     except Exception as e:
         check("Export: xlsx tahlili", False, f"{type(e).__name__}: {e}")
 
+    # ── Export BY STATUS (holatiga qarab) ──
+    check("export status map: bajarilgan→done", handlers._EXPORT_STATUS_WORDS.get("bajarilgan") == "done")
+    check("export status map: o'tgan→overdue", handlers._EXPORT_STATUS_WORDS.get("o'tgan") == "overdue")
+    check("export status map: aktiv→active, muhim→important",
+          handlers._EXPORT_STATUS_WORDS.get("aktiv") == "active"
+          and handlers._EXPORT_STATUS_WORDS.get("muhim") == "important")
+    check("cb_export_status handler mavjud", hasattr(handlers, "cb_export_status"))
+
+    _done_id = await database.create_task({"title": "EXPORT_done_x", "priority": "P1", "status": "todo"})
+    await database.complete_task(_done_id)
+    _fa_done = await handlers._fetch_tasks_for_export("done")
+    check("_fetch_tasks_for_export('done') → faqat done",
+          bool(_fa_done) and all(t.get("status") == "done" for t in _fa_done))
+    _fa_active = await handlers._fetch_tasks_for_export("active")
+    check("_fetch_tasks_for_export('active') → done yo'q",
+          all(t.get("status") in ("todo", "in_progress", "blocked") for t in _fa_active))
+
+    class _StMsg:
+        chat = type("C", (), {"id": 1})()
+        text = "/export bajarilgan"
+        cap: dict = {}
+        async def answer_document(self, file, caption=None, parse_mode=None):
+            _StMsg.cap["b"] = file.data
+        async def answer(self, *a, **k):
+            _StMsg.cap.setdefault("t", []).append(a)
+
+    await handlers.cmd_export(_StMsg())  # "/export bajarilgan" → status=done
+    try:
+        _ws2 = _lwb(_io.BytesIO(_StMsg.cap["b"])).active
+        check("Export status: subtitle 'Holat: Bajarilgan'", "Holat: Bajarilgan" in str(_ws2["B2"].value))
+        _holats = [_ws2.cell(row=r, column=6).value for r in range(4, _ws2.max_row + 1)]
+        _done_lbl = handlers._STATUS_LABEL_UZ.get("done", "Bajarildi")
+        check("Export status: Holat ustuni faqat done",
+              bool(_holats) and all(h == _done_lbl for h in _holats))
+    except Exception as e:
+        check("Export status: xlsx tahlili", False, f"{type(e).__name__}: {e}")
+
     _acts = handlers._structured_tasks_from_table(
         [("№", "Vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh"),
          (1, "Import A", "Aziz", "08-06-2026", "Shoshilinch", "Aktiv", "x")])

@@ -2193,8 +2193,10 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
                     await progress_msg.delete()
                 except TelegramBadRequest:
                     pass
-            _exp_who = ((_exp.get("data") or {}).get("assignee") or "").strip() or None
-            await _send_tasks_export(message, assignee=_exp_who)
+            _exp_data = _exp.get("data") or {}
+            _exp_who = (_exp_data.get("assignee") or "").strip() or None
+            _exp_status = _EXPORT_STATUS_WORDS.get((_exp_data.get("status") or "").strip().lower()) or None
+            await _send_tasks_export(message, assignee=_exp_who, status=_exp_status)
             return
 
         # ── "Ko'rsat/ro'yxat" intent — render the REAL section from the DB ──
@@ -2566,11 +2568,14 @@ def _import_status(val) -> str:
 
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
-    """Export tasks to an .xlsx. `/export <ism>` filters by assignee. Also reachable
-    by voice/text ('eksport qil' / 'X vazifalarini eksport qil')."""
+    """Export tasks to an .xlsx. Argument: a STATUS word ('/export bajarilgan',
+    'aktiv', "o'tgan", 'muhim', 'bugun'…) → that status; otherwise an executor name
+    → that assignee. Voice/text ham ('bajarilgan vazifalarni eksport qil')."""
     parts = (message.text or "").split(maxsplit=1)
-    assignee = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
-    await _send_tasks_export(message, assignee=assignee)
+    arg = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+    status = _EXPORT_STATUS_WORDS.get(arg.lower()) if arg else None
+    assignee = None if status else arg
+    await _send_tasks_export(message, assignee=assignee, status=status)
 
 
 @router.callback_query(F.data.startswith("exportby:"))
@@ -2581,10 +2586,60 @@ async def cb_export_by(query: CallbackQuery) -> None:
     await _send_tasks_export(query.message, assignee=assignee)
 
 
-async def _send_tasks_export(message: Message, assignee: str | None = None) -> None:
+@router.callback_query(F.data.startswith("exportst:"))
+async def cb_export_status(query: CallbackQuery) -> None:
+    """Quick per-status export (button under the full export)."""
+    status = query.data.split(":", 1)[1]
+    await query.answer(f"📤 {_EXPORT_FILTER_LABEL.get(status, status)}…")
+    await _send_tasks_export(query.message, status=status)
+
+
+# Status/filter labels for the export subtitle + filename + buttons. Keys mirror
+# the Tasks-section filters so "export active" == what the "Aktiv" filter shows.
+_EXPORT_FILTER_LABEL = {
+    "active": "Aktiv", "today": "Bugungi", "overdue": "Muddati o'tgan",
+    "important": "Muhim", "urgent": "Shoshilinch", "done": "Bajarilgan",
+    "recurring": "Takroriy", "all": "Barchasi",
+}
+# /export <so'z> va ovoz: O'zbekcha status so'zi → kanonik filtr kaliti.
+_EXPORT_STATUS_WORDS = {
+    "bajarilgan": "done", "bajarilganlar": "done", "yakunlangan": "done", "done": "done",
+    "aktiv": "active", "faol": "active", "active": "active", "ochiq": "active",
+    "o'tgan": "overdue", "otgan": "overdue", "muddati o'tgan": "overdue", "overdue": "overdue",
+    "muhim": "important", "important": "important",
+    "shoshilinch": "urgent", "urgent": "urgent",
+    "bugun": "today", "bugungi": "today", "today": "today",
+    "takroriy": "recurring", "recurring": "recurring",
+    "barchasi": "all", "hammasi": "all", "all": "all",
+}
+
+
+async def _fetch_tasks_for_export(filt: str) -> list:
+    """Status/filter kaliti → vazifalar (eksport uchun, cheklovsiz). Semantikasi
+    _render_tasks_for_filter bilan bir xil (izchillik)."""
+    if filt == "active":
+        return await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000)
+    if filt == "today":
+        return await database.list_today_tasks()
+    if filt == "overdue":
+        return await database.list_overdue_tasks()
+    if filt == "done":
+        return await database.list_tasks(status_in=["done"], limit=10000)
+    if filt in ("important", "urgent"):
+        act = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000)
+        pset = ("P0", "P1") if filt == "important" else ("P0",)
+        return [t for t in act if t.get("priority") in pset]
+    if filt == "recurring":
+        return await database.list_recurring_tasks(limit=10000)
+    return await database.list_tasks(limit=10000)  # all
+
+
+async def _send_tasks_export(message: Message, assignee: str | None = None,
+                             status: str | None = None) -> None:
     """Build and send the tasks workbook (Template style). Shared by /export, the
-    export_tasks action (voice/text), and the per-assignee buttons. `assignee`
-    filters to one executor's tasks."""
+    export_tasks action (voice/text), per-assignee and per-status buttons.
+    `assignee` filters to one executor; `status` filters by Tasks-section filter
+    key (active/today/overdue/important/urgent/done/recurring/all)."""
     import io
     from aiogram.types import BufferedInputFile
     try:
@@ -2595,13 +2650,21 @@ async def _send_tasks_export(message: Message, assignee: str | None = None) -> N
         await message.answer("⚠️ Excel kutubxonasi (openpyxl) o'rnatilmagan.")
         return
 
-    tasks = await database.list_tasks(limit=10000)  # all statuses
+    if status and status != "all":
+        tasks = await _fetch_tasks_for_export(status)
+    else:
+        tasks = await database.list_tasks(limit=10000)  # all statuses
     if assignee:
         al = assignee.strip().lower()
         tasks = [t for t in tasks if (t.get("assignee") or "").strip().lower() == al]
     if not tasks:
-        await message.answer(f"📭 «{assignee}» bo'yicha vazifa topilmadi." if assignee
-                             else "📭 Eksport qilish uchun vazifa yo'q.")
+        _what = []
+        if status and status != "all":
+            _what.append(f"«{_EXPORT_FILTER_LABEL.get(status, status)}»")
+        if assignee:
+            _what.append(f"«{assignee}»")
+        await message.answer((" · ".join(_what) + " bo'yicha vazifa topilmadi.")
+                             if _what else "📭 Eksport qilish uchun vazifa yo'q.")
         return
 
     # ── Template style: clean document look — bold black title/header, hair-line
@@ -2630,6 +2693,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None) -> N
     t2 = ws["B2"]
     now_s = datetime.now(database.TZ).strftime("%d-%m-%Y %H:%M")
     sub = f"Yaratilgan: {now_s}      Jami: {len(tasks)} ta vazifa"
+    if status and status != "all":
+        sub += f"      ·  Holat: {_EXPORT_FILTER_LABEL.get(status, status)}"
     if assignee:
         sub += f"      ·  Ijrochi: {assignee}"
     t2.value = sub
@@ -2681,28 +2746,37 @@ async def _send_tasks_export(message: Message, assignee: str | None = None) -> N
 
     buf = io.BytesIO()
     wb.save(buf)
-    tag = (assignee or "hammasi").strip().replace(" ", "_").replace("/", "-")
+    _tag_bits = ([status] if (status and status != "all") else []) + [(assignee or "hammasi")]
+    tag = "_".join(_tag_bits).strip().replace(" ", "_").replace("/", "-")
     fname = f"vazifalar_{tag}_{datetime.now(database.TZ).strftime('%Y-%m-%d')}.xlsx"
     cap = f"📤 **{len(tasks)} ta vazifa** eksport qilindi"
-    cap += f" — _{assignee}_." if assignee else "."
+    _cap_bits = ([_EXPORT_FILTER_LABEL.get(status, status)] if (status and status != "all") else []) \
+        + ([assignee] if assignee else [])
+    cap += (" — _" + " · ".join(_cap_bits) + "_.") if _cap_bits else "."
     cap += "\n\n_Tahrirlab qaytadan yuborsangiz — import bo'ladi (tasdiqdan keyin)._"
     await message.answer_document(
         BufferedInputFile(buf.getvalue(), filename=fname), caption=cap, parse_mode="Markdown",
     )
 
-    # When exporting everything, offer quick per-assignee export buttons.
-    if not assignee:
+    # Narrow-down buttons after a FULL export (no filter applied yet): by status,
+    # then by assignee. Status icons mirror the section keyboard (🔵/✅/⌛/⭐).
+    if not assignee and not status:
+        kb_rows = [
+            [InlineKeyboardButton(text="🔵 Aktiv", callback_data="exportst:active"),
+             InlineKeyboardButton(text="✅ Bajarilgan", callback_data="exportst:done")],
+            [InlineKeyboardButton(text="⌛ O'tgan", callback_data="exportst:overdue"),
+             InlineKeyboardButton(text="⭐ Muhim", callback_data="exportst:important")],
+        ]
         names = sorted({(t.get("assignee") or "").strip() for t in tasks if (t.get("assignee") or "").strip()})
-        if names:
-            kb_rows, row = [], []
-            for nm in names[:8]:
-                row.append(InlineKeyboardButton(text=f"👤 {nm}", callback_data=f"exportby:{nm}"[:64]))
-                if len(row) == 2:
-                    kb_rows.append(row); row = []
-            if row:
-                kb_rows.append(row)
-            await message.answer("Yoki ijrochi bo'yicha eksport:",
-                                 reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+        row: list = []
+        for nm in names[:8]:
+            row.append(InlineKeyboardButton(text=f"👤 {nm}", callback_data=f"exportby:{nm}"[:64]))
+            if len(row) == 2:
+                kb_rows.append(row); row = []
+        if row:
+            kb_rows.append(row)
+        await message.answer("Holat yoki ijrochi bo'yicha eksport:",
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
 def _norm_header(c) -> str:
