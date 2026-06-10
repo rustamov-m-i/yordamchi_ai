@@ -423,3 +423,13 @@ async def _save_imported_meeting(uid: str, title: str, start_iso: str,
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute("UPDATE meetings SET icloud_uid = ? WHERE id = ?", (uid, mid))
         await db.commit()
+    # iCloud events are EXTERNAL truth — we don't block them, but flag a busy-slot
+    # landing for diagnostics. (A user-facing import-conflict notification needs
+    # sync→bot plumbing — tracked as a follow-up.)
+    try:
+        clash = await database.find_meeting_conflicts(start_iso, end_iso, exclude_id=mid)
+        if clash:
+            logger.warning("iCloud import %r (%s) %d ta mavjud uchrashuv bilan to'qnashadi",
+                           title, start_iso, len(clash))
+    except Exception:
+        pass

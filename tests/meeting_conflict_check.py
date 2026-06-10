@@ -107,6 +107,37 @@ async def main():
     check("bo'sh vaqt → meeting yaratildi", len(ids_ok["meeting"]) == 1)
     check("bo'sh vaqt → _conflict bo'sh", ids_ok["_conflict"] == [])
 
+    print("\n[ E. Reschedule/duration konflikt-guard (interaktiv yo'llar) ]")
+    import inspect as _insp
+    from datetime import datetime as _dt
+    _m = {"datetime_start": _iso(day, 9), "datetime_end": _iso(day, 10)}  # 1 soat
+    _ns = _dt.fromisoformat(_iso(day, 16))
+    _si, _ei = handlers._resched_interval(_m, _ns)
+    check("_resched_interval: davomiylik saqlanadi (16:00→17:00)",
+          _si == _ns.isoformat() and bool(_ei) and "T17:" in _ei)
+    _wt = handlers._conflict_warn_text([{"datetime_start": _iso(day, 10), "title": "Band uchrashuv"}])
+    check("_conflict_warn_text: 'Vaqt band' + sarlavha", "Vaqt band" in _wt and "Band uchrashuv" in _wt)
+    _fk_cbs = [b.callback_data for r in handlers._resched_force_kb("m-x", _ns).inline_keyboard for b in r]
+    check("force-kb: rsforce + compact (12 raqam)",
+          any(c.startswith("rsforce:m-x:") and c.split(":")[-1].isdigit()
+              and len(c.split(":")[-1]) == 12 for c in _fk_cbs))
+    check("force-kb: bekor → meetingopen", any("meetingopen:m-x" in c for c in _fk_cbs))
+    check("cb_resched_force handler mavjud", hasattr(handlers, "cb_resched_force"))
+    check("cb_meeting_duration_force handler mavjud", hasattr(handlers, "cb_meeting_duration_force"))
+    check("reschedule preset → find_meeting_conflicts",
+          "find_meeting_conflicts" in _insp.getsource(handlers.cb_resched_preset))
+    check("reschedule manual → find_meeting_conflicts",
+          "find_meeting_conflicts" in _insp.getsource(handlers.handle_resched_manual))
+    check("duration tahrir → find_meeting_conflicts",
+          "find_meeting_conflicts" in _insp.getsource(handlers.cb_meeting_duration))
+    _aid = await database.create_meeting({"title": "A band", "datetime_start": _iso(day, 9), "datetime_end": _iso(day, 10)})
+    _bid = await database.create_meeting({"title": "B ko'chadi", "datetime_start": _iso(day, 18), "datetime_end": _iso(day, 19)})
+    _bm = await database.get_meeting(_bid)
+    _nsi, _nei = handlers._resched_interval(_bm, _dt.fromisoformat(_iso(day, 9, 30)))
+    _clash = await database.find_meeting_conflicts(_nsi, _nei, exclude_id=_bid)
+    check("B'ni A slotiga ko'chirish → konflikt aniqlanadi (guard ishlaydi)",
+          any(c["id"] == _aid for c in _clash))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:

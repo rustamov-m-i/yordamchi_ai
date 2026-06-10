@@ -12023,6 +12023,39 @@ async def _apply_reschedule(mid: str, new_start: datetime) -> dict | None:
     return await database.get_meeting(mid)
 
 
+def _resched_interval(meeting: dict, new_start: datetime) -> tuple[str, str | None]:
+    """(start_iso, end_iso) for a duration-preserving reschedule — for the conflict
+    check. Mirrors _apply_reschedule's delta logic so the check matches the result."""
+    if new_start.tzinfo is None:
+        new_start = database.TZ.localize(new_start)
+    end_iso = None
+    try:
+        old_start = datetime.fromisoformat(meeting["datetime_start"]).astimezone(database.TZ)
+        if meeting.get("datetime_end"):
+            old_end = datetime.fromisoformat(meeting["datetime_end"])
+            end_iso = (old_end + (new_start - old_start)).isoformat()
+    except (ValueError, TypeError, KeyError):
+        pass
+    return new_start.isoformat(), end_iso
+
+
+def _conflict_warn_text(conflicts: list[dict], verb: str = "ko'chirilsinmi") -> str:
+    """Band-vaqt ogohlantirish matni — reschedule/duration band slotга tushganda."""
+    lines = "\n".join(
+        f"• {_meeting_time_label(c.get('datetime_start') or '', with_past_marker=False)} — "
+        f"{(c.get('title') or '—').strip()}" for c in conflicts[:5])
+    return f"⚠️ **Vaqt band — to'qnashuv:**\n{lines}\n\nBaribir {verb}?"
+
+
+def _resched_force_kb(mid: str, new_start: datetime) -> InlineKeyboardMarkup:
+    """Override keyboard: ko'chirishni tasdiqlash (band bo'lsa ham) yoki bekor."""
+    compact = new_start.astimezone(database.TZ).strftime("%Y%m%d%H%M")
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⚠️ Baribir ko'chir", callback_data=f"rsforce:{mid}:{compact}"),
+        InlineKeyboardButton(text="✕ Bekor", callback_data=f"meetingopen:{mid}"),
+    ]])
+
+
 @router.callback_query(F.data.startswith("reschedule:"))
 async def cb_reschedule(query: CallbackQuery) -> None:
     """Show the time-preset picker for a meeting."""
@@ -12073,6 +12106,13 @@ async def cb_resched_preset(query: CallbackQuery) -> None:
     if not new_start:
         await query.answer("Preset noma'lum", show_alert=True)
         return
+    _si, _ei = _resched_interval(meeting, new_start)
+    _conf = await database.find_meeting_conflicts(_si, _ei, exclude_id=mid)
+    if _conf:
+        await query.answer("⚠️ Vaqt band")
+        await _safe_answer(query.message, _conflict_warn_text(_conf), parse_mode="Markdown",
+                           reply_markup=_resched_force_kb(mid, new_start))
+        return
     updated = await _apply_reschedule(mid, new_start)
     if not updated:
         await query.answer("Uchrashuv topilmadi", show_alert=True)
@@ -12085,6 +12125,35 @@ async def cb_resched_preset(query: CallbackQuery) -> None:
             parse_mode="Markdown",
             reply_markup=meeting_inline_actions(updated),
         )
+    except TelegramBadRequest:
+        await _safe_answer(query.message, _format_meeting_card(updated, show_date=True),
+                            parse_mode="Markdown", reply_markup=meeting_inline_actions(updated))
+
+
+@router.callback_query(F.data.startswith("rsforce:"))
+async def cb_resched_force(query: CallbackQuery) -> None:
+    """Apply a reschedule the principal CONFIRMED despite a time conflict
+    (rsforce:{mid}:{YYYYMMDDHHMM} — compact start, colon-free for the callback)."""
+    parts = query.data.split(":")
+    if len(parts) < 3:
+        await query.answer()
+        return
+    mid, compact = parts[1], parts[2]
+    try:
+        new_start = database.TZ.localize(datetime.strptime(compact, "%Y%m%d%H%M"))
+    except (ValueError, TypeError):
+        await query.answer("Vaqt xato", show_alert=True)
+        return
+    updated = await _apply_reschedule(mid, new_start)
+    if not updated:
+        await query.answer("Uchrashuv topilmadi", show_alert=True)
+        return
+    label = _meeting_time_label(updated.get("datetime_start") or "", with_past_marker=False)
+    await query.answer(f"⚠️ {label} ga ko'chirildi (band edi)")
+    try:
+        await query.message.edit_text(
+            _format_meeting_card(updated, show_date=True),
+            parse_mode="Markdown", reply_markup=meeting_inline_actions(updated))
     except TelegramBadRequest:
         await _safe_answer(query.message, _format_meeting_card(updated, show_date=True),
                             parse_mode="Markdown", reply_markup=meeting_inline_actions(updated))
@@ -12160,6 +12229,14 @@ async def handle_resched_manual(message: Message, state: FSMContext, bot: Bot) -
             reply_markup=single_back_keyboard(f"meetingopen:{mid}", text="✕ Bekor"),
         )
         return
+    _m_for_conf = await database.get_meeting(mid)
+    if _m_for_conf:
+        _si, _ei = _resched_interval(_m_for_conf, new_start)
+        _conf = await database.find_meeting_conflicts(_si, _ei, exclude_id=mid)
+        if _conf:
+            await _safe_answer(message, _conflict_warn_text(_conf), parse_mode="Markdown",
+                               reply_markup=_resched_force_kb(mid, new_start))
+            return
     updated = await _apply_reschedule(mid, new_start)
     if not updated:
         await message.answer("Uchrashuv topilmadi.")
@@ -12374,11 +12451,37 @@ async def cb_meeting_duration(query: CallbackQuery) -> None:
         await query.answer("Vaqt formatida xato", show_alert=True)
         return
     new_end = start + timedelta(minutes=minutes)
+    # Davomiylikni uzaytirsa keyingi uchrashuvga kirib ketishi mumkin — tekshiramiz.
+    _conf = await database.find_meeting_conflicts(
+        meeting["datetime_start"], new_end.isoformat(), exclude_id=mid)
+    if _conf:
+        await query.answer("⚠️ Vaqt band")
+        _kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⚠️ Baribir saqla", callback_data=f"mdurf:{mid}:{minutes}"),
+            InlineKeyboardButton(text="✕ Bekor", callback_data=f"meetingopen:{mid}"),
+        ]])
+        await _safe_answer(query.message, _conflict_warn_text(_conf, verb="o'zgartirilsinmi"),
+                           parse_mode="Markdown", reply_markup=_kb)
+        return
+    await query.answer(f"✅ Davomiylik {minutes} daq ga o'zgartirildi")
+    await _apply_meeting_duration(query, mid, minutes)
+
+
+async def _apply_meeting_duration(query: CallbackQuery, mid: str, minutes: int) -> None:
+    """Persist new end = start + minutes; iCloud re-sync; re-render card.
+    Shared by cb_meeting_duration (after the conflict check) and the force path."""
+    meeting = await database.get_meeting(mid)
+    if not meeting:
+        return
+    try:
+        start = datetime.fromisoformat(meeting["datetime_start"])
+    except (ValueError, TypeError):
+        return
+    new_end = start + timedelta(minutes=minutes)
     await database.update_meeting(mid, {"datetime_end": new_end.isoformat()})
     if config.ICLOUD_ENABLED:
         _spawn_background(_resync_meeting_to_icloud(mid), name=f"icloud_resync:{mid}")
     updated = await database.get_meeting(mid)
-    await query.answer(f"✅ Davomiylik {minutes} daq ga o'zgartirildi")
     if updated:
         try:
             await query.message.edit_text(_format_meeting_card(updated, show_date=True),
@@ -12387,6 +12490,23 @@ async def cb_meeting_duration(query: CallbackQuery) -> None:
         except TelegramBadRequest:
             await _safe_answer(query.message, _format_meeting_card(updated, show_date=True),
                                 parse_mode="Markdown", reply_markup=meeting_inline_actions(updated))
+
+
+@router.callback_query(F.data.startswith("mdurf:"))
+async def cb_meeting_duration_force(query: CallbackQuery) -> None:
+    """Apply a duration change the principal CONFIRMED despite a time conflict."""
+    parts = query.data.split(":")
+    if len(parts) < 3:
+        await query.answer()
+        return
+    mid = parts[1]
+    try:
+        minutes = int(parts[2])
+    except ValueError:
+        await query.answer("Davomiylik xato", show_alert=True)
+        return
+    await query.answer(f"⚠️ {minutes} daq (band edi)")
+    await _apply_meeting_duration(query, mid, minutes)
 
 
 def _build_protocol_directive(meeting: dict, user_notes: str) -> str:
