@@ -3606,6 +3606,13 @@ UZ_MONTHS_FULL = ["yanvar", "fevral", "mart", "aprel", "may", "iyun",
                   "iyul", "avgust", "sentyabr", "oktyabr", "noyabr", "dekabr"]
 
 
+def _fmt_dt_uz(dt, sep: str = " ") -> str:
+    """Canonical absolute date+time with an UNAMBIGUOUS Uzbek month — '15-iyun 14:00'
+    (numeric '15-03' can be misread as a day in a banking context). Matches the
+    meeting/reminder chips so the same date renders the same across sections."""
+    return f"{dt.day}-{UZ_MONTHS_FULL[dt.month - 1]}{sep}{dt.strftime('%H:%M')}"
+
+
 async def _build_briefing_text() -> str:
     """Deterministic daily operating briefing."""
     now = datetime.now(database.TZ)
@@ -3981,7 +3988,7 @@ def _format_deadline_short(iso) -> tuple[str, bool]:
         return f"Bugun {time_str}" + (" · MUDDATI OʻTDI" if overdue else ""), overdue
     if tomorrow:
         return f"Ertaga {time_str}", overdue
-    label = dt.strftime("%d-%m, %H:%M")
+    label = _fmt_dt_uz(dt, sep=", ")
     if overdue:
         label += " · oʻtgan"
     return label, overdue
@@ -4462,7 +4469,7 @@ def _task_deadline_chip(task: dict) -> str:
         return f"Bugun {dt.strftime('%H:%M')}"
     if (now + timedelta(days=1)).date() == dt.date():
         return f"Ertaga {dt.strftime('%H:%M')}"
-    return dt.strftime("%d-%m %H:%M")
+    return _fmt_dt_uz(dt)
 
 
 def _format_tasks_compact(

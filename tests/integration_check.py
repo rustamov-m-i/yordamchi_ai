@@ -742,6 +742,16 @@ async def main():
     _muxsrc = _ins4.getsource(_vs4._transcribe_muxlisa)
     check("Muxlisa STT retry/backoff bor (max_attempts + transient)",
           "max_attempts" in _muxsrc and "transient_statuses" in _muxsrc and "asyncio.sleep" in _muxsrc)
+    # 4b sana formati: vazifa chiplari Uzbek oy (uchrashuv/eslatma bilan moslashadi)
+    from datetime import datetime as _dtu, timedelta as _tdu
+    _far = _dtu.now(database.TZ) + _tdu(days=5)
+    _mon = handlers.UZ_MONTHS_FULL[_far.month - 1]
+    check("sana: _task_deadline_chip Uzbek oy (numeric emas)",
+          _mon in handlers._task_deadline_chip({"deadline": _far.isoformat(), "status": "todo"}))
+    check("sana: _format_deadline_short Uzbek oy",
+          _mon in handlers._format_deadline_short(_far.isoformat())[0])
+    check("sana: _fmt_dt_uz kanonik format",
+          handlers._fmt_dt_uz(_far) == f"{_far.day}-{_mon} {_far.strftime('%H:%M')}")
 
     print("\n── Batch-1 tuzatishlar: recurrence / cascade / NULL-end / bulk-count ──")
     from datetime import datetime as _dt2, timedelta as _td2
