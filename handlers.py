@@ -5726,6 +5726,20 @@ def _si_data_path(name: str) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(config.DATABASE_PATH)), name)
 
 
+def _write_deploy_signal(payload: dict) -> None:
+    """Write the deploy_request signal ATOMICALLY (temp file + os.replace + fsync).
+    Two near-simultaneous writers (a proposal deploy and a manual /deploy) can no
+    longer interleave and silently lose a request — the deployer's .path unit sees a
+    complete file or nothing, never a half-written one."""
+    path = _si_data_path("deploy_request.json")
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def _format_diffstat(diff: str) -> str:
     """Compact +N/-N file summary from a unified diff (for the review card)."""
     if not diff or not diff.strip():
@@ -5849,8 +5863,7 @@ async def _si_run_deploy(bot: Bot, proposal: dict) -> None:
     await database.log_si_audit("merged", pid, url or "")
     # write the deploy signal the VM deployer's .path unit watches
     try:
-        with open(_si_data_path("deploy_request.json"), "w") as f:
-            json.dump({"target": None, "proposal_id": pid}, f)
+        _write_deploy_signal({"target": None, "proposal_id": pid})
         await database.log_si_audit("deploy_signal_written", pid)
     except Exception as e:
         logger.exception("writing deploy signal failed")
@@ -6131,8 +6144,7 @@ async def cb_manual_deploy(query: CallbackQuery) -> None:
         await query.answer(_SI_FROZEN_ALERT, show_alert=True)
         return
     try:
-        with open(_si_data_path("deploy_request.json"), "w") as f:
-            json.dump({"target": None, "proposal_id": "manual"}, f)
+        _write_deploy_signal({"target": None, "proposal_id": "manual"})
         await database.log_si_audit("manual_deploy_requested", "manual")
         ok, detail = True, ""
     except Exception as e:

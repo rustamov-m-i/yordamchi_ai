@@ -39,7 +39,8 @@ def check(name, cond, detail=""):
 def test_protected():
     print("\n[ A. protected-path guard (pure) ]")
     for p in (".env", "config.py", "redaction.py", "dev_agent.py", "deployer.py",
-              "deploy/yordamchi.service", ".github/workflows/test.yml"):
+              "deploy/yordamchi.service", ".github/workflows/test.yml",
+              "requirements.txt", "requirements-dev.txt"):
         check(f"protected: {p}", dev_agent.is_protected(p))
     for p in ("handlers.py", "database.py", "metrics.py", "system_prompts/20_task_capture.md",
               "tests/full_test.py"):

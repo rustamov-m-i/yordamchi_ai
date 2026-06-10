@@ -32,6 +32,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PROTECTED_PATHS = (
     ".env", ".env.example", "config.py", "redaction.py", "dev_agent.py",
     "deployer.py", "deploy/", ".github/",
+    # Dependency manifests: a self-improvement diff must never add packages on its
+    # own (supply-chain risk) — especially now the deployer auto-pip-installs them.
+    "requirements.txt", "requirements-dev.txt",
 )
 
 # The repo verifies via standalone scripts (its convention; the spec says "pytest",

@@ -47,15 +47,19 @@ class Fake:
                                only after `git reset --hard`).
       never_heal=True        → bot stays dead even after rollback (worst case).
       else                   → healthy deploy (heartbeat fresh from the start)."""
-    def __init__(self, heal_after_reset=False, never_heal=False, good="GOODSHA"):
+    def __init__(self, heal_after_reset=False, never_heal=False, good="GOODSHA",
+                 req_changed=False):
         self.cmds = []
         self.good = good
         self.heal_after_reset = heal_after_reset
         self.never_heal = never_heal
+        self.req_changed = req_changed
         self.fresh = not heal_after_reset and not never_heal
 
     def run(self, args):
         self.cmds.append(list(args))
+        if args[:3] == ["git", "diff", "--name-only"]:
+            return _R(stdout="handlers.py\nrequirements.txt\n" if self.req_changed else "handlers.py\n")
         if args[:3] == ["git", "reset", "--hard"] and self.heal_after_reset:
             self.fresh = True
         if args[:3] == ["git", "rev-parse", "HEAD"]:
@@ -88,6 +92,18 @@ def main():
     check("A: restart qilindi", ["systemctl", "restart", "yordamchi"] in f.cmds)
     check("A: ROLLBACK yo'q (reset --hard yo'q)",
           not any(c[:3] == ["git", "reset", "--hard"] for c in f.cmds))
+    check("A: requirements o'zgarmadi → pip install YO'Q",
+          not any(len(c) >= 3 and c[1] == "-m" and c[2] == "pip" for c in f.cmds))
+
+    print("\n[ A2. requirements.txt o'zgardi → venv pip install ]")
+    fr = Fake(req_changed=True)
+    res_r = _mk(fr).deploy()
+    check("A2: deploy sog'lom", res_r["status"] == "deployed")
+    check("A2: 'pip install -r requirements.txt' qilindi (restartdan oldin)",
+          any(c[1:3] == ["-m", "pip"] and "install" in c for c in fr.cmds), f"{fr.cmds}")
+    _pip_idx = next((i for i, c in enumerate(fr.cmds) if c[1:3] == ["-m", "pip"]), -1)
+    _restart_idx = next((i for i, c in enumerate(fr.cmds) if c == ["systemctl", "restart", "yordamchi"]), -1)
+    check("A2: pip restartdan OLDIN", 0 <= _pip_idx < _restart_idx)
 
     print("\n[ B. Buzuq deploy → AUTO-ROLLBACK (spec acceptance) ]")
     f = Fake(heal_after_reset=True)
@@ -112,11 +128,17 @@ def main():
 
     print("\n[ E. Scoped buyruqlar — faqat ruxsat etilgan git/systemctl ]")
     allowed = {("git", "rev-parse"), ("git", "pull"), ("git", "fetch"),
-               ("git", "checkout"), ("git", "reset"), ("systemctl", "restart"),
-               ("systemctl", "is-active")}
-    allcmds = f.cmds + f3.cmds
-    bad = [c for c in allcmds if (c[0], c[1] if len(c) > 1 else "") not in allowed]
-    check("E: ruxsatsiz buyruq yo'q", not bad, f"{bad}")
+               ("git", "checkout"), ("git", "reset"), ("git", "diff"),
+               ("systemctl", "restart"), ("systemctl", "is-active")}
+
+    def _scoped_ok(c):
+        if (c[0], c[1] if len(c) > 1 else "") in allowed:
+            return True
+        # venv pip install (deps) — scoped to the bot's own venv, no sudo
+        return len(c) >= 3 and c[1] == "-m" and c[2] == "pip"
+    allcmds = f.cmds + f3.cmds + fr.cmds
+    bad = [c for c in allcmds if not _scoped_ok(c)]
+    check("E: ruxsatsiz buyruq yo'q (git/systemctl/venv-pip)", not bad, f"{bad}")
 
     print("\n[ F. target deploy → checkout (pull emas) ]")
     ft = Fake()

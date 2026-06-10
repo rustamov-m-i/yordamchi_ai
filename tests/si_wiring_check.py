@@ -405,6 +405,20 @@ async def main():
     await handlers.cmd_unfreeze(FakeMsg("/unfreeze"))
     check("K: /unfreeze → si_frozen=False", not (await database.get_settings()).get("si_frozen", False))
 
+    print("\n[ L. Deploy signal ATOMIK yoziladi (temp + os.replace) ]")
+    import inspect as _insp_l
+    handlers._write_deploy_signal({"target": None, "proposal_id": "atomic-test"})
+    _sig = _signal_path()
+    check("L: signal fayl yozildi", os.path.exists(_sig))
+    check("L: kontent to'g'ri", json.load(open(_sig)).get("proposal_id") == "atomic-test")
+    check("L: .tmp qoldiq yo'q (atomik almashtirildi)", not os.path.exists(_sig + ".tmp"))
+    check("L: _write_deploy_signal os.replace ishlatadi (atomik)",
+          "os.replace" in _insp_l.getsource(handlers._write_deploy_signal))
+    try:
+        os.remove(_sig)
+    except OSError:
+        pass
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:

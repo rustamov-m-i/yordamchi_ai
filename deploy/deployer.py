@@ -12,7 +12,9 @@ All external commands go through an injectable `run`, and time via injectable
 `sleep`/`heartbeat_age`, so the rollback path is fully unit-tested without a real VM.
 
 SCOPE (spec §9 #5): the only commands issued are `git rev-parse/pull/fetch/checkout/
-reset` and `systemctl restart/is-active <service>`. Nothing broader.
+reset/diff` , `systemctl restart/is-active <service>`, and — ONLY when requirements.txt
+changed in the pull — `<venv>/bin/python -m pip install -r requirements.txt` (scoped to
+the bot's own venv, no sudo). Nothing broader.
 """
 import json
 import os
@@ -24,6 +26,9 @@ SERVICE = os.environ.get("YORDAMCHI_SERVICE", "yordamchi")
 HEARTBEAT_FILE = os.path.join(REPO, "data", ".heartbeat")
 SIGNAL_FILE = os.path.join(REPO, "data", "deploy_request.json")
 RESULT_FILE = os.path.join(REPO, "data", "deploy_result.json")
+# Bot's own venv interpreter + requirements — for the post-pull dependency install.
+VENV_PY = os.environ.get("YORDAMCHI_VENV_PY", os.path.join(REPO, "venv", "bin", "python"))
+REQUIREMENTS = os.path.join(REPO, "requirements.txt")
 
 HEALTH_TIMEOUT = 60       # total seconds to wait for a healthy bot
 POLL_INTERVAL = 2         # seconds between health polls
@@ -77,6 +82,15 @@ class Deployer:
         r = self.run(["systemctl", "is-active", self.service])
         return (getattr(r, "stdout", "") or "").strip() == "active"
 
+    def _requirements_changed(self, good: str) -> bool:
+        """True if requirements.txt differs between `good` and the new HEAD."""
+        r = self.run(["git", "diff", "--name-only", good, "HEAD"])
+        return "requirements.txt" in (getattr(r, "stdout", "") or "")
+
+    def _pip_install(self) -> tuple:
+        """Install deps into the bot's venv (no sudo — the venv is user-owned)."""
+        return self._checked([VENV_PY, "-m", "pip", "install", "-r", REQUIREMENTS])
+
     def healthy(self) -> bool:
         """Service active AND a fresh heartbeat, polled up to health_timeout.
         Attempt-bounded (not wall-clock) so it is deterministic under tests."""
@@ -111,6 +125,20 @@ class Deployer:
             if not ok:
                 return {"status": "failed", "good": good, "healthy": False, "error": out[-500:]}
 
+        # Install new deps ONLY when requirements.txt changed in this pull — else a
+        # new dependency (e.g. reportlab) is missing and the feature crashes at runtime.
+        # On pip failure, roll the code back and restore the old deps before restart.
+        deps_changed = self._requirements_changed(good)
+        if deps_changed:
+            ok, out = self._pip_install()
+            if not ok:
+                self.events.append(("rollback_start", good))
+                self.run(["git", "reset", "--hard", good])
+                self._pip_install()  # best-effort restore of the known-good deps
+                self._restart()
+                return {"status": "rolled_back", "good": good,
+                        "healthy": self.healthy(), "error": ("pip install: " + out)[-500:]}
+
         self._restart()
 
         if self.healthy():
@@ -120,6 +148,8 @@ class Deployer:
         # ── ROLLBACK — only ever back to the recorded good commit ──
         self.events.append(("rollback_start", good))
         self.run(["git", "reset", "--hard", good])
+        if deps_changed:
+            self._pip_install()  # restore the known-good deps alongside the code
         self._restart()
         alive = self.healthy()
         self.events.append(("rolled_back", good))
