@@ -83,7 +83,34 @@ async def main():
     finally:
         calendar_service.push_meeting = _orig
 
-    # 5) bot.py drains in-flight background tasks on shutdown (source-level)
+    # 5) dedup (3b): adopt uid onto a matching NULL-uid meeting (no duplicate import)
+    _t = "2026-06-13T09:00:00+05:00"
+    _exist = await database.create_meeting({"title": "Sync M", "datetime_start": _t})
+    check("dedup: NULL-uid + bir xil kontent → uid asrab olinadi",
+          calendar_service._adopt_uid_for_content("UID-ADOPT-1", "Sync M", _t) is True)
+    _em = await database.get_meeting(_exist)
+    check("dedup: mavjud meeting uid oldi (dublikat yo'q)",
+          bool(_em) and _em.get("icloud_uid") == "UID-ADOPT-1")
+    check("dedup: kontent mos kelmasa → False (import bo'ladi)",
+          calendar_service._adopt_uid_for_content("UID-X", "Boshqa nom", _t) is False)
+
+    # 6) import conflict (3b): _save_imported_meeting returns a description on overlap
+    await database.create_meeting({"title": "Band", "datetime_start": "2026-06-14T10:00:00+05:00",
+                                   "datetime_end": "2026-06-14T11:00:00+05:00"})
+    _conf = await calendar_service._save_imported_meeting(
+        "UID-IMP-1", "Tashqi", "2026-06-14T10:30:00+05:00", "2026-06-14T11:30:00+05:00", None, None)
+    check("import konflikt → tavsif qaytadi", isinstance(_conf, str) and "to'qnashadi" in _conf, str(_conf))
+    _noconf = await calendar_service._save_imported_meeting(
+        "UID-IMP-2", "Bo'sh", "2026-06-20T15:00:00+05:00", "2026-06-20T16:00:00+05:00", None, None)
+    check("import bo'sh slot → None", _noconf is None, str(_noconf))
+
+    import inspect as _insp_i
+    import scheduler as _sched
+    _sync_src = _insp_i.getsource(_sched.YordamchiScheduler._icloud_sync)
+    check("_icloud_sync tuple ochadi + konfliktда xabar beradi",
+          "imported, conflicts" in _sync_src and "to'qnashuv" in _sync_src)
+
+    # 7) bot.py drains in-flight background tasks on shutdown (source-level)
     bsrc = (ROOT / "bot.py").read_text(encoding="utf-8")
     check("bot.py shutdown background ishlarni drain qiladi (grace)",
           "_background_tasks" in bsrc and "wait_for" in bsrc)

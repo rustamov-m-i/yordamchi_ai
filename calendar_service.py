@@ -301,23 +301,24 @@ def delete_meeting(meeting_id: str) -> bool:
 # ─────────────────────── PULL ───────────────────────
 
 
-async def sync_events_to_db() -> int:
+async def sync_events_to_db() -> tuple:
     """Pull next 30 days of iCloud events into the meetings table.
 
-    De-dup strategy: events created by the bot have UID `yordamchi-<meeting_id>@...` and
-    are skipped (already in DB). Events created externally are inserted with `source="icloud"`
-    so we know they came from outside.
+    De-dup: bot-created events (UID `yordamchi-…`) are skipped; an externally-created
+    event matching a NULL-uid local meeting by title+start adopts the uid (no dup);
+    otherwise it's imported with source="icloud".
 
-    Returns: number of new meetings imported.
+    Returns: (imported_count, conflict_descriptions) — conflicts are imported events
+    that overlap an existing meeting (surfaced to the principal by the scheduler).
     """
     if not config.ICLOUD_ENABLED:
-        return 0
+        return 0, []
 
     import asyncio
     return await asyncio.to_thread(_sync_events_to_db_sync)
 
 
-def _sync_events_to_db_sync() -> int:
+def _sync_events_to_db_sync() -> tuple:
     client = _connect()
     if not client:
         return 0
@@ -345,6 +346,7 @@ def _sync_events_to_db_sync() -> int:
         return 0
 
     imported = 0
+    conflicts: list = []
     for ev in events:
         try:
             ical = Calendar.from_ical(ev.data)
@@ -378,18 +380,25 @@ def _sync_events_to_db_sync() -> int:
                 # Idempotent: if a meeting with same icloud_uid exists, skip.
                 if _meeting_with_icloud_uid_exists(uid):
                     continue
+                # Dedup: adopt this uid onto a matching NULL-uid local meeting
+                # (pre-migration / pushed-without-uid) instead of importing a duplicate.
+                if _adopt_uid_for_content(uid, title, start_iso):
+                    continue
 
                 # Use synchronous DB write — caldav is sync, we're in a thread.
                 import asyncio
-                asyncio.run(_save_imported_meeting(uid, title, start_iso, end_iso, location, description))
+                _conf = asyncio.run(_save_imported_meeting(
+                    uid, title, start_iso, end_iso, location, description))
                 imported += 1
+                if _conf:
+                    conflicts.append(_conf)
         except Exception:
             logger.exception("Failed to parse iCloud event")
             continue
 
     if imported:
         logger.info("Imported %d new meetings from iCloud", imported)
-    return imported
+    return imported, conflicts
 
 
 def _meeting_with_icloud_uid_exists(uid: str) -> bool:
@@ -406,10 +415,44 @@ def _meeting_with_icloud_uid_exists(uid: str) -> bool:
         con.close()
 
 
+def _adopt_uid_for_content(uid: str, title: str, start_iso: str) -> bool:
+    """If a NULL-uid meeting with the SAME title + start (±2 min) already exists —
+    a pre-migration row, or one pushed before its uid was saved — adopt this uid
+    onto it instead of importing a DUPLICATE. Returns True if adopted."""
+    import sqlite3
+    con = sqlite3.connect(config.DATABASE_PATH)
+    try:
+        con.row_factory = sqlite3.Row
+        try:
+            s = datetime.fromisoformat(start_iso)
+        except (ValueError, TypeError):
+            return False
+        lo = (s - timedelta(minutes=2)).isoformat()
+        hi = (s + timedelta(minutes=2)).isoformat()
+        cur = con.execute(
+            "SELECT id FROM meetings WHERE (icloud_uid IS NULL OR icloud_uid = '') "
+            "AND LOWER(TRIM(title)) = LOWER(TRIM(?)) "
+            "AND datetime_start BETWEEN ? AND ? AND completed_at IS NULL LIMIT 1",
+            (title, lo, hi))
+        row = cur.fetchone()
+        if not row:
+            return False
+        con.execute("UPDATE meetings SET icloud_uid = ? WHERE id = ?", (uid, row["id"]))
+        con.commit()
+        logger.info("iCloud uid adopted onto existing meeting %s (no duplicate import)", row["id"])
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        con.close()
+
+
 async def _save_imported_meeting(uid: str, title: str, start_iso: str,
                                   end_iso: Optional[str], location: Optional[str],
-                                  description: Optional[str]) -> None:
-    """Insert a meeting imported from iCloud, tagged with the source UID."""
+                                  description: Optional[str]) -> Optional[str]:
+    """Insert a meeting imported from iCloud, tagged with the source UID. Returns a
+    short conflict description when the imported event overlaps an existing meeting
+    (the caller surfaces it to the principal), else None."""
     mid = await database.create_meeting({
         "title": title,
         "datetime_start": start_iso,
@@ -424,12 +467,14 @@ async def _save_imported_meeting(uid: str, title: str, start_iso: str,
         await db.execute("UPDATE meetings SET icloud_uid = ? WHERE id = ?", (uid, mid))
         await db.commit()
     # iCloud events are EXTERNAL truth — we don't block them, but flag a busy-slot
-    # landing for diagnostics. (A user-facing import-conflict notification needs
-    # sync→bot plumbing — tracked as a follow-up.)
+    # landing so the principal is told (return → scheduler notifies via Telegram).
     try:
         clash = await database.find_meeting_conflicts(start_iso, end_iso, exclude_id=mid)
         if clash:
-            logger.warning("iCloud import %r (%s) %d ta mavjud uchrashuv bilan to'qnashadi",
+            other = (clash[0].get("title") or "—").strip()
+            logger.warning("iCloud import %r (%s) %d ta uchrashuv bilan to'qnashadi",
                            title, start_iso, len(clash))
+            return f"«{title}» — «{other}» bilan to'qnashadi"
     except Exception:
         pass
+    return None

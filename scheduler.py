@@ -733,11 +733,17 @@ class YordamchiScheduler:
             logger.exception("Retention purge sweep failed")
 
     async def _icloud_sync(self) -> None:
-        """Pull next-30-days events from iCloud into local DB."""
+        """Pull next-30-days events from iCloud into local DB; warn on conflicts."""
         try:
-            imported = await calendar_service.sync_events_to_db()
+            imported, conflicts = await calendar_service.sync_events_to_db()
             if imported:
                 logger.info("iCloud sync: %d new meetings imported", imported)
+            if conflicts:
+                lines = "\n".join(f"• {c}" for c in conflicts[:5])
+                await self._send(
+                    "⚠️ **iCloud import — vaqt to'qnashuvi:**\n" + lines +
+                    "\n\nTashqi kalendardan kelgan uchrashuv mavjud uchrashuv bilan "
+                    "ustma-ust tushdi — ko'rib chiqing.")
         except Exception:
             logger.exception("iCloud sync failed (non-fatal)")
 
