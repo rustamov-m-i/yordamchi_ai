@@ -380,51 +380,16 @@ async def main():
           and handlers._resolve_target_date("ertaga", _now) == datetime(2026, 6, 7).date())
     check("free-slot: show_free_slots dispatch ro'yxatda", "show_free_slots" in handlers._SHOW_ACTION_TYPES)
 
-    print("\n── Bayonnoma Word dizayni (variant-2: rang-kodli, jadval) ──")
-    import io as _io
-    from docx import Document as _Docx
-    _proto = (
-        "📝 **UCHRASHUV BAYONNOMASI**\n━━━━━\n"
-        "📅 **Sana va vaqt** — 2026-yil 6-iyun\n"
-        "👥 **Ishtirokchilar** — A.Karimov, B.Soliyev\n\n"
-        "📋 **KUN TARTIBI**\nBirinchi mavzu.\nIkkinchi mavzu.\n\n"
-        "**1.  Birinchi mavzu**\n"
-        "ESHITILDI   Masala muhokama qilindi.\n"
-        "QAROR   Tasdiqlansin.\n"
-        "TOPSHIRIQ   A.Karimov — hisobot tayyorlansin.\n\n"
-        "Izoh: 1 ta topshiriq qo'shildi."
-    )
-    _tasks = [{"assignee": "A.Karimov", "title": "hisobot tayyorlansin.", "deadline": None}]
-    _dx = _Docx(_io.BytesIO(handlers._build_protocol_docx_bytes("T", _proto, tasks=_tasks)))
-
-    def _col(r):
-        try:
-            return str(r.font.color.rgb) if (r.font.color and r.font.color.rgb is not None) else None
-        except Exception:
-            return None
-    _by_kw = {}
-    for p in _dx.paragraphs:
-        if p.runs:
-            _by_kw[p.text.split()[0] if p.text.strip() else ""] = (p.runs[0], p.text)
-    check("proto: Arial 13pt Normal", _dx.styles["Normal"].font.name == "Arial" and _dx.styles["Normal"].font.size.pt == 13)
-    check("proto: dekorativ sarlavha tashlandi (UCHRASHUV BAYONNOMASI yo'q)",
-          not any("UCHRASHUV BAYONNOMASI" in p.text.upper() for p in _dx.paragraphs))
-    check("proto: ESHITILDI o'rta yashil (1A8B4D)", "ESHITILDI" in _by_kw and _col(_by_kw["ESHITILDI"][0]) == "1A8B4D")
-    check("proto: QAROR to'q yashil (0B6B36)", "QAROR" in _by_kw and _col(_by_kw["QAROR"][0]) == "0B6B36")
-    check("proto: TOPSHIRIQ oltin (B8860B)", "TOPSHIRIQ" in _by_kw and _col(_by_kw["TOPSHIRIQ"][0]) == "B8860B")
-    _izoh = next((p for p in _dx.paragraphs if p.text.lower().startswith("izoh")), None)
-    check("proto: Izoh qizil bold-italic (EE0000)",
-          _izoh is not None and _izoh.runs and _col(_izoh.runs[0]) == "EE0000"
-          and _izoh.runs[0].bold and _izoh.runs[0].italic)
-    _meta = next((p for p in _dx.paragraphs if p.text.startswith("Sana va vaqt")), None)
-    check("proto: metadata yorlig'i yashil + tab", _meta is not None and "\t" in _meta.text and _col(_meta.runs[0]) == "0B6B36")
-    check("proto: keyword content qora (rangsiz)", "QAROR" in _by_kw and len(_by_kw["QAROR"][0].text) and
-          any(_col(r) is None for r in next(p for p in _dx.paragraphs if p.text.startswith("QAROR")).runs))
-    check("proto: topshiriqlar jadvali (4 ustun, 1 satr)",
-          len(_dx.tables) == 1 and len(_dx.tables[0].columns) == 4 and len(_dx.tables[0].rows) == 2)
-    check("proto: jadval sarlavhasi № Mas'ul Topshiriq Muddat",
-          [c.text for c in _dx.tables[0].rows[0].cells] == ["№", "Mas'ul", "Topshiriq", "Muddat"])
-    check("proto: Muddat null → 'Aniqlashtirilsin'", _dx.tables[0].rows[1].cells[3].text == "Aniqlashtirilsin")
+    print("\n── Bayonnoma: Agrobank shabloniga ko'chirildi (eski builder olib tashlandi) ──")
+    import protocol_doc as _pdoc
+    import inspect as _insp
+    check("eski _build_protocol_docx_bytes olib tashlandi (o'lik kod yo'q)",
+          not hasattr(handlers, "_build_protocol_docx_bytes"))
+    check("protocol_doc: build_docx/build_pdf/build_fields mavjud",
+          all(hasattr(_pdoc, fn) for fn in ("build_docx", "build_pdf", "build_fields")))
+    check("cb_protocol_export protocol_doc ishlatadi (yangi Agrobank dizayni)",
+          "protocol_doc" in _insp.getsource(handlers.cb_protocol_export))
+    # Yangi dizaynning o'zi (ko'k/zebra, ustun tartibi, Lotin/Kiril) protocol_doc_check.py da.
 
     print("\n── Ikonka nomuvofiqligi tuzatildi (bo'lim ikonkalari noyob) ──")
     import pathlib as _pl
