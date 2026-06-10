@@ -574,6 +574,11 @@ class YordamchiScheduler:
             return
         try:
             import diagnosis
+            import handlers  # local import — avoids the handlers↔scheduler import cycle
+            # Daily cost circuit-breaker: pause if today's SI-op cap is reached.
+            if await handlers._si_budget_exceeded(self._send, "diagnose_started"):
+                logger.info("self_diagnose skipped — daily SI op cap reached")
+                return
             ids = await diagnosis.run_and_store(days=7)
             logger.info("self_diagnose: %d proposal(s) created", len(ids))
         except Exception:

@@ -441,6 +441,34 @@ async def main():
           "_si_spawn(_si_run_implementation" in _hsrc and "_si_spawn(_si_run_deploy" in _hsrc
           and "asyncio.create_task(_si_run_" not in _hsrc)
 
+    print("\n[ N. SI kunlik xarajat cheklovi / circuit-breaker (2c) ]")
+    import config as _cfg_n
+    import inspect as _insp_n
+    _since0 = "1970-01-01T00:00:00+05:00"
+    _before = await database.si_daily_op_count(_since0)
+    await database.log_si_audit("implement_started", "n-pid")
+    check("N: si_daily_op_count implement_started'ni sanaydi",
+          await database.si_daily_op_count(_since0) == _before + 1)
+    _notified = []
+
+    async def _fake_notify(t):
+        _notified.append(t)
+    _orig_cap = _cfg_n.SI_DAILY_OP_CAP
+    try:
+        _cfg_n.SI_DAILY_OP_CAP = 0
+        _over = await handlers._si_budget_exceeded(_fake_notify, "implement_started")
+        check("N: limit=0 → budget exceeded (True) + xabar berildi",
+              _over is True and len(_notified) == 1)
+        _cfg_n.SI_DAILY_OP_CAP = 100000
+        _ok = await handlers._si_budget_exceeded(_fake_notify, "implement_started")
+        check("N: limit yuqori → davom etadi (False)", _ok is False)
+    finally:
+        _cfg_n.SI_DAILY_OP_CAP = _orig_cap
+    check("N: _self_diagnose budget gate ishlatadi",
+          "_si_budget_exceeded" in _insp_n.getsource(scheduler_module.YordamchiScheduler._self_diagnose))
+    check("N: _si_run_implementation budget gate ishlatadi",
+          "_si_budget_exceeded" in _insp_n.getsource(handlers._si_run_implementation))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:

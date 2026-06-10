@@ -79,6 +79,10 @@ ERROR_NOTIFY_USER_ID: int = _int("ERROR_NOTIFY_USER_ID", required=False, default
 # deployment if your jurisdiction requires longer/shorter windows.
 CONVERSATION_TTL_DAYS: int = _int("CONVERSATION_TTL_DAYS", required=False, default=365)
 LLM_AUDIT_TTL_DAYS: int = _int("LLM_AUDIT_TTL_DAYS", required=False, default=365)
+# Self-improvement circuit-breaker: max SI LLM operations (nightly diagnosis +
+# implementation runs) per calendar day. Beyond this the autonomous loop pauses and
+# notifies the principal — a hard ceiling so a runaway loop can't burn unbounded spend.
+SI_DAILY_OP_CAP: int = _int("SI_DAILY_OP_CAP", required=False, default=10)
 
 # iCloud Calendar integration (optional)
 APPLE_ID: str = os.getenv("APPLE_ID", "").strip()

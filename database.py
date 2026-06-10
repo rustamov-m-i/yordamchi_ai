@@ -2866,6 +2866,20 @@ async def log_si_audit(action: str, proposal_id: "str | None" = None,
         await db.commit()
 
 
+async def si_daily_op_count(since_iso: str,
+                            actions: tuple = ("implement_started", "diagnose_started")) -> int:
+    """Count self_improvement_audit rows for LLM-spending SI ops since `since_iso`
+    — the daily circuit-breaker counter (caps runaway diagnosis/implementation)."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        placeholders = ",".join("?" * len(actions))
+        cur = await db.execute(
+            f"SELECT COUNT(*) FROM self_improvement_audit "
+            f"WHERE action IN ({placeholders}) AND ts >= ?",
+            (*actions, since_iso))
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+
 async def list_si_audit(limit: int = 50, proposal_id: "str | None" = None) -> list[dict]:
     q = "SELECT * FROM self_improvement_audit"
     params: list = []

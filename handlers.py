@@ -5802,6 +5802,30 @@ async def _si_frozen_abort(bot: Bot, pid: str, stage: str) -> bool:
     return False
 
 
+async def _si_budget_exceeded(notify, op: str) -> bool:
+    """Daily SI cost circuit-breaker. Returns True (and notifies via `notify(text)`)
+    when today's SI-op count has reached config.SI_DAILY_OP_CAP — so the autonomous
+    loop PAUSES instead of burning unbounded LLM spend. Otherwise records this op's
+    start (counting it toward the cap) and returns False. Never blocks on a DB error."""
+    since = datetime.now(database.TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0).isoformat()
+    try:
+        n = await database.si_daily_op_count(since)
+    except Exception:
+        return False  # never block the loop on a counting failure
+    if n >= config.SI_DAILY_OP_CAP:
+        await database.log_si_audit("budget_exceeded", None, f"{n}/{config.SI_DAILY_OP_CAP} ({op})")
+        try:
+            await notify(f"💸 **SI kunlik limiti** — bugun {config.SI_DAILY_OP_CAP} ta "
+                         "o'z-o'zini yaxshilash amali bajarildi. Avtonom halqa to'xtatildi "
+                         "(nazoratsiz xarajat oldini olish). Ertaga tiklanadi.")
+        except Exception:
+            pass
+        return True
+    await database.log_si_audit(op, None)
+    return False
+
+
 async def _si_run_implementation(bot: Bot, proposal: dict) -> None:
     """Gate-2 background worker: turn an APPROVED proposal into a reviewed diff in an
     isolated worktree. NEVER deploys. dev_agent.prepare enforces protected paths +
@@ -5809,6 +5833,8 @@ async def _si_run_implementation(bot: Bot, proposal: dict) -> None:
     import dev_agent
     pid = proposal.get("id", "?")
     if await _si_frozen_abort(bot, pid, "implement"):
+        return
+    if await _si_budget_exceeded(lambda t: _si_notify(bot, t), "implement_started"):
         return
     try:
         res = await dev_agent.prepare(proposal)
