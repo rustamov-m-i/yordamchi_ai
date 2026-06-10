@@ -730,6 +730,46 @@ async def main():
     check("Ovoz: '_process_and_reply(message, message.text' qolmadi (ovoz Claude'ga)",
           "_process_and_reply(message, message.text" not in _src)
 
+    print("\n── Batch-1 tuzatishlar: recurrence / cascade / NULL-end / bulk-count ──")
+    from datetime import datetime as _dt2, timedelta as _td2
+    _now2 = _dt2.now(database.TZ)
+    # 1) recurrence: uzoq o'tmishdagi base → KELAJAK sana (o'tmish emas)
+    _nxt = database.compute_next_recurrence((_now2 - _td2(days=400)).isoformat(), "daily")
+    check("recurrence: uzoq o'tmish daily → kelajak (o'tmish emas)",
+          _nxt is not None and _dt2.fromisoformat(_nxt) > _now2, str(_nxt))
+    _nxt_w = database.compute_next_recurrence((_now2 - _td2(days=400)).isoformat(), "weekly")
+    check("recurrence: weekly ham kelajak", bool(_nxt_w) and _dt2.fromisoformat(_nxt_w) > _now2)
+    # 2) delete_task → bog'liq eslatma cascade (orphan yo'q)
+    _ctid = await database.create_task({"title": "Cascade T", "priority": "P2", "status": "todo"})
+    _crid = await database.create_reminder({"title": "T eslatma",
+        "remind_at": (_now2 + _td2(hours=2)).isoformat(), "task_id": _ctid})
+    await database.delete_task(_ctid)
+    check("delete_task → bog'liq eslatma o'chadi", await database.get_reminder(_crid) is None)
+    # 3) cancel_meeting → bog'liq eslatma cascade
+    _cmid = await database.create_meeting({"title": "Cascade M",
+        "datetime_start": (_now2 + _td2(days=1)).isoformat()})
+    _cmrid = await database.create_reminder({"title": "M eslatma",
+        "remind_at": (_now2 + _td2(days=1)).isoformat(), "meeting_id": _cmid})
+    await database.cancel_meeting(_cmid)
+    check("cancel_meeting → bog'liq eslatma o'chadi", await database.get_reminder(_cmrid) is None)
+    # 4) create_meeting: end yo'q → start+60daq materializatsiya
+    _neid = await database.create_meeting({"title": "NoEnd",
+        "datetime_start": (_now2 + _td2(days=2)).replace(microsecond=0).isoformat()})
+    _nem = await database.get_meeting(_neid)
+    check("create_meeting: end yo'q → start+60daq",
+          bool(_nem.get("datetime_end")) and
+          _dt2.fromisoformat(_nem["datetime_end"]) - _dt2.fromisoformat(_nem["datetime_start"]) == _td2(minutes=60))
+    # 5) bulk-delete preview: filtrlangan son (jami emas)
+    for _i in range(3):
+        await database.create_task({"title": f"BActive {_i}", "priority": "P2", "status": "todo"})
+    _bd1 = await database.create_task({"title": "BDone1", "priority": "P2", "status": "todo"})
+    await database.complete_task(_bd1)
+    _done_n = len(await database.list_tasks(status_in=["done"], limit=100000))
+    _total_n = await database.count_table("tasks")
+    _bprev = await handlers._format_create_preview([{"type": "delete_all_tasks", "data": {"status_in": ["done"]}}])
+    check("bulk-delete preview: filtrlangan 'done' soni (jami emas)",
+          f"{_done_n} ta" in _bprev and _done_n < _total_n, f"done={_done_n} total={_total_n}")
+
     print("\n" + "=" * 48)
     print(f"NATIJA:  ✅ {PASS} o'tdi   ❌ {FAIL} yiqildi")
     if FAILED:

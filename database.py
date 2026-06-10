@@ -565,7 +565,10 @@ def compute_next_recurrence(base_iso: Optional[str], recurrence_rule: Optional[s
     current = _coerce_dt(base_iso)
     now = datetime.now(TZ)
 
-    for _ in range(36):
+    # Step forward until strictly after `now`. Cap is a safety backstop against a
+    # pathological/long-dormant base (1000 daily steps ≈ 2.7 yil) — high enough that
+    # normal use always lands a future date inside the loop.
+    for _ in range(1000):
         if rule == "daily":
             current += timedelta(days=1)
         elif rule == "weekdays":
@@ -585,7 +588,10 @@ def compute_next_recurrence(base_iso: Optional[str], recurrence_rule: Optional[s
             return None
         if current > now:
             return current.isoformat()
-    return current.isoformat()
+    # Loop exhausted without reaching a future date (degenerate/very dormant base):
+    # return None rather than a stale PAST date — the caller then skips the next
+    # instance instead of creating an already-overdue one.
+    return None
 
 
 async def create_next_recurring_task(completed_task: dict) -> Optional[str]:
@@ -627,6 +633,9 @@ async def delete_task(task_id: str, source: str = "manual") -> bool:
         title = row["title"] if row else None
         cur = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount > 0:
+            # Cascade — there is no FK ON DELETE, so drop linked reminders here to
+            # avoid orphans that would otherwise fire / clutter FTS forever.
+            await db.execute("DELETE FROM reminders WHERE task_id = ?", (task_id,))
             await _log_history(db, task_id, "delete", field=None,
                                 old_value=title, source=source)
         await db.commit()
@@ -1822,6 +1831,15 @@ async def find_meeting_conflicts(start_iso: Optional[str],
 
 async def create_meeting(data: dict) -> str:
     meeting_id = new_id("m-")
+    # Materialize a default end (start + 60 min) when absent — so free-slot and
+    # conflict checks read a real interval instead of an in-code 60-min fallback
+    # that they could diverge from (a longer meeting silently shown as 60 min).
+    _start = data.get("datetime_start")
+    _end = data.get("datetime_end")
+    if _start and not _end:
+        _sd = parse_iso_dt(_start)
+        if _sd:
+            _end = (_sd + timedelta(minutes=60)).isoformat()
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO meetings (id, title, datetime_start, datetime_end, participants,
@@ -1830,8 +1848,8 @@ async def create_meeting(data: dict) -> str:
             (
                 meeting_id,
                 data.get("title", "Uchrashuv"),
-                data.get("datetime_start"),
-                data.get("datetime_end"),
+                _start,
+                _end,
                 json.dumps(data.get("participants", []), ensure_ascii=False),
                 data.get("location_or_link"),
                 _agenda_to_text(data.get("agenda")),
@@ -1875,6 +1893,10 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
 async def cancel_meeting(meeting_id: str) -> bool:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         cur = await db.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
+        if cur.rowcount > 0:
+            # Cascade — no FK ON DELETE; drop linked reminders so none fire for a
+            # meeting that no longer exists.
+            await db.execute("DELETE FROM reminders WHERE meeting_id = ?", (meeting_id,))
         await db.commit()
         return cur.rowcount > 0
 

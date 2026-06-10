@@ -2057,13 +2057,17 @@ async def _format_create_preview(actions: list[dict], original_input: str | None
             continue
         if t in _BULK_DELETE_ACTION_TYPES:
             noun, table = _BULK_DELETE_LABEL[t]
+            scope = ""
             try:
-                n = await database.count_table(table)
+                if t == "delete_all_tasks" and d.get("status_in"):
+                    # Count ONLY the filtered rows — must match what the deletion
+                    # removes. Was misleading: showed the TOTAL while deleting a subset.
+                    n = len(await database.list_tasks(status_in=d["status_in"], limit=100000))
+                    scope = f" ({', '.join(d['status_in'])})"
+                else:
+                    n = await database.count_table(table)
             except Exception:
                 n = 0
-            scope = ""
-            if t == "delete_all_tasks" and d.get("status_in"):
-                scope = f" ({', '.join(d['status_in'])})"
             lines.append(f"🗑 **Barcha {noun}lar o'chiriladi{scope}** — {n} ta")
             lines.append("   _Bu amalni qaytarib bo'lmaydi._")
             lines.append("")
