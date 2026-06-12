@@ -2880,20 +2880,34 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
     return out
 
 
-def _apply_title_dedup(actions: list, by_title: dict) -> int:
-    """Convert each create_task whose (normalized) title matches an existing ACTIVE
-    task into an update_task — so importing identical tasks never duplicates them.
-    Mutates `actions` in place; returns how many were converted to updates."""
-    n = 0
+def _apply_title_dedup(actions: list, by_title: dict) -> dict:
+    """Dedup imported create_tasks by normalized title — two ways:
+      • title matches an EXISTING active task → convert to update_task (no duplicate);
+      • title repeated WITHIN this batch (same file) → keep the first, DROP the rest.
+    The second case is the one that previously slipped through: identical new-title
+    rows in one import each became a create → duplicates. Mutates `actions` in place
+    (drops intra-batch dupes via slice-assign). Returns {'converted', 'dropped'}."""
+    converted = 0
+    dropped = 0
+    seen_in_batch: set = set()
+    out: list = []
     for a in actions:
         if a.get("type") != "create_task":
+            out.append(a)
             continue
         key = ((a.get("data") or {}).get("title") or "").strip().lower()
+        if key and key in seen_in_batch:
+            dropped += 1
+            continue  # identical title already handled in this batch — drop the dup
         if key and key in by_title:
             a["type"] = "update_task"
             a["id"] = by_title[key]
-            n += 1
-    return n
+            converted += 1
+        if key:
+            seen_in_batch.add(key)
+        out.append(a)
+    actions[:] = out
+    return {"converted": converted, "dropped": dropped}
 
 
 def _table_to_text(table: list, max_rows: int = 120, max_chars: int = 6000) -> str:
@@ -3345,7 +3359,7 @@ async def _import_tasks_from_file_bytes(
         _k = (_t.get("title") or "").strip().lower()
         if _k:
             _by_title.setdefault(_k, _t["id"])
-    _apply_title_dedup(actions, _by_title)
+    _dedup = _apply_title_dedup(actions, _by_title)
 
     # ── Preview + confirm (reuse the standard acts_confirm pipeline) ──
     # No 20-per-message chat cap here: file imports are parsed deterministically, so
@@ -3360,6 +3374,8 @@ async def _import_tasks_from_file_bytes(
     n_upd = sum(1 for a in actions if a.get("type") == "update_task")
     n_new = len(actions) - n_upd
     done_msg = "📥 Import: " + f"{n_new} yangi" + (f", {n_upd} yangilangan" if n_upd else "") + " vazifa."
+    if _dedup.get("dropped"):
+        done_msg += f"\n♻️ {_dedup['dropped']} ta takror (bir xil sarlavha) tashlandi."
     await state.set_state(CreateActionConfirmFSM.awaiting)
     await state.update_data(
         pending_response={"actions": actions, "user_message": done_msg, "buttons": []},

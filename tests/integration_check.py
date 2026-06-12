@@ -352,8 +352,18 @@ async def main():
     _new = [{"type": "create_task", "data": {"title": "Dedup YANGI", "priority": "P0"}},
             {"type": "create_task", "data": {"title": "Mutlaqo yangi XYZ", "priority": "P2"}}]
     _conv = handlers._apply_title_dedup(_new, _bt)
-    check("Title dedup: mavjud sarlavha → update", _new[0]["type"] == "update_task" and _conv == 1)
+    check("Title dedup: mavjud sarlavha → update", _new[0]["type"] == "update_task" and _conv["converted"] == 1)
     check("Title dedup: yangi sarlavha → create", _new[1]["type"] == "create_task")
+    # intra-batch dedup: identical NEW titles in ONE import → keep first, drop rest
+    _batch = [{"type": "create_task", "data": {"title": "Takror ABC", "priority": "P1"}},
+              {"type": "create_task", "data": {"title": "takror abc", "priority": "P2"}},
+              {"type": "create_task", "data": {"title": "Takror ABC", "priority": "P0"}},
+              {"type": "create_task", "data": {"title": "Boshqa DEF", "priority": "P2"}}]
+    _d2 = handlers._apply_title_dedup(_batch, {})
+    check("Intra-batch dedup: 3 ta bir xil → 1 qoladi (2 tashlandi)",
+          _d2["dropped"] == 2 and len(_batch) == 2, f"{_d2} len={len(_batch)}")
+    check("Intra-batch dedup: birinchi + boshqasi qoladi",
+          _batch[0]["data"]["title"] == "Takror ABC" and _batch[1]["data"]["title"] == "Boshqa DEF")
 
     print("\n── _humanize_error (aniq sabab) ──")
     check("humanize: tarmoq", "ulanish" in handlers._humanize_error(Exception("Cannot connect [Network is unreachable]")).lower())
