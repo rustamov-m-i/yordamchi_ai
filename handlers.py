@@ -3007,7 +3007,8 @@ def _format_import_page(actions: list[dict], page: int) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _import_preview_keyboard(page: int, total_pages: int, switch_uid: str = "") -> InlineKeyboardMarkup:
+def _import_preview_keyboard(page: int, total_pages: int, switch_uid: str = "",
+                             allow_mirror: bool = False) -> InlineKeyboardMarkup:
     rows = []
     if total_pages > 1:
         nav = []
@@ -3017,7 +3018,10 @@ def _import_preview_keyboard(page: int, total_pages: int, switch_uid: str = "") 
         if page < total_pages - 1:
             nav.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"imppage:{page + 1}"))
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="✅ Hammasini import qilish", callback_data="acts_confirm")])
+    rows.append([InlineKeyboardButton(text="➕ Qo'shish va yangilash", callback_data="acts_confirm")])
+    if allow_mirror:  # full-mirror sync: bot tasks become EXACTLY the file (extras archived)
+        rows.append([InlineKeyboardButton(text="🔄 To'liq moslashtirish (fayl bo'yicha)",
+                                          callback_data="import_mirror")])
     if switch_uid:  # one-tap switch to analysis (when default guessed "import")
         rows.append([InlineKeyboardButton(text="📄 Tahlil qil", callback_data=f"docact:analyze:{switch_uid}")])
     rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="acts_cancel")])
@@ -3042,10 +3046,95 @@ async def cb_import_page(query: CallbackQuery, state: FSMContext) -> None:
     try:
         await query.message.edit_text(
             _format_import_page(actions, page), parse_mode="Markdown",
-            reply_markup=_import_preview_keyboard(page, total_pages, switch_uid),
+            reply_markup=_import_preview_keyboard(page, total_pages, switch_uid, allow_mirror=True),
         )
     except TelegramBadRequest:
         pass
+
+
+@router.callback_query(F.data == "import_mirror")
+async def cb_import_mirror(query: CallbackQuery, state: FSMContext) -> None:
+    """🔄 Full-mirror: make the bot's ACTIVE tasks EXACTLY match the imported file.
+    ACTIVE tasks the file omitted (their exported ID isn't in the file) are ARCHIVED
+    (status → cancelled — recoverable). Requires the hidden ID column; asks a 2nd confirm."""
+    data = await state.get_data()
+    response = data.get("pending_response")
+    if not response or not isinstance(response, dict):
+        await query.answer("Tasdiqlash vaqti o'tdi — faylni qayta yuboring.", show_alert=True)
+        return
+    if not data.get("_import_had_ids"):
+        await query.answer(
+            "Bu faylda yashirin ID ustuni yo'q — to'liq moslashtirish uchun BOT "
+            "eksportini (📤) tahrirlab yuboring. Hozir '➕ Qo'shish/yangilash' ishlaydi.",
+            show_alert=True)
+        return
+    actions = list(response.get("actions") or [])
+    referenced = {a["id"] for a in actions if a.get("type") == "update_task" and a.get("id")}
+    active = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000)
+    to_archive = [t for t in active if t["id"] not in referenced]
+    n_new = sum(1 for a in actions if a.get("type") == "create_task")
+    n_upd = sum(1 for a in actions if a.get("type") == "update_task")
+    if not to_archive:
+        await query.answer("Fayl bilan bir xil — arxivlanadigan yo'q. '➕' bilan davom eting.",
+                           show_alert=True)
+        return
+    combined = actions + [{"type": "update_task", "id": t["id"], "data": {"status": "cancelled"}}
+                          for t in to_archive]
+    await state.update_data(pending_response={
+        "actions": combined,
+        "user_message": (f"📥 Moslashtirildi: {n_new} yangi · {n_upd} yangilangan · "
+                         f"{len(to_archive)} arxivlangan."),
+        "buttons": []})
+    pct = round(100 * len(to_archive) / max(1, len(active)))
+    lines = ["🔄 **TO'LIQ MOSLASHTIRISH**", "",
+             f"➕ {n_new} yangi · ✏️ {n_upd} yangilanadi · 📦 **{len(to_archive)} arxivlanadi**", ""]
+    if pct >= 50:
+        lines += [f"⚠️ **DIQQAT:** aktiv vazifalarning **{pct}%** arxivlanadi — fayl chala bo'lmasin!", ""]
+    lines.append("_Arxivlanadi (status → Bekor qilingan, qaytarib bo'ladi):_")
+    lines += [f"• {(t.get('title') or '—')[:50]}" for t in to_archive[:10]]
+    if len(to_archive) > 10:
+        lines.append(f"… va yana {len(to_archive) - 10} ta")
+    lines += ["", "_Tasdiqlashdan oldin DB zaxirasi olinadi._"]
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Tasdiqlash", callback_data="import_mirror_ok"),
+        InlineKeyboardButton(text="❌ Bekor", callback_data="acts_cancel"),
+    ]])
+    await query.answer()
+    await _safe_answer(query.message, "\n".join(lines), parse_mode="Markdown", reply_markup=kb)
+
+
+@router.callback_query(F.data == "import_mirror_ok")
+async def cb_import_mirror_confirm(query: CallbackQuery, state: FSMContext) -> None:
+    """Execute the full-mirror after the 2nd confirm: backup → create/update/archive."""
+    data = await state.get_data()
+    response = data.get("pending_response")
+    await state.clear()
+    if not response or not isinstance(response, dict):
+        await query.answer("Tasdiqlash vaqti o'tdi.", show_alert=True)
+        return
+    await query.answer("🔄 Moslashtirilmoqda…")
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+    undo_token = None
+    try:
+        _UNDO_BACKUPS[str(query.message.message_id)] = await _create_db_backup("pre-mirror")
+        undo_token = str(query.message.message_id)
+    except Exception:
+        logger.exception("Pre-mirror backup failed (continuing)")
+    try:
+        await _execute_actions(response.get("actions", []))
+    except Exception as e:
+        logger.exception("mirror _execute_actions failed")
+        await query.message.answer(_humanize_error(e))
+        return
+    msg = response.get("user_message") or "📥 Moslashtirildi."
+    kb = None
+    if undo_token:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="↩️ Qaytarish", callback_data=f"undodelete:{undo_token}")]])
+    await query.message.answer(msg, reply_markup=kb)
 
 
 # Importable document kinds — the task importer can parse these into a table.
@@ -3327,6 +3416,10 @@ async def _import_tasks_from_file_bytes(
     #    Stage 2: if none, Claude reads the raw content and finds tasks in ANY
     #    layout (different headers, free text, mixed). ──
     actions = _structured_tasks_from_table(table)
+    # Did the file carry the hidden ID column? Required for full-mirror sync — so we
+    # can safely tell which DB tasks the file OMITTED (vs a from-scratch file, where
+    # mirror would unsafely archive EVERYTHING).
+    _had_ids = any((a.get("_id") or "").strip() for a in actions)
     # Round-trip dedup: a row whose ID (hidden export column) still exists becomes
     # an UPDATE — so editing the exported file and re-sending it changes the task
     # instead of creating a duplicate. Unknown/blank ID → a new task.
@@ -3381,12 +3474,13 @@ async def _import_tasks_from_file_bytes(
         pending_response={"actions": actions, "user_message": done_msg, "buttons": []},
         _prior_section=None,
         _doc_uid=switch_uid,
+        _import_had_ids=_had_ids,
     )
     # Paginated, scannable preview (one record = 3 lines) instead of a wall of text.
     total_pages = max(1, (len(actions) + _IMPORT_PAGE_SIZE - 1) // _IMPORT_PAGE_SIZE)
     text = _format_import_page(actions, 0) + overflow
     await _safe_answer(message, text, parse_mode="Markdown",
-                       reply_markup=_import_preview_keyboard(0, total_pages, switch_uid))
+                       reply_markup=_import_preview_keyboard(0, total_pages, switch_uid, allow_mirror=True))
 
 
 async def _ask_file_intent(message: Message, file_unique_id: str, label: str) -> None:

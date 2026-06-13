@@ -333,6 +333,20 @@ async def test_task_card_buttons() -> None:
     _imp = handlers._import_preview_keyboard(0, 3)  # 0-indexed → "1 / 3"
     t("page", "Import preview: '1 / 3' ko'rsatkich", "1 / 3" in _ind(_imp))
 
+    # Full-mirror sync button (Excel = source of truth)
+    _impm = [b.callback_data for r in handlers._import_preview_keyboard(0, 1, allow_mirror=True).inline_keyboard for b in r]
+    _impd = [b.callback_data for r in handlers._import_preview_keyboard(0, 1).inline_keyboard for b in r]
+    t("mirror", "import: '🔄 To'liq moslashtirish' tugma (allow_mirror)", "import_mirror" in _impm)
+    t("mirror", "import: mirror tugma YO'Q (default — tasodifan emas)", "import_mirror" not in _impd)
+    t("mirror", "cb_import_mirror + confirm handlerlar mavjud",
+      hasattr(handlers, "cb_import_mirror") and hasattr(handlers, "cb_import_mirror_confirm"))
+    _msrc = inspect.getsource(handlers.cb_import_mirror)
+    t("mirror", "mirror: ID majburiy + arxiv(cancelled) + 2-tasdiq",
+      "_import_had_ids" in _msrc and "cancelled" in _msrc and "import_mirror_ok" in _msrc)
+    t("mirror", "mirror confirm: backup + undo (undodelete)",
+      "_create_db_backup" in inspect.getsource(handlers.cb_import_mirror_confirm)
+      and "undodelete" in inspect.getsource(handlers.cb_import_mirror_confirm))
+
     _rems = [{"id": f"r{i}", "title": f"R{i}", "remind_at": None, "status": "scheduled"} for i in range(25)]
     _rkb = handlers.reminders_compact_keyboard(_rems, current_filter="all", page=2)
     t("page", "Reminders: '2 / 3' ko'rsatkich", "2 / 3" in _ind(_rkb))
