@@ -181,13 +181,23 @@ async def main():
                                 "description": "izoh"})
     await handlers.cmd_export(_ExpMsg())
     try:
-        _ws = _lwb(_io.BytesIO(_ExpMsg.captured["b"])).active
+        _wb = _lwb(_io.BytesIO(_ExpMsg.captured["b"]))
+        _ws = _wb["Vazifalar"]
         check("Export: xlsx yaratildi", _ExpMsg.captured.get("b") is not None)
+        check("Export: 'Xulosa' birinchi varaq", _wb.sheetnames[0] == "Xulosa")
+        _xtext = " ".join(str(c.value) for row in _wb["Xulosa"].iter_rows() for c in row if c.value)
+        check("Export: Xulosa sarlavha + KPI",
+              _wb["Xulosa"]["A1"].value == "VAZIFALAR — XULOSA"
+              and "Jami" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext)
         check("Export: sarlavha B1", _ws["B1"].value == "VAZIFALAR RO'YXATI")
         check("Export: header A3=№ B3=Vazifa", _ws["A3"].value == "№" and _ws["B3"].value == "Vazifa")
         check("Export: header Arial 14", _ws["B3"].font.name == "Arial" and int(_ws["B3"].font.sz) == 14)
         check("Export: Kategoriya ustuni (H)", _ws["H3"].value == "Kategoriya")
         check("Export: yashirin ID ustuni (I)", _ws["I3"].value == "ID" and bool(_ws.column_dimensions["I"].hidden))
+        # P0 sorts first → row 4 priority cell (E) is red+bold (Shoshilinch)
+        check("Export: P0 ustuvorlik qizil+qalin",
+              _ws["E4"].font.bold and str(_ws["E4"].font.color.rgb or "").endswith("C00000"),
+              f"E4={_ws['E4'].value} bold={_ws['E4'].font.bold} rgb={_ws['E4'].font.color.rgb}")
     except Exception as e:
         check("Export: xlsx tahlili", False, f"{type(e).__name__}: {e}")
 
@@ -219,7 +229,7 @@ async def main():
 
     await handlers.cmd_export(_StMsg())  # "/export bajarilgan" → status=done
     try:
-        _ws2 = _lwb(_io.BytesIO(_StMsg.cap["b"])).active
+        _ws2 = _lwb(_io.BytesIO(_StMsg.cap["b"]))["Vazifalar"]
         check("Export status: subtitle 'Holat: Bajarilgan'", "Holat: Bajarilgan" in str(_ws2["B2"].value))
         _holats = [_ws2.cell(row=r, column=6).value for r in range(4, _ws2.max_row + 1)]
         _done_lbl = handlers._STATUS_LABEL_UZ.get("done", "Bajarildi")

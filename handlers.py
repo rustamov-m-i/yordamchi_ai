@@ -2750,8 +2750,22 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ws.cell(row=3, column=id_col, value="ID").font = Font(name=ARIAL, size=11, bold=True, color="808080")
     ws.row_dimensions[3].height = 38
 
+    now_dt = datetime.now(database.TZ)
+    OVERDUE_FILL = PatternFill("solid", fgColor="FDE7E9")  # light red — muddati o'tgan
+    DONE_FILL = PatternFill("solid", fgColor="EFEFEF")     # grey — bajarilgan/bekor
     for n, t in enumerate(tasks, start=1):
         r = n + 3
+        _st = t.get("status", "todo")
+        _is_done = _st in ("done", "cancelled")
+        _overdue = False
+        if t.get("deadline") and not _is_done:
+            try:
+                _overdue = datetime.fromisoformat(t["deadline"]).astimezone(database.TZ) < now_dt
+            except (ValueError, TypeError):
+                _overdue = False
+        # Conditional row fill — instant visual triage in Excel.
+        row_fill = DONE_FILL if _is_done else (OVERDUE_FILL if _overdue else None)
+        base_color = "808080" if _is_done else "000000"
         cells = [
             n,
             (t.get("title") or "").strip(),
@@ -2764,8 +2778,11 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         ]
         for i, val in enumerate(cells, 1):
             c = ws.cell(row=r, column=i, value=val)
-            c.font = Font(name=ARIAL, size=13, color="000000")
+            _p0 = (i == 5 and t.get("priority") == "P0")  # Shoshilinch → red + bold
+            c.font = Font(name=ARIAL, size=13, color=("C00000" if _p0 else base_color), bold=_p0)
             c.border = grid
+            if row_fill:
+                c.fill = row_fill
             left = (i == 2)  # only Vazifa is left-aligned; the rest centered
             c.alignment = Alignment(
                 horizontal="left" if left else "center",
@@ -2776,12 +2793,55 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         idc = ws.cell(row=r, column=id_col, value=t.get("id"))
         idc.font = Font(name=ARIAL, size=11, color="808080")
         idc.border = grid
+        if row_fill:
+            idc.fill = row_fill
         ws.row_dimensions[r].height = 45
 
     for col, w in zip("ABCDEFGH", [8.8, 61.8, 33.2, 31.5, 28.5, 23.3, 58.0, 22.0]):
         ws.column_dimensions[col].width = w
     ws.column_dimensions[get_column_letter(id_col)].hidden = True  # ID — round-trip, hidden
     ws.freeze_panes = "A4"  # title + subtitle + header stay visible while scrolling
+
+    # ── "Xulosa" — executive at-a-glance summary as the FIRST tab ──
+    from collections import Counter
+    _stc = Counter(t.get("status", "todo") for t in tasks)
+    _prc = Counter(t.get("priority", "P2") for t in tasks)
+    _asc = Counter((t.get("assignee") or "—").strip() or "—" for t in tasks)
+    _overdue_n = sum(
+        1 for t in tasks if t.get("deadline") and t.get("status") not in ("done", "cancelled")
+        and (lambda d: bool(d) and d < now_dt)(_parse_dt_safe(t.get("deadline"))))
+    summ = wb.create_sheet("Xulosa", 0)
+    summ.column_dimensions["A"].width = 30
+    summ.column_dimensions["B"].width = 14
+
+    def _sl(row, label, val, bold=False, color="000000", size=12):
+        a = summ.cell(row=row, column=1, value=label)
+        a.font = Font(name=ARIAL, size=size, bold=bold, color=color)
+        b = summ.cell(row=row, column=2, value=val)
+        b.font = Font(name=ARIAL, size=size, bold=bold, color=color)
+        b.alignment = Alignment(horizontal="right")
+        return row + 1
+
+    _hc = summ.cell(row=1, column=1, value="VAZIFALAR — XULOSA")
+    _hc.font = Font(name=ARIAL, size=16, bold=True, color="1F3864")
+    _rr = _sl(3, "Yaratilgan", now_s)
+    _rr = _sl(_rr, "Jami (eksport)", len(tasks), bold=True)
+    _rr = _sl(_rr, "Muddati o'tgan", _overdue_n, bold=True, color="C00000")
+    _rr += 1
+    _rr = _sl(_rr, "— HOLAT —", "", bold=True, color="1F3864")
+    for _code, _lbl in (("todo", "Aktiv"), ("in_progress", "Jarayonda"),
+                        ("blocked", "To'silgan"), ("done", "Bajarilgan"), ("cancelled", "Bekor")):
+        if _stc.get(_code):
+            _rr = _sl(_rr, _lbl, _stc[_code])
+    _rr += 1
+    _rr = _sl(_rr, "— USTUVORLIK —", "", bold=True, color="1F3864")
+    for _code, _lbl in (("P0", "Shoshilinch"), ("P1", "Muhim"), ("P2", "Rejadagi"), ("P3", "Oddiy")):
+        if _prc.get(_code):
+            _rr = _sl(_rr, _lbl, _prc[_code])
+    _rr += 1
+    _rr = _sl(_rr, "— IJROCHI (top 8) —", "", bold=True, color="1F3864")
+    for _name, _cnt in _asc.most_common(8):
+        _rr = _sl(_rr, _name[:28], _cnt)
 
     buf = io.BytesIO()
     wb.save(buf)
