@@ -2685,10 +2685,14 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         await message.answer("⚠️ Excel kutubxonasi (openpyxl) o'rnatilmagan.")
         return
 
-    if status and status != "all":
+    if status == "all":
+        tasks = await database.list_tasks(limit=10000)  # explicit "hammasi" → everything
+    elif status:
         tasks = await _fetch_tasks_for_export(status)
     else:
-        tasks = await database.list_tasks(limit=10000)  # all statuses
+        # DEFAULT: active only (todo/in_progress/blocked) — old done/cancelled tasks
+        # don't clutter the working file. Use "/export hammasi" for everything.
+        tasks = await _fetch_tasks_for_export("active")
     if assignee:
         al = assignee.strip().lower()
         tasks = [t for t in tasks if (t.get("assignee") or "").strip().lower() == al]
@@ -2787,6 +2791,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     cap = f"📤 **{len(tasks)} ta vazifa** eksport qilindi"
     _cap_bits = ([_EXPORT_FILTER_LABEL.get(status, status)] if (status and status != "all") else []) \
         + ([assignee] if assignee else [])
+    if status is None:               # default scope is active-only — make it explicit
+        _cap_bits.insert(0, "aktiv")
     cap += (" — _" + " · ".join(_cap_bits) + "_.") if _cap_bits else "."
     cap += "\n\n_Tahrirlab qaytadan yuborsangiz — import bo'ladi (tasdiqdan keyin)._"
     await message.answer_document(

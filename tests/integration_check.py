@@ -762,6 +762,18 @@ async def main():
           _mon in handlers._format_deadline_short(_far.isoformat())[0])
     check("sana: _fmt_dt_uz kanonik format",
           handlers._fmt_dt_uz(_far) == f"{_far.day}-{_mon} {_far.strftime('%H:%M')}")
+    # export default = active-only (bajarilgan/eski chiqmaydi)
+    _edone = await database.create_task({"title": "ExpDone", "priority": "P2", "status": "todo"})
+    await database.complete_task(_edone)
+    await database.create_task({"title": "ExpActive", "priority": "P2", "status": "todo"})
+    _exp_active_titles = {t["title"] for t in await handlers._fetch_tasks_for_export("active")}
+    check("export aktiv: faqat aktiv (done chiqmaydi)",
+          "ExpActive" in _exp_active_titles and "ExpDone" not in _exp_active_titles)
+    check("export hammasi: done ham bor",
+          "ExpDone" in {t["title"] for t in await handlers._fetch_tasks_for_export("all")})
+    import inspect as _iexp
+    check("export default → aktiv (hammasi emas)",
+          '_fetch_tasks_for_export("active")' in _iexp.getsource(handlers._send_tasks_export))
 
     print("\n── Batch-1 tuzatishlar: recurrence / cascade / NULL-end / bulk-count ──")
     from datetime import datetime as _dt2, timedelta as _td2
