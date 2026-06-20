@@ -680,8 +680,15 @@ async def main():
           database.normalize_recurrence_rule("ish kunlari") == "weekdays"
           and database.normalize_recurrence_rule("Dushanba-juma") == "weekdays")
     check("weekdays: label 'ish kunlari'", "ish kunlari" in handlers._format_recurrence_label("weekdays"))
-    check("weekdays: dam olishni o'tkazadi (Juma 12-iyun → Dushanba 15-iyun)",
-          database.compute_next_recurrence("2026-06-12T12:00:00+05:00", "weekdays")[:10] == "2026-06-15")
+    # Date-robust: compute_next_recurrence clamps to the future, so use a Friday ≥1 week
+    # out (not a hardcoded past date) and assert the next weekday occurrence is the Monday.
+    _now_w = datetime.now(TZ)
+    _fri_w = (_now_w + timedelta(days=((4 - _now_w.weekday()) % 7) + 7)).replace(
+        hour=12, minute=0, second=0, microsecond=0)
+    _nxt_w = datetime.fromisoformat(database.compute_next_recurrence(_fri_w.isoformat(), "weekdays"))
+    check("weekdays: dam olishni o'tkazadi (Juma → Dushanba, +3 kun)",
+          _nxt_w.weekday() == 0 and (_nxt_w.date() - _fri_w.date()).days == 3,
+          f"{_fri_w.date()}→{_nxt_w.date()}")
 
     print("\n── Reply-kbd tartibi: Barchasi + Asosiy menyu alohida, qolgani 2 tadan ──")
     _h = [[b.text for b in row] for row in handlers._two_per_row(["a", "b", "c", "d", "e"], solo={"c"})]
@@ -784,6 +791,18 @@ async def main():
     import inspect as _iexp
     check("export default → aktiv (hammasi emas)",
           '_fetch_tasks_for_export("active")' in _iexp.getsource(handlers._send_tasks_export))
+    # OpenAI/Whisper ixtiyoriy — bot OpenAI kalitisiz ham ishlaydi (STT zaxirasi skip)
+    import pathlib as _pl
+    _root_dir = _pl.Path(handlers.__file__).resolve().parent
+    _cfg_src = (_root_dir / "config.py").read_text(encoding="utf-8")
+    _vs_src = (_root_dir / "voice_service.py").read_text(encoding="utf-8")
+    check("OpenAI: kalit MAJBURIY EMAS (os.getenv, _require emas)",
+          'OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY"' in _cfg_src
+          and '_require("OPENAI_API_KEY")' not in _cfg_src)
+    check("Whisper: client kalitsiz None (construct guard)",
+          "if config.OPENAI_API_KEY" in _vs_src and "else None" in _vs_src)
+    check("Whisper: kalitsiz no-op (_transcribe_whisper None guard)",
+          "_openai_client is None" in _vs_src)
 
     print("\n── Batch-1 tuzatishlar: recurrence / cascade / NULL-end / bulk-count ──")
     from datetime import datetime as _dt2, timedelta as _td2

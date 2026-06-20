@@ -52,7 +52,10 @@ CLAUDE_MODEL_FAST: str = os.getenv("CLAUDE_MODEL_FAST", "claude-haiku-4-5").stri
 # (executive_plan). Used sparingly; ~5x cost of Sonnet.
 CLAUDE_MODEL_COMPLEX: str = os.getenv("CLAUDE_MODEL_COMPLEX", "claude-opus-4-8").strip()
 
-OPENAI_API_KEY: str = _require("OPENAI_API_KEY")
+# OpenAI Whisper — STT fallback ONLY (used when both Uzbek-native providers fail).
+# Optional: leave unset to run without OpenAI entirely — the bot just loses the
+# last-resort transcription fallback. NOT used for the bot's brain (that's Claude).
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "").strip()
 WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-1").strip()
 VOICE_AUTO_CONFIRM: bool = _bool("VOICE_AUTO_CONFIRM", True)
 CONFIRM_CREATE_ACTIONS: bool = _bool("CONFIRM_CREATE_ACTIONS", True)

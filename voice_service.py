@@ -148,11 +148,17 @@ def _muxlisa_verify() -> str:
 # Refresh the pin on import so the first request after startup uses a current cert.
 refresh_muxlisa_pin()
 
-_openai_client = AsyncOpenAI(
-    api_key=config.OPENAI_API_KEY,
-    timeout=WHISPER_TIMEOUT,
-    max_retries=2,
-    http_client=httpx.AsyncClient(verify=_CA_BUNDLE, timeout=WHISPER_TIMEOUT),
+# Constructed only when a key is configured — AsyncOpenAI raises at construction on
+# an empty key. None → the Whisper fallback is simply skipped (bot runs without OpenAI).
+_openai_client = (
+    AsyncOpenAI(
+        api_key=config.OPENAI_API_KEY,
+        timeout=WHISPER_TIMEOUT,
+        max_retries=2,
+        http_client=httpx.AsyncClient(verify=_CA_BUNDLE, timeout=WHISPER_TIMEOUT),
+    )
+    if config.OPENAI_API_KEY
+    else None
 )
 
 # Uzbek primer for Whisper fallback only — biases auto-detect toward Uzbek vs Turkish/Azeri.
@@ -441,7 +447,11 @@ async def _transcribe_muxlisa(audio_bytes: bytes, filename: str, language: str) 
 
 
 async def _transcribe_whisper(audio_bytes: bytes, filename: str, audio_hash: str) -> Optional[str]:
-    """OpenAI Whisper fallback with Uzbek primer."""
+    """OpenAI Whisper fallback with Uzbek primer. No-op when OPENAI_API_KEY is unset
+    (bot runs without OpenAI; the two Uzbek providers are the only STT path)."""
+    if _openai_client is None:
+        logger.info("Whisper fallback skipped — OPENAI_API_KEY not configured")
+        return None
     buf = io.BytesIO(audio_bytes)
     buf.name = filename
     try:
