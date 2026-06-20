@@ -171,8 +171,9 @@ async def main():
         chat = type("C", (), {"id": 1})()
         text = "/export"
         captured = {}
-        async def answer_document(self, file, caption=None, parse_mode=None):
+        async def answer_document(self, file, caption=None, parse_mode=None, reply_markup=None):
             _ExpMsg.captured["b"] = file.data
+            _ExpMsg.captured["kb"] = reply_markup
         async def answer(self, *a, **k):
             _ExpMsg.captured["t"] = a
 
@@ -198,6 +199,19 @@ async def main():
         check("Export: P0 ustuvorlik qizil+qalin",
               _ws["E4"].font.bold and str(_ws["E4"].font.color.rgb or "").endswith("C00000"),
               f"E4={_ws['E4'].value} bold={_ws['E4'].font.bold} rgb={_ws['E4'].font.color.rgb}")
+        # UX: keyboard attached to the file message (one message), compact, with drill-down
+        _kb = _ExpMsg.captured.get("kb")
+        _kbcbs = [b.callback_data for row in _kb.inline_keyboard for b in row] if _kb else []
+        check("Export: klaviatura faylga biriktirilgan (bitta xabar)", _kb is not None)
+        check("Export: 'Hammasi' + ijrochi-drilldown tugmalari",
+              "exportst:all" in _kbcbs and "exportwho:0" in _kbcbs)
+        check("Export: ixcham (≤6 tugma, alohida ijrochi tugmasi yo'q)",
+              len(_kbcbs) <= 6 and not any(c.startswith("exportby:") for c in _kbcbs))
+        _wk = handlers._export_who_keyboard([f"N{i}" for i in range(20)], 0)
+        _wkcbs = [b.callback_data for row in _wk.inline_keyboard for b in row]
+        check("Export: ijrochi-picker paginated (kesish yo'q: 8/sahifa + next + orqaga)",
+              sum(1 for c in _wkcbs if c.startswith("exportby:")) == 8
+              and "exportwho:1" in _wkcbs and "exportroot" in _wkcbs)
     except Exception as e:
         check("Export: xlsx tahlili", False, f"{type(e).__name__}: {e}")
 
@@ -222,7 +236,7 @@ async def main():
         chat = type("C", (), {"id": 1})()
         text = "/export bajarilgan"
         cap: dict = {}
-        async def answer_document(self, file, caption=None, parse_mode=None):
+        async def answer_document(self, file, caption=None, parse_mode=None, reply_markup=None):
             _StMsg.cap["b"] = file.data
         async def answer(self, *a, **k):
             _StMsg.cap.setdefault("t", []).append(a)

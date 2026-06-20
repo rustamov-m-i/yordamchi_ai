@@ -2629,6 +2629,87 @@ async def cb_export_status(query: CallbackQuery) -> None:
     await _send_tasks_export(query.message, status=status)
 
 
+_EXPORT_WHO_PER_PAGE = 8
+
+
+def _export_root_keyboard(has_assignees: bool) -> InlineKeyboardMarkup:
+    """Compact narrow-down keyboard attached to a full export: status filters +
+    'Hammasi' + a single assignee drill-down (paginated, no silent cap)."""
+    rows = [
+        [InlineKeyboardButton(text="🔵 Aktiv", callback_data="exportst:active"),
+         InlineKeyboardButton(text="✅ Bajarilgan", callback_data="exportst:done")],
+        [InlineKeyboardButton(text="⌛ O'tgan", callback_data="exportst:overdue"),
+         InlineKeyboardButton(text="⭐ Muhim", callback_data="exportst:important")],
+    ]
+    bottom = [InlineKeyboardButton(text="📦 Hammasi", callback_data="exportst:all")]
+    if has_assignees:
+        bottom.append(InlineKeyboardButton(text="👤 Ijrochi bo'yicha →", callback_data="exportwho:0"))
+    rows.append(bottom)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _export_who_keyboard(names: list, page: int) -> InlineKeyboardMarkup:
+    """Paginated assignee picker — shows ALL executors across pages (no 8-cap drop)."""
+    total = max(1, (len(names) + _EXPORT_WHO_PER_PAGE - 1) // _EXPORT_WHO_PER_PAGE)
+    page = max(0, min(page, total - 1))
+    chunk = names[page * _EXPORT_WHO_PER_PAGE:(page + 1) * _EXPORT_WHO_PER_PAGE]
+    rows: list = []
+    r: list = []
+    for nm in chunk:
+        r.append(InlineKeyboardButton(text=f"👤 {nm}", callback_data=f"exportby:{nm}"[:64]))
+        if len(r) == 2:
+            rows.append(r)
+            r = []
+    if r:
+        rows.append(r)
+    nav: list = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"exportwho:{page - 1}"))
+    if total > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total}", callback_data="noop"))
+    if page < total - 1:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"exportwho:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="exportroot")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _export_assignee_names() -> list:
+    """Distinct assignees from the export scope (active tasks), sorted."""
+    tasks = await _fetch_tasks_for_export("active")
+    return sorted({(t.get("assignee") or "").strip() for t in tasks if (t.get("assignee") or "").strip()})
+
+
+@router.callback_query(F.data.startswith("exportwho:"))
+async def cb_export_who(query: CallbackQuery) -> None:
+    """Drill-down: paginated assignee picker, edits the export keyboard in place."""
+    try:
+        page = int(query.data.split(":", 1)[1])
+    except ValueError:
+        page = 0
+    names = await _export_assignee_names()
+    if not names:
+        await query.answer("Ijrochi topilmadi", show_alert=True)
+        return
+    await query.answer()
+    try:
+        await query.message.edit_reply_markup(reply_markup=_export_who_keyboard(names, page))
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == "exportroot")
+async def cb_export_root(query: CallbackQuery) -> None:
+    """Return from the assignee picker to the root export keyboard."""
+    names = await _export_assignee_names()
+    await query.answer()
+    try:
+        await query.message.edit_reply_markup(reply_markup=_export_root_keyboard(bool(names)))
+    except TelegramBadRequest:
+        pass
+
+
 # Status/filter labels for the export subtitle + filename + buttons. Keys mirror
 # the Tasks-section filters so "export active" == what the "Aktiv" filter shows.
 _EXPORT_FILTER_LABEL = {
@@ -2855,29 +2936,18 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         _cap_bits.insert(0, "aktiv")
     cap += (" — _" + " · ".join(_cap_bits) + "_.") if _cap_bits else "."
     cap += "\n\n_Tahrirlab qaytadan yuborsangiz — import bo'ladi (tasdiqdan keyin)._"
-    await message.answer_document(
-        BufferedInputFile(buf.getvalue(), filename=fname), caption=cap, parse_mode="Markdown",
-    )
-
-    # Narrow-down buttons after a FULL export (no filter applied yet): by status,
-    # then by assignee. Status icons mirror the section keyboard (🔵/✅/⌛/⭐).
+    # Narrow-down keyboard attached to the FILE message itself (one message, no
+    # clutter, no separate "Holat yoki ijrochi" prompt). Only after a FULL export
+    # (no filter/assignee yet). Assignees live behind a single paginated drill-down
+    # so the keyboard stays compact and no executor is silently dropped.
+    root_kb = None
     if not assignee and not status:
-        kb_rows = [
-            [InlineKeyboardButton(text="🔵 Aktiv", callback_data="exportst:active"),
-             InlineKeyboardButton(text="✅ Bajarilgan", callback_data="exportst:done")],
-            [InlineKeyboardButton(text="⌛ O'tgan", callback_data="exportst:overdue"),
-             InlineKeyboardButton(text="⭐ Muhim", callback_data="exportst:important")],
-        ]
-        names = sorted({(t.get("assignee") or "").strip() for t in tasks if (t.get("assignee") or "").strip()})
-        row: list = []
-        for nm in names[:8]:
-            row.append(InlineKeyboardButton(text=f"👤 {nm}", callback_data=f"exportby:{nm}"[:64]))
-            if len(row) == 2:
-                kb_rows.append(row); row = []
-        if row:
-            kb_rows.append(row)
-        await message.answer("Holat yoki ijrochi bo'yicha eksport:",
-                             reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+        has_asg = any((t.get("assignee") or "").strip() for t in tasks)
+        root_kb = _export_root_keyboard(has_asg)
+    await message.answer_document(
+        BufferedInputFile(buf.getvalue(), filename=fname), caption=cap,
+        parse_mode="Markdown", reply_markup=root_kb,
+    )
 
 
 def _norm_header(c) -> str:
