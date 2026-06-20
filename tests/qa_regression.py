@@ -345,6 +345,22 @@ def test_model_router():
     t("router", "explicit hint overrides directive",
       claude_service._pick_model("fast", "[INTERNAL] executive_plan") == config.CLAUDE_MODEL_FAST)
 
+    # Cost optimizations (audit do_it batch): cheaper-model routing at specific call sites.
+    import inspect as _ins_c
+    import scheduler as _sched_c
+    _retro = _ins_c.getsource(_sched_c.YordamchiScheduler._weekly_retrospective)
+    t("router", "retrospektiv Opus→Sonnet (complexity='complex' olib tashlandi)",
+      'complexity="complex"' not in _retro and "weekly_retrospective" in _retro)
+    t("router", "retrospektiv bo'sh-hafta skip (LLM'siz)",
+      "empty week" in _retro and "created_7d" in _retro and "return" in _retro)
+    import pathlib as _pl_c
+    import handlers as _handlers_c
+    _hsrc = _pl_c.Path(_handlers_c.__file__).read_text(encoding="utf-8")
+    t("router", "parse_reschedule_datetime → Haiku (complexity='fast')",
+      'process_message("", internal_directive=directive, complexity="fast")' in _hsrc)
+    t("router", "note-split → Haiku (complexity='fast')",
+      '_build_note_split_directive(content), complexity="fast"' in _hsrc)
+
 
 def test_partial_user_message_extraction():
     """Phase 2.3: best-effort extractor used during streaming. Must handle

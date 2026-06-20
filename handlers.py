@@ -6823,7 +6823,7 @@ async def cb_note_split(query: CallbackQuery, state: FSMContext) -> None:
     typing = asyncio.create_task(_keep_typing(query.bot, query.message.chat.id))
     try:
         response = await claude_service.process_message(
-            "", internal_directive=_build_note_split_directive(content))
+            "", internal_directive=_build_note_split_directive(content), complexity="fast")
     finally:
         typing.cancel()
     actions = [a for a in (response.get("actions") or []) if a.get("type") == "create_task"]
@@ -12508,7 +12508,7 @@ async def handle_resched_manual(message: Message, state: FSMContext, bot: Bot) -
         "for example '2026-05-28T11:00:00+05:00'. "
         "If you cannot determine a clear future datetime, return user_message='INVALID'."
     )
-    response = await claude_service.process_message("", internal_directive=directive)
+    response = await claude_service.process_message("", internal_directive=directive, complexity="fast")
     raw = (response.get("user_message") or "").strip()
     new_start: datetime | None = None
     if raw and raw.upper() != "INVALID":

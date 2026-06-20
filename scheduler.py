@@ -710,6 +710,13 @@ class YordamchiScheduler:
         bottlenecks, and one concrete suggestion for next week."""
         try:
             stats = await database.executive_stats(days=7)
+            _t = stats.get("tasks", {}) or {}
+            # Empty-week guard: nothing created/done and no meetings → skip the LLM
+            # call entirely (no cost on a quiet week — mirrors _followup_check's pattern).
+            if not ((_t.get("created_7d") or 0) or (_t.get("done_7d") or 0)
+                    or ((stats.get("meetings", {}) or {}).get("count") or 0)):
+                logger.info("Weekly retrospective skipped — empty week (no LLM call)")
+                return
             directive = (
                 "[INTERNAL] weekly_retrospective\n\n"
                 "Bu Juma kuni avtomatik hisobot. Quyidagi statistika asosida:\n"
@@ -725,7 +732,7 @@ class YordamchiScheduler:
                 "user_message ichiga to'liq matnni qaytaring. actions=[]."
             )
             response = await claude_service.process_message(
-                "", internal_directive=directive, complexity="complex"
+                "", internal_directive=directive  # Sonnet (was Opus): templated stats narrative
             )
             text = response.get("user_message", "").strip()
             if text:
