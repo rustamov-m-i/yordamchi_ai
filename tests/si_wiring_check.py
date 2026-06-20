@@ -469,6 +469,15 @@ async def main():
     check("N: _si_run_implementation budget gate ishlatadi",
           "_si_budget_exceeded" in _insp_n.getsource(handlers._si_run_implementation))
 
+    print("\n[ O. Tungi 02:30 dependency-check o'chirilgan ]")
+    _sched_src = _insp_n.getsource(scheduler_module)
+    check("O: 02:30 dependency-check rejaga QO'YILMAGAN (add_job yo'q)",
+          'id="proactive_dependency_check"' not in _sched_src)
+    check("O: 02:30 CronTrigger(hour=2, minute=30) yo'q",
+          "hour=2, minute=30" not in _sched_src)
+    check("O: _proactive_dependency_check metodi saqlangan (keyin qayta yoqsa bo'ladi)",
+          hasattr(scheduler_module.YordamchiScheduler, "_proactive_dependency_check"))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:

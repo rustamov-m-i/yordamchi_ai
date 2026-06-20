@@ -178,14 +178,10 @@ class YordamchiScheduler:
             id="weekly_retrospective",
             replace_existing=True,
         )
-        # Nightly 02:30 — Haiku-based dependency / blocker analysis.
-        # Only pushes a message if something actionable is found.
-        self.scheduler.add_job(
-            self._proactive_dependency_check,
-            CronTrigger(hour=2, minute=30, timezone=config.TIMEZONE),
-            id="proactive_dependency_check",
-            replace_existing=True,
-        )
+        # Nightly 02:30 dependency/blocker check — DISABLED at the principal's request
+        # (it was the only night-time push, waking them at 02:30). The
+        # _proactive_dependency_check method is kept; re-enable by restoring this
+        # add_job — preferably at a MORNING hour, not 02:30.
         # Nightly 02:00 — self-improvement diagnosis (Channel A). OFF by default
         # (autopilot_enabled); costs nothing until enabled via Phase-3 /autopilot.
         self.scheduler.add_job(
