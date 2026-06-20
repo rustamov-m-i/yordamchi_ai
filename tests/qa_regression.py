@@ -863,6 +863,24 @@ def test_icons_module_palette():
       ic_mod.PRIORITY_BADGE.get("P0") == "🔴")
 
 
+def test_followup_prefilter_wired():
+    """_followup_check must cheap-check the DB and SKIP the paid LLM call when
+    there's nothing actionable (stalled/overdue/meeting-followup all empty)."""
+    section("18. Follow-up check — DB pre-filter (cost guard)")
+    import inspect
+    import scheduler as sched_mod
+    src = inspect.getsource(sched_mod.YordamchiScheduler._followup_check)
+    flat = src.replace(" ", "")
+    t("followup", "queries overdue tasks before LLM", "list_overdue_tasks()" in flat)
+    t("followup", "queries meetings-needing-followup before LLM",
+      "list_meetings_needing_followup" in flat)
+    t("followup", "checks stalled in_progress (>48h)",
+      '"in_progress"' in flat and "hours=48" in flat)
+    t("followup", "skips the paid LLM call before reaching process_message",
+      "nothing actionable" in src
+      and src.index("nothing actionable") < src.index("process_message"))
+
+
 async def test_parity_actions():
     """Bot-wide button↔voice/text parity: every new action is handled by
     _execute_actions, documented in the contract, and (for the safe ones) works
@@ -929,6 +947,7 @@ async def main():
     test_trim_history_scheduler_method()
     test_model_router()
     test_partial_user_message_extraction()
+    test_followup_prefilter_wired()
     # Async tests
     await test_complete_task_race()
     await test_save_contact_race()

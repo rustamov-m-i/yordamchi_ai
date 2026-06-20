@@ -403,6 +403,26 @@ class YordamchiScheduler:
         except Exception:
             logger.exception("Follow-up check: settings read failed; proceeding")
 
+        # Cheap DB pre-filter: only pay for the LLM review if there is actually
+        # something to flag — mirrors the directive's (a) stalled in_progress >48h,
+        # (b) overdue, (c) meetings needing follow-up. For a single user most 6-hour
+        # checks find nothing; skipping the paid Claude call here costs no feature
+        # (an empty review would produce an empty message anyway).
+        try:
+            now = datetime.now(database.TZ)
+            in_progress = await database.list_tasks(status_in=["in_progress"], limit=200)
+            stalled = [
+                t for t in in_progress
+                if (dt := database.parse_iso_dt(t.get("updated_at"))) and dt < now - timedelta(hours=48)
+            ]
+            overdue = await database.list_overdue_tasks()
+            mtg_followup = await database.list_meetings_needing_followup(min_age_minutes=30, max_age_hours=24)
+            if not (stalled or overdue or mtg_followup):
+                logger.info("Follow-up check: nothing actionable — skipping paid LLM call")
+                return
+        except Exception:
+            logger.exception("Follow-up pre-filter failed; proceeding with LLM review")
+
         logger.info("Running follow-up check")
         response = await claude_service.process_message(
             "",
