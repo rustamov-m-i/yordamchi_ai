@@ -8364,7 +8364,10 @@ async def _run_planning_session(message: Message, situation: str) -> None:
     response: dict | None = None
     try:
         async for kind, payload in claude_service.process_message_stream(
-            "", internal_directive=directive,
+            # Sonnet (was Opus) — principal's explicit cost choice. The executive_plan
+            # directive would otherwise route to Opus via _COMPLEX_DIRECTIVE_KEYWORDS;
+            # complexity="default" overrides that. Revert: drop this arg to restore Opus.
+            "", internal_directive=directive, complexity="default",
         ):
             if kind == "partial":
                 text = (payload or "").strip()

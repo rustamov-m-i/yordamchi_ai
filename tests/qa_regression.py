@@ -360,6 +360,8 @@ def test_model_router():
       'process_message("", internal_directive=directive, complexity="fast")' in _hsrc)
     t("router", "note-split → Haiku (complexity='fast')",
       '_build_note_split_directive(content), complexity="fast"' in _hsrc)
+    t("router", "/plan (executive_plan) → Sonnet (complexity='default' override)",
+      'internal_directive=directive, complexity="default"' in _hsrc)
 
 
 def test_partial_user_message_extraction():

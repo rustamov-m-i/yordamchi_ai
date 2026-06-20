@@ -78,6 +78,10 @@ def _circuit_record_success() -> None:
 # Sonnet handles it at ~1/5 the cost with no quality loss, and two of its three
 # checks are already covered by cheaper jobs (_post_meeting_followup_sweep and the
 # nightly Haiku _proactive_dependency_check). Don't re-add without a cost review.
+# NOTE: the /plan caller now passes complexity="default" to OVERRIDE this and run
+# executive_plan on Sonnet (principal's cost choice) — so despite being listed here,
+# executive_plan effectively routes to Sonnet in production. risk_analysis is unused
+# by any directive (vestigial). This keyword path only fires if a caller omits complexity.
 _COMPLEX_DIRECTIVE_KEYWORDS = ("executive_plan", "risk_analysis")
 
 
