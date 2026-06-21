@@ -89,6 +89,25 @@ def main() -> None:
     check("empty string", p(""), "")
     check("transliterate(cyr) uses pro", translit.transliterate("Agrobank reja", "kiril"), "Agrobank режа")
 
+    print("\n── quote_names() — brand/org names wrapped in \"...\" ──")
+    q = translit.quote_names
+    check("brand at start", q("Agrobank uchun reja"), '"Agrobank" uchun reja')
+    check("brand at end", q("reja: Agrobank"), 'reja: "Agrobank"')
+    check("bare brand", q("Agrobank"), '"Agrobank"')
+    check("two brands both quoted", q("HUMO va UzCard"), '"HUMO" va "UzCard"')
+    check("app names quoted", q("Telegram va Excel"), '"Telegram" va "Excel"')
+    check("acronym NOT quoted", q("KPI hisoboti"), "KPI hisoboti")
+    check("unit NOT quoted", q("USD kursi"), "USD kursi")
+    check("code NOT quoted", q("VISA *9088"), '"VISA" *9088')
+    check("URL NOT quoted", q("humo.uz sayti"), "humo.uz sayti")
+    check("no double «»", q("«Agrobank» reja"), "«Agrobank» reja")
+    check('no double ""', q('"Agrobank" reja'), '"Agrobank" reja')
+    check("plain Uzbek untouched", q("vazifa bajarilsin"), "vazifa bajarilsin")
+    check("empty string", q(""), "")
+    # Export pipeline: quote first, then transliterate — brand stays Latin, quoted
+    check("quote+cyr pipeline",
+          translit.to_cyrillic_pro(q("Agrobank rejasi")), '"Agrobank" режаси')
+
     print("\n── Round-trip (Latin→Cyrillic→Latin) ──")
     for w in ("ozbekiston", "shahar", "choy", "yaxshi", "xalq", "huquq", "marketing"):
         rt = la(c(w))

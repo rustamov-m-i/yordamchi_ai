@@ -2826,16 +2826,17 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         await message.answer("⚠️ Excel kutubxonasi (openpyxl) o'rnatilmagan.")
         return
 
-    # Cyrillic toggle: wrap every visible string through translit; identity for Latin.
+    # Visible-text formatter. Brand/org names are wrapped in "..." (quote_names)
+    # in BOTH scripts for a consistent formal look; cyr additionally transliterates
+    # via to_cyrillic_pro (which keeps brands/acronyms/codes — Agrobank, KPI,
+    # *9088, humo.uz — in Latin). Identity-ish for non-string cells.
+    import translit
     if script == "cyr":
-        import translit
         def _tr(s):
-            # to_cyrillic_pro keeps brand names / acronyms / codes in Latin
-            # (Agrobank, VISA *9088, KPI, humo.uz) — professional Uzbek output.
-            return translit.to_cyrillic_pro(s) if isinstance(s, str) and s else s
+            return translit.to_cyrillic_pro(translit.quote_names(s)) if isinstance(s, str) and s else s
     else:
         def _tr(s):
-            return s
+            return translit.quote_names(s) if isinstance(s, str) and s else s
 
     _inc_sub = bool(assignee)  # per-assignee export is flat → include subtasks too
     if status == "all":

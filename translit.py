@@ -108,21 +108,36 @@ def to_cyrillic(text: str) -> str:
 # Matched case-insensitively (so "Agrobank"/"AGROBANK"/"agrobank" all qualify).
 # Deliberately EXCLUDES anything that collides with a real Uzbek word
 # (e.g. "it" = dog, "ish", "or") so genuine Uzbek text still converts.
-_KEEP_LATIN = {
+#
+# Two tiers:
+#   _QUOTE_NAMES   — proper nouns (banks, payment systems, products, apps).
+#                    Kept Latin AND wrapped in quotes in formal export
+#                    (Agrobank → "Agrobank"), per Uzbek orthographic norm.
+#   _KEEP_LATIN_ONLY — acronyms, units, formats, URL schemes. Kept Latin but
+#                    NEVER quoted (you don't write "KPI" or "USD").
+_QUOTE_NAMES = {
     # local banks & payment systems
     "agrobank", "humo", "uzcard", "visa", "mastercard", "maestro", "unionpay",
     "swift", "click", "payme", "uzum", "anorbank", "kapitalbank", "ipoteka",
     "octobank", "tbc", "paynet", "apelsin", "nbu", "sqb", "infinbank", "davr",
-    # software / apps / platforms
-    "telegram", "excel", "word", "powerpoint", "outlook", "pdf", "icloud",
-    "claude", "openai", "chatgpt", "whisper", "gmail", "zoom", "google",
-    "microsoft", "windows", "github", "android", "ios", "iphone", "macbook",
-    "youtube", "instagram", "facebook", "linkedin", "whatsapp", "viber",
-    "http", "https", "www",
+    # software / apps / platforms (proper-noun products)
+    "telegram", "excel", "word", "powerpoint", "outlook", "icloud", "claude",
+    "openai", "chatgpt", "whisper", "gmail", "zoom", "google", "microsoft",
+    "windows", "github", "iphone", "macbook", "youtube", "instagram",
+    "facebook", "linkedin", "whatsapp", "viber",
+}
+_KEEP_LATIN_ONLY = {
+    "pdf", "http", "https", "www", "android", "ios",
     # business acronyms & units (kept Latin in formal Uzbek writing)
     "kpi", "crm", "erp", "api", "sla", "swot", "qr", "sms", "vip", "ceo",
     "cfo", "coo", "cto", "usd", "uzs", "eur", "rub", "gb", "mb", "tb",
 }
+_KEEP_LATIN = _QUOTE_NAMES | _KEEP_LATIN_ONLY
+
+# Quote-like marks already in the source — used to avoid double-quoting a name.
+# A SET (not a str): membership of an empty string in a str is always True, which
+# would wrongly suppress quoting for a name at the very start/end of a cell.
+_QUOTE_CHARS = frozenset("\"«»“”„‘’" + _APOS)
 
 # A maximal run that STARTS with a Latin letter and may carry domain/code chars
 # (dot, @, +, _, -) and Uzbek apostrophes (oʻ/gʻ/tutuq) — but NOT ":" or "/", so
@@ -153,6 +168,34 @@ def to_cyrillic_pro(text: str) -> str:
         lambda m: m.group(0) if _keep_latin_token(m.group(0)) else to_cyrillic(m.group(0)),
         text,
     )
+
+
+def quote_names(text: str, quote: str = '"') -> str:
+    """Wrap recognized brand / organization / product names in `quote` marks,
+    per the formal-Uzbek norm: Agrobank → "Agrobank".
+
+    Only proper nouns in _QUOTE_NAMES are touched — acronyms (KPI), units (USD),
+    codes (*9088), URLs/emails and already-quoted names are left untouched
+    (no double-quoting). Script-independent: run it before transliteration so
+    both the Latin and the Cyrillic export get identical quoting.
+    """
+    if not text:
+        return text
+
+    def _repl(m: "re.Match") -> str:
+        tok = m.group(0)
+        if any(c.isdigit() for c in tok) or any(c in ".@" for c in tok):
+            return tok  # URL / email / code — never a quotable plain name
+        if tok.strip(_APOS + "-._").casefold() not in _QUOTE_NAMES:
+            return tok
+        s, i, j = m.string, m.start(), m.end()
+        before = s[i - 1] if i > 0 else ""
+        after = s[j] if j < len(s) else ""
+        if before in _QUOTE_CHARS or after in _QUOTE_CHARS:
+            return tok  # already quoted — don't double it
+        return f"{quote}{tok}{quote}"
+
+    return _LATIN_TOKEN.sub(_repl, text)
 
 
 # Cyrillic → Latin (digraphs/special first). Soft sign is dropped; е→e (lossy).
