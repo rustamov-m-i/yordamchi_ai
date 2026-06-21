@@ -4667,6 +4667,7 @@ def _format_task_card(t: dict, idx: int = None, show_status: bool = True) -> str
     ]
     _chk = _format_checklist_block(t)
     if _chk:
+        out.append("")  # blank line — separate the checklist from the metadata
         out.append(_chk)
     return "\n".join(out)
 
@@ -4705,6 +4706,7 @@ def _format_task_detail_card(t: dict, idx: int = None) -> str:
         lines.append(f"🔁 Takroriy: {_format_recurrence_label(t.get('recurrence_rule'))}")
     _chk = _format_checklist_block(t)
     if _chk:
+        lines.append("")  # blank line — separate the checklist from the metadata
         lines.append(_chk)
     return "\n".join(lines)
 
