@@ -421,6 +421,28 @@ async def main():
     _upd = await database.get_task(_t)
     check("Import dedup: yangilandi, dublikat YO'Q", _cnt == 1 and _upd["title"] == "Dedup YANGI" and _upd["assignee"] == "Dilshod", f"cnt={_cnt}")
 
+    print("\n── Nazoratli ro'yxat (A): ijrochi/kategoriya avto qo'shilmaydi ──")
+    _aids = await handlers._execute_actions([{"type": "create_task", "data": {
+        "title": "A_llm", "assignee": "A_Nomalum", "category": "A_NomalumKat"}}])
+    _at = await database.get_task(_aids["task"][0])
+    check("A: LLM noma'lum ijrochi → bo'sh", not (_at.get("assignee") or ""))
+    check("A: LLM noma'lum kategoriya → bo'sh", not (_at.get("category") or ""))
+    check("A: LLM contact avto qo'shmaydi",
+          not any((c.get("name") or "") == "A_Nomalum" for c in await database.list_contacts()))
+    _eids = await handlers._execute_actions([{"type": "create_task", "data": {
+        "title": "A_excel", "assignee": "A_Karimov", "category": "A_Loyiha", "source": "excel"}}])
+    _et = await database.get_task(_eids["task"][0])
+    check("A: Excel ijrochi saqlanadi + contact qo'shiladi",
+          _et.get("assignee") == "A_Karimov"
+          and any((c.get("name") or "") == "A_Karimov" for c in await database.list_contacts()))
+    check("A: Excel kategoriya saqlanadi", _et.get("category") == "A_Loyiha")
+    _kids = await handlers._execute_actions([{"type": "create_task", "data": {
+        "title": "A_llm2", "assignee": "A_Karimov"}}])
+    check("A: ma'lum ijrochiga LLM tayinlay oladi",
+          (await database.get_task(_kids["task"][0])).get("assignee") == "A_Karimov")
+    check("A: manual '➕ Ijrochi qo'shish' UI mavjud",
+          all(hasattr(handlers, n) for n in ("cb_contact_add", "handle_contact_add", "ContactAddFSM")))
+
     # Title-based dedup (covers files with NO hidden ID + smart-extracted PDFs)
     _bt = {(t.get("title") or "").strip().lower(): t["id"]
            for t in await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=999)

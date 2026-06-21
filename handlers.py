@@ -1163,14 +1163,16 @@ async def _apply_setting_action(data: dict) -> None:
 
 async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     """Execute Claude-returned actions. Return map of type → list of affected IDs.
-    Side effect: assignees on create_task/update_task and participants on
-    schedule_meeting are auto-upserted into the contacts table.
+    Controlled lists (A): task assignees and categories are added ONLY via Excel
+    import (source="excel") or the bot's own UI — never auto-created from an LLM
+    turn. Meeting participants are still auto-upserted into contacts.
     """
     created_ids: dict[str, list[str]] = {
         "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
         "note": [], "_failed": [], "_refresh": [], "_conflict": [],
     }
-    _existing_cats: "set | None" = None   # lazy allowlist for create_task categories (B)
+    _existing_cats: "set | None" = None       # lazy allowlist — categories (manual/Excel only)
+    _existing_contacts: "set | None" = None   # lazy allowlist — assignees (manual/Excel only)
 
     for action in actions:
         atype = action.get("type", "")
@@ -1179,26 +1181,54 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
 
         try:
             if atype == "create_task":
-                # B (no auto-create categories): accept only an EXISTING category;
-                # otherwise leave the task uncategorized. The LLM must reuse, never
-                # invent, on create_task — new categories come only from
-                # create_category. Stops auto-category sprawl.
-                if (data.get("category") or "").strip():
+                # Controlled lists (A): categories AND assignees are added ONLY via Excel
+                # import (source="excel") or the bot's own UI — never auto-created from a
+                # voice/text turn. On an LLM create, an unknown category/assignee is
+                # DROPPED (task stays uncategorized/unassigned). An Excel import may
+                # introduce new ones (creates the category / contact and keeps them).
+                _from_excel = (data.get("source") or "") == "excel"
+                _cat = (data.get("category") or "").strip()
+                if _cat:
                     if _existing_cats is None:
                         _existing_cats = {c.casefold() for c in await database.existing_category_names()}
-                    if data["category"].strip().casefold() not in _existing_cats:
-                        data["category"] = None
+                    if _cat.casefold() not in _existing_cats:
+                        if _from_excel:
+                            await database.create_category(_cat)
+                            _existing_cats.add(_cat.casefold())
+                        else:
+                            data["category"] = None
+                _asg = (data.get("assignee") or "").strip()
+                if _asg:
+                    if _existing_contacts is None:
+                        _existing_contacts = {(c.get("name") or "").casefold()
+                                              for c in await database.list_contacts()}
+                    if _asg.casefold() not in _existing_contacts:
+                        if _from_excel:
+                            await _upsert_contacts([_asg])
+                            _existing_contacts.add(_asg.casefold())
+                        else:
+                            data["assignee"] = None  # unknown executor on an LLM turn → unassigned
                 tid = await database.create_task(data)
                 created_ids["task"].append(tid)
-                await _upsert_contacts([data.get("assignee") or ""])
             elif atype == "create_reminder":
                 rid = await database.create_reminder(data)
                 created_ids["reminder"].append(rid)
             elif atype == "update_task" and target_id:
+                # Same controlled-assignee rule on edits: LLM update to an unknown
+                # executor is dropped; an Excel round-trip may introduce one.
+                if (data.get("assignee") or "").strip():
+                    _asg = data["assignee"].strip()
+                    if _existing_contacts is None:
+                        _existing_contacts = {(c.get("name") or "").casefold()
+                                              for c in await database.list_contacts()}
+                    if _asg.casefold() not in _existing_contacts:
+                        if (data.get("source") or "") == "excel":
+                            await _upsert_contacts([_asg])
+                            _existing_contacts.add(_asg.casefold())
+                        else:
+                            data.pop("assignee", None)
                 await database.update_task(target_id, data)
                 created_ids["task"].append(target_id)
-                if data.get("assignee"):
-                    await _upsert_contacts([data.get("assignee") or ""])
             elif atype == "complete_task" and target_id:
                 await database.complete_task(target_id)
                 created_ids["task"].append(target_id)
@@ -3083,6 +3113,7 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
             "priority": _import_priority(pick(d, _COL_PRIORITY)),
             "status": _import_status(pick(d, _COL_STATUS)),
             "deadline": _import_deadline(pick(d, _COL_DEADLINE)),
+            "source": "excel",  # trusted to introduce new assignees/categories (A)
         }
         asg = str(pick(d, _COL_ASSIGNEE) or "").strip()
         if asg:
@@ -3673,6 +3704,10 @@ async def _import_tasks_from_file_bytes(
         if _k:
             _by_title.setdefault(_k, _t["id"])
     _dedup = _apply_title_dedup(actions, _by_title)
+    # Tag every imported action source="excel" so _execute_actions trusts it to
+    # introduce new assignees/categories (LLM turns may only reuse existing ones).
+    for _a in actions:
+        _a.setdefault("data", {})["source"] = "excel"
 
     # ── Preview + confirm (reuse the standard acts_confirm pipeline) ──
     # No 20-per-message chat cap here: file imports are parsed deterministically, so
@@ -8946,10 +8981,43 @@ async def _render_team_panel(message: Message) -> None:
         for i in range(0, len(nums), 5):
             rows.append(nums[i:i + 5])
 
-    # Tezkor amal va navigatsiya tugmalari endi pastdagi section reply kbd da —
-    # inline'da faqat raqamli drill-down qoladi.
-    reply_markup = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
-    await _safe_answer(message, text, parse_mode="Markdown", reply_markup=reply_markup)
+    # Manual executor add (controlled list — A): new assignees come only from here or
+    # Excel import, never auto from a voice/text turn.
+    rows.append([InlineKeyboardButton(text="➕ Ijrochi qo'shish", callback_data="contactadd")])
+    await _safe_answer(message, text, parse_mode="Markdown",
+                       reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+class ContactAddFSM(StatesGroup):
+    awaiting = State()
+
+
+@router.callback_query(F.data == "contactadd")
+async def cb_contact_add(query: CallbackQuery, state: FSMContext) -> None:
+    """Manually add an executor (contact) — the controlled-list add path (A)."""
+    await state.set_state(ContactAddFSM.awaiting)
+    await query.answer()
+    await query.message.answer(
+        "➕ Ijrochi ism(lar)ini yozing (matn/ovoz). Bir nechta — har qatorga bittadan.")
+
+
+@router.message(StateFilter(ContactAddFSM.awaiting), F.text | F.voice)
+async def handle_contact_add(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = await _get_text_or_transcribe(message, bot=bot)
+    if text is None:
+        return
+    await state.clear()
+    added = 0
+    for line in (text or "").splitlines():
+        nm = line.strip(" -•\t·")
+        if nm:
+            await database.save_contact({"name": nm[:80]})
+            added += 1
+    if not added:
+        await message.answer("Bo'sh — bekor qilindi.")
+        return
+    await message.answer(f"✅ {added} ta ijrochi qo'shildi — endi ularga vazifa tayinlasa bo'ladi.")
+    await _render_team_panel(message)
 
 
 def _format_assignee_profile(profile: dict) -> str:
