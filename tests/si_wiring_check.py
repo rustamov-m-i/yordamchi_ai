@@ -491,6 +491,18 @@ async def main():
           "weekday() >= 5" in _sched_src
           and "weekday() >= 5" in _insp_n.getsource(scheduler_module.YordamchiScheduler._followup_check))
 
+    print("\n[ Q. Tushdan keyingi digest (14:00 Dush–Juma) ]")
+    check("Q: afternoon digest 14:00 mon-fri rejaga qo'yilgan",
+          'day_of_week="mon-fri", hour=14, minute=0' in _sched_src
+          and 'id="afternoon_digest"' in _sched_src)
+    check("Q: _afternoon_digest metodi mavjud",
+          hasattr(scheduler_module.YordamchiScheduler, "_afternoon_digest"))
+    _aft = _insp_n.getsource(scheduler_module.YordamchiScheduler._afternoon_digest)
+    check("Q: 3 aqlli bo'lim (deadline / qolgan / ertaga)",
+          "Bugun deadline" in _aft and "Bugun qolgan" in _aft and "Ertaga" in _aft)
+    check("Q: bo'sh kunда yubormaydi (guard) + LLM ishlatmaydi",
+          "if not (due_today or active" in _aft and "process_message" not in _aft)
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:

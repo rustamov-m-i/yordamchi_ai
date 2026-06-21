@@ -225,6 +225,14 @@ class YordamchiScheduler:
             id="stale_delegation_digest",
             replace_existing=True,
         )
+        # Daily 14:00 (Mon–Fri) — afternoon re-orientation: today's open deadlines,
+        # what's left today, tomorrow's meetings. Smart sections; quiet on empty days.
+        self.scheduler.add_job(
+            self._afternoon_digest,
+            CronTrigger(day_of_week="mon-fri", hour=14, minute=0, timezone=config.TIMEZONE),
+            id="afternoon_digest",
+            replace_existing=True,
+        )
 
         if config.ICLOUD_ENABLED:
             self.scheduler.add_job(
@@ -707,6 +715,59 @@ class YordamchiScheduler:
             await self._send("\n".join(lines))
         except Exception:
             logger.exception("Stale delegation digest failed")
+
+    async def _afternoon_digest(self) -> None:
+        """14:00 Mon–Fri — afternoon re-orientation. Three smart sections (today's open
+        deadlines, what's left today, tomorrow's meetings); each appears only when it
+        has content; nothing is sent on a quiet afternoon. No LLM, no spam."""
+        try:
+            now = datetime.now(database.TZ)
+            due_today = await database.list_today_tasks()  # open + due today
+            active = await database.list_tasks(
+                status_in=["todo", "in_progress", "blocked"], limit=1000)
+            today_meetings = await database.list_today_meetings()
+            upcoming_today = [m for m in today_meetings
+                              if (m.get("datetime_start") or "") > now.isoformat()]
+            tnext = (now + timedelta(days=1)).date()
+            tstart = database.TZ.localize(
+                datetime.combine(tnext, datetime.min.time())).isoformat()
+            tend = database.TZ.localize(
+                datetime.combine(tnext, datetime.max.time())).isoformat()
+            tomorrow = await database.list_meetings_in_window(tstart, tend)
+
+            if not (due_today or active or upcoming_today or tomorrow):
+                return  # quiet afternoon — send nothing
+
+            def _hhmm(iso: str) -> str:
+                try:
+                    return datetime.fromisoformat(iso).astimezone(database.TZ).strftime("%H:%M")
+                except (ValueError, TypeError):
+                    return "—"
+
+            lines = ["☀️ **TUSHDAN KEYIN** · 14:00", ""]
+            if due_today:
+                lines.append(f"⏰ **Bugun deadline — bajarilmagan ({len(due_today)}):**")
+                for t in due_today[:6]:
+                    who = (t.get("assignee") or "Siz").strip() or "Siz"
+                    lines.append(f"  🔴 «{(t.get('title') or '—').strip()[:50]}» · {who}")
+                lines.append("")
+            if active or upcoming_today:
+                lines.append(f"📌 **Bugun qolgan:** {len(active)} vazifa · {len(upcoming_today)} uchrashuv")
+                if active:
+                    lines.append(f"   Eng muhimi: ⚡ «{(active[0].get('title') or '—').strip()[:50]}»")
+                lines.append("")
+            if tomorrow:
+                lines.append(f"🤝 **Ertaga:** {len(tomorrow)} uchrashuv")
+                for m in tomorrow[:4]:
+                    tag = "" if (m.get("agenda") or "").strip() else "  ⚠️ reja yo'q"
+                    lines.append(f"   • {(m.get('title') or '—').strip()[:40]} ({_hhmm(m.get('datetime_start'))}){tag}")
+                lines.append("")
+            if due_today:
+                hours_left = max(1, 18 - now.hour)
+                lines.append(f"_Kun oxirigacha {len(due_today)} deadline ochiq — ~{hours_left} soat._")
+            await self._send("\n".join(lines).rstrip())
+        except Exception:
+            logger.exception("Afternoon digest failed")
 
     async def _weekly_retrospective(self) -> None:
         """Friday 18:00 — auto-generate the week's retrospective via Claude.
