@@ -137,6 +137,15 @@ def main() -> None:
     # false-positive guard: 'Europa' must NOT split on the 'eur' acronym
     check("no-split: Europa", pro("Europa bozori"), "Эуропа бозори")
 
+    print("\n── tech terms kept Latin (user request) ──")
+    for term in ("FIFA", "LED", "mobile", "iframe", "online", "banner", "SMM",
+                 "SEO", "target", "content", "reels", "stories", "website"):
+        check(f"tech kept: {term}", pro(term), term)
+    check("tech in sentence", pro("LED ekranlarda banner"), "LED экранларда banner")
+    # ordinary loanwords still convert (not frozen)
+    check("loanword converts: reklama", pro("reklama"), "реклама")
+    check("loanword converts: videorolik", pro("videorolik"), "видеоролик")
+
     print("\n── Round-trip (Latin→Cyrillic→Latin) ──")
     for w in ("ozbekiston", "shahar", "choy", "yaxshi", "xalq", "huquq", "marketing"):
         rt = la(c(w))

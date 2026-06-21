@@ -140,6 +140,13 @@ _KEEP_LATIN_ONLY = {
     # business acronyms & units (kept Latin in formal Uzbek writing)
     "kpi", "crm", "erp", "api", "sla", "swot", "qr", "sms", "vip", "ceo",
     "cfo", "coo", "cto", "usd", "uzs", "eur", "rub", "gb", "mb", "tb",
+    # digital-marketing / web / tech terms — kept Latin (NOT quoted) at the
+    # principal's request; all clearly non-Uzbek so they don't freeze real words.
+    "fifa", "uefa", "led", "lcd", "mobile", "iframe", "online", "offline",
+    "banner", "landing", "feed", "story", "stories", "reels", "post", "repost",
+    "content", "target", "targeting", "hashtag", "link", "login", "email",
+    "web", "website", "app", "smm", "seo", "roi", "ctr", "cpm", "cpc", "cpa",
+    "utm", "ux", "ui", "url", "podcast", "stream", "chatbot",
 }
 _KEEP_LATIN = _QUOTE_NAMES | _KEEP_LATIN_ONLY
 
