@@ -2629,6 +2629,13 @@ async def cb_export_status(query: CallbackQuery) -> None:
     await _send_tasks_export(query.message, status=status)
 
 
+@router.callback_query(F.data == "exportcyr")
+async def cb_export_cyr(query: CallbackQuery) -> None:
+    """Re-export the default (active) scope in Uzbek Cyrillic."""
+    await query.answer("🔤 Krillcha…")
+    await _send_tasks_export(query.message, script="cyr")
+
+
 _EXPORT_WHO_PER_PAGE = 8
 
 
@@ -2645,6 +2652,7 @@ def _export_root_keyboard(has_assignees: bool) -> InlineKeyboardMarkup:
     if has_assignees:
         bottom.append(InlineKeyboardButton(text="👤 Ijrochi bo'yicha →", callback_data="exportwho:0"))
     rows.append(bottom)
+    rows.append([InlineKeyboardButton(text="🔤 Krillcha versiya", callback_data="exportcyr")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2772,11 +2780,12 @@ async def _fetch_tasks_for_export(filt: str, include_subtasks: bool = False) -> 
 
 
 async def _send_tasks_export(message: Message, assignee: str | None = None,
-                             status: str | None = None) -> None:
+                             status: str | None = None, script: str = "lat") -> None:
     """Build and send the tasks workbook (Template style). Shared by /export, the
     export_tasks action (voice/text), per-assignee and per-status buttons.
     `assignee` filters to one executor; `status` filters by Tasks-section filter
-    key (active/today/overdue/important/urgent/done/recurring/all)."""
+    key (active/today/overdue/important/urgent/done/recurring/all).
+    `script="cyr"` transliterates all visible text to Uzbek Cyrillic."""
     import io
     from aiogram.types import BufferedInputFile
     try:
@@ -2786,6 +2795,15 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     except ImportError:
         await message.answer("⚠️ Excel kutubxonasi (openpyxl) o'rnatilmagan.")
         return
+
+    # Cyrillic toggle: wrap every visible string through translit; identity for Latin.
+    if script == "cyr":
+        import translit
+        def _tr(s):
+            return translit.to_cyrillic(s) if isinstance(s, str) and s else s
+    else:
+        def _tr(s):
+            return s
 
     _inc_sub = bool(assignee)  # per-assignee export is flat → include subtasks too
     if status == "all":
@@ -2810,7 +2828,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         return
 
     # ── Row model: hierarchical (top-level + indented subtasks 1.1) for a full/status
-    #    export; flat-with-"Ota vazifa" for a per-assignee export (subtasks shown with
+    #    export; flat-with-"Asosiy vazifa" for a per-assignee export (subtasks shown with
     #    their parent's name since the parent itself may belong to someone else). ──
     flat_mode = bool(assignee)
     export_rows: list = []  # (number_str, is_sub, parent_title, task)
@@ -2840,9 +2858,9 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     SUB = "F2F2F2"
     hair = Side(style="hair")
     grid = Border(left=hair, right=hair, top=hair, bottom=hair)
-    # Per-assignee export is flat → add an "Ota vazifa" column so a subtask shows which
+    # Per-assignee export is flat → add an "Asosiy vazifa" column so a subtask shows which
     # project it belongs to. The hierarchical export indents subtasks under the parent.
-    headers = (["№", "Vazifa", "Ota vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya"]
+    headers = (["№", "Vazifa", "Asosiy vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya"]
                if flat_mode else _EXPORT_HEADERS)
     n_visible = len(headers)
     id_col = n_visible + 1
@@ -2851,7 +2869,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     deadline_col = headers.index("Muddat") + 1
     prio_col = headers.index("Ustuvorlik") + 1
     desc_col = headers.index("Izoh") + 1
-    ota_col = (headers.index("Ota vazifa") + 1) if flat_mode else None
+    ota_col = (headers.index("Asosiy vazifa") + 1) if flat_mode else None
     left_cols = {title_col} | ({ota_col} if flat_mode else set())
     wrap_cols = {title_col, desc_col} | ({ota_col} if flat_mode else set())
 
@@ -2861,7 +2879,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
 
     ws.merge_cells(f"B1:{last_col}1")
     t1 = ws["B1"]
-    t1.value = _export_title(status, assignee)
+    t1.value = _tr(_export_title(status, assignee))
     t1.font = Font(name=ARIAL, size=18, bold=True, color="000000")
     t1.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
@@ -2874,14 +2892,14 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         sub += f"      ·  Holat: {_EXPORT_FILTER_LABEL.get(status, status)}"
     if assignee:
         sub += f"      ·  Ijrochi: {assignee}"
-    t2.value = sub
+    t2.value = _tr(sub)
     t2.font = Font(name=ARIAL, size=11, color="404040")
     t2.fill = PatternFill("solid", fgColor=SUB)
     t2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 20
 
     for i, h in enumerate(headers, 1):
-        c = ws.cell(row=3, column=i, value=h)
+        c = ws.cell(row=3, column=i, value=_tr(h))
         c.font = Font(name=ARIAL, size=14, bold=True, color="000000")
         c.alignment = Alignment(horizontal="center", vertical="center")
         c.border = grid
@@ -2917,6 +2935,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             (t.get("description") or "").strip(),
             (t.get("category") or "").strip(),
         ]
+        vals = [_tr(v) if isinstance(v, str) else v for v in vals]  # Cyrillic if script=cyr
         for i, val in enumerate(vals, 1):
             c = ws.cell(row=r, column=i, value=val)
             _p0 = (i == prio_col and t.get("priority") == "P0")  # Shoshilinch → red + bold
@@ -2957,14 +2976,14 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     summ.column_dimensions["B"].width = 14
 
     def _sl(row, label, val, bold=False, color="000000", size=12):
-        a = summ.cell(row=row, column=1, value=label)
+        a = summ.cell(row=row, column=1, value=_tr(label))
         a.font = Font(name=ARIAL, size=size, bold=bold, color=color)
-        b = summ.cell(row=row, column=2, value=val)
+        b = summ.cell(row=row, column=2, value=_tr(val) if isinstance(val, str) else val)
         b.font = Font(name=ARIAL, size=size, bold=bold, color=color)
         b.alignment = Alignment(horizontal="right")
         return row + 1
 
-    _hc = summ.cell(row=1, column=1, value="VAZIFALAR — XULOSA")
+    _hc = summ.cell(row=1, column=1, value=_tr("VAZIFALAR — XULOSA"))
     _hc.font = Font(name=ARIAL, size=16, bold=True, color="1F3864")
     _rr = _sl(3, "Yaratilgan", now_s)
     _rr = _sl(_rr, "Jami (eksport)", len(export_rows), bold=True)
@@ -2988,6 +3007,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     buf = io.BytesIO()
     wb.save(buf)
     _tag_bits = ([status] if (status and status != "all") else []) + [(assignee or "hammasi")]
+    if script == "cyr":
+        _tag_bits.append("krill")
     tag = "_".join(_tag_bits).strip().replace(" ", "_").replace("/", "-")
     fname = f"vazifalar_{tag}_{datetime.now(database.TZ).strftime('%Y-%m-%d')}.xlsx"
     cap = f"📤 **{len(export_rows)} ta** eksport qilindi"
@@ -2995,6 +3016,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         + ([assignee] if assignee else [])
     if status is None:               # default scope is active-only — make it explicit
         _cap_bits.insert(0, "aktiv")
+    if script == "cyr":
+        _cap_bits.append("krillcha")
     cap += (" — _" + " · ".join(_cap_bits) + "_.") if _cap_bits else "."
     cap += "\n\n_Tahrirlab qaytadan yuborsangiz — import bo'ladi (tasdiqdan keyin)._"
     # Narrow-down keyboard attached to the FILE message itself (one message, no

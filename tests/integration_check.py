@@ -206,8 +206,8 @@ async def main():
         check("Export: klaviatura faylga biriktirilgan (bitta xabar)", _kb is not None)
         check("Export: 'Hammasi' + ijrochi-drilldown tugmalari",
               "exportst:all" in _kbcbs and "exportwho:0" in _kbcbs)
-        check("Export: ixcham (≤6 tugma, alohida ijrochi tugmasi yo'q)",
-              len(_kbcbs) <= 6 and not any(c.startswith("exportby:") for c in _kbcbs))
+        check("Export: ixcham (≤7 tugma, alohida ijrochi tugmasi yo'q)",
+              len(_kbcbs) <= 7 and not any(c.startswith("exportby:") for c in _kbcbs))
         _wk = handlers._export_who_keyboard([f"N{i}" for i in range(20)], 0)
         _wkcbs = [b.callback_data for row in _wk.inline_keyboard for b in row]
         check("Export: ijrochi-picker paginated (kesish yo'q: 8/sahifa + next + orqaga)",
@@ -261,14 +261,27 @@ async def main():
     await handlers._send_tasks_export(_SubMsg(), assignee="EXP_Karimov")
     try:
         _aw = _lwb(_io.BytesIO(_SubMsg.cap["b"]))["Vazifalar"]
-        check("export subtask: per-ijrochi 'Ota vazifa' ustuni",
-              _aw.cell(row=3, column=3).value == "Ota vazifa")
+        check("export subtask: per-ijrochi 'Asosiy vazifa' ustuni",
+              _aw.cell(row=3, column=3).value == "Asosiy vazifa")
         check("export subtask: sub-vazifa otasi ko'rsatilgan (EXP_parent)",
               _aw.cell(row=4, column=3).value == "EXP_parent")
         check("export subtask: per-ijrochi dinamik sarlavha (ism)",
               "EXP_KARIMOV" in (_aw["B1"].value or ""), _aw["B1"].value)
     except Exception as e:
         check("export subtask: per-ijrochi", False, f"{type(e).__name__}: {e}")
+    # Cyrillic export version
+    _SubMsg.cap = {}
+    await handlers._send_tasks_export(_SubMsg(), script="cyr")
+    try:
+        _cw = _lwb(_io.BytesIO(_SubMsg.cap["b"]))["Vazifalar"]
+        check("export krill: B1 kirilcha", any("Ѐ" <= ch <= "ӿ" for ch in (_cw["B1"].value or "")),
+              _cw["B1"].value)
+        check("export krill: header 'Вазифа'", _cw.cell(row=3, column=2).value == "Вазифа")
+    except Exception as e:
+        check("export krill", False, f"{type(e).__name__}: {e}")
+    _rkcbs = [b.callback_data for r in handlers._export_root_keyboard(True).inline_keyboard for b in r]
+    check("export krill: root kb 'exportcyr' tugma + cb",
+          "exportcyr" in _rkcbs and hasattr(handlers, "cb_export_cyr"))
     await database.delete_task(_xp)
 
     class _StMsg:
