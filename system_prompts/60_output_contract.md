@@ -23,7 +23,7 @@ You MUST respond with EXACTLY ONE valid JSON object. No markdown code fences. No
 
 | Type | Required `data` fields |
 |---|---|
-| `create_task` | `title`, `priority`, `deadline` (ISO8601 or null), `description?`, `tags?`, `assignee?`, `category?`, `recurrence_rule?` |
+| `create_task` | `title`, `priority`, `deadline` (ISO8601 or null), `description?`, `tags?`, `assignee?`, `category?`, `recurrence_rule?`, `checklist?` |
 | `create_reminder` | `title`, `remind_at` (ISO8601), `note?`, `recurrence_rule?` |
 | `update_task` | `id`, `data: { ...partial fields }` |
 | `delete_task` | `id` |
@@ -66,6 +66,8 @@ You MUST respond with EXACTLY ONE valid JSON object. No markdown code fences. No
 | `show_stats` | `data: { days? (1\|7\|30), report? (bool — executive report instead of dashboard) }` |
 | `run_plan` | `data: { situation? }` (free-text; empty = auto-plan from current DB state) |
 | `none` | (empty data — used for polish-only or info responses) |
+
+**`checklist`** (on `create_task` / `update_task`) — an array of step strings, e.g. `["Ma'lumot yig'ish", "Tahlil", "Yozish", "Tekshirish"]`. Use it when the user describes ONE task as multiple steps/stages ("X tayyorlash: a, b, c") that share a single deadline/assignee — each string becomes an unchecked step (progress tracked as done/total). Use SEPARATE `create_task` actions only when each stage needs its own deadline or assignee (delegation per stage).
 
 ### Button callback patterns
 - `confirm:<temp_id>` — confirm a pending action (app layer will execute)
