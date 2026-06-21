@@ -146,7 +146,7 @@ _KEEP_LATIN_ONLY = {
     "banner", "landing", "feed", "story", "stories", "reels", "post", "repost",
     "content", "target", "targeting", "hashtag", "link", "login", "email",
     "web", "website", "app", "smm", "seo", "roi", "ctr", "cpm", "cpc", "cpa",
-    "utm", "ux", "ui", "url", "podcast", "stream", "chatbot",
+    "utm", "ux", "ui", "url", "podcast", "stream", "chatbot", "feedback",
 }
 _KEEP_LATIN = _QUOTE_NAMES | _KEEP_LATIN_ONLY
 
@@ -155,9 +155,16 @@ _KEEP_LATIN = _QUOTE_NAMES | _KEEP_LATIN_ONLY
 # real Uzbek words safely; they only match in their bare form.
 _KEEP_SORTED = sorted((n for n in _KEEP_LATIN if len(n) >= 3), key=len, reverse=True)
 _QUOTE_SORTED = sorted((n for n in _QUOTE_NAMES if len(n) >= 3), key=len, reverse=True)
-# A trailing lowercase Uzbek inflection: -da, -ning, -ga, -larni, optionally
-# hyphen-led for acronyms (KPI-larni). Lowercase only → never eats a new word.
-_INFLECTION = re.compile(r"-?[a-z]+")
+# A trailing Uzbek NOUN inflection (plural + possessive + case), optionally
+# hyphen-led (KPI-larni). A CLOSED set — NOT arbitrary [a-z]+ — so a capitalized
+# common word whose prefix equals a keep term ("Posta"=Post+a, "Linkor"=Link+or)
+# does NOT split: "a"/"or"/"back" are not valid suffixes → the word transliterates
+# whole. Genuine inflections (Excel+da, Agrobank+ning, KPI+-larni) still match.
+_INFLECTION = re.compile(
+    r"-?(?:lar)?"
+    r"(?:imiz|ingiz|lari|im|ing|si|i)?"
+    r"(?:niki|ning|ni|dagi|dan|gacha|ga|ka|qa|da)?"
+)
 
 # Quote-like marks already in the source — used to avoid double-quoting a name.
 # A SET (not a str): membership of an empty string in a str is always True, which
@@ -173,11 +180,18 @@ _LATIN_TOKEN = re.compile(
     r"[A-Za-z][A-Za-z0-9+_" + _APOS + r"-]*"
     r"(?:[.@][A-Za-z0-9][A-Za-z0-9+_" + _APOS + r"-]*)*"
 )
-# Internal '.'/'@' that looks like a real domain/email/code → keep in Latin. The
-# char AFTER the dot/@ must be LOWERCASE (or a digit): domains/TLDs are lowercase
-# ("humo.uz", "a@b.com"), whereas a name initial is uppercase ("J.Komilov",
-# "A.B.Karimov") and MUST transliterate — that's an executor's name, not a domain.
-_HAS_INNER_DOT = re.compile(r"[A-Za-z0-9][.@][a-z0-9]")
+# Domain / email / file detector → keep in Latin. Decided by a KNOWN TLD/extension
+# or an "@", case-insensitively. This robustly separates a real link ("humo.uz",
+# "CLICK.UZ", "a@b.com", "report.pdf") from a person's INITIALS ("J.Komilov",
+# "J.komilov", "A.B.Karimov", "Yoʻldoshev.A.O.") — initials have no TLD, so they
+# transliterate regardless of letter case (fixes the earlier case-only heuristic).
+_DOMAIN_OR_EMAIL = re.compile(
+    r"@"
+    r"|\.(?:uz|com|net|org|ru|gov|edu|io|info|biz|co|kz|tj|tm|kg|az|tr|"
+    r"me|tv|app|dev|site|online|store|shop|xyz|pro|"
+    r"pdf|docx?|xlsx?|pptx?|txt|csv|png|jpe?g|gif|svg|mp4|mp3|zip|rar)\b",
+    re.IGNORECASE,
+)
 
 # Multi-word PROPER NAMES built from everyday Uzbek words (project/campaign names
 # like "Pulli Gap"). The words individually ("pulli"=paid, "gap"=talk) MUST stay
@@ -239,7 +253,7 @@ def _keep_latin_token(tok: str) -> bool:
     """True if the WHOLE token should stay in Latin (brand, acronym, code, id)."""
     if any(c.isdigit() for c in tok):       # *9088, model ids, "v4.6"
         return True
-    if _HAS_INNER_DOT.search(tok):          # humo.uz, a@b.com (NOT "word.")
+    if _DOMAIN_OR_EMAIL.search(tok):        # humo.uz, CLICK.UZ, a@b.com (NOT "J.Komilov")
         return True
     return tok.strip(_APOS + "-._").casefold() in _KEEP_LATIN
 
@@ -288,7 +302,7 @@ def quote_names(text: str, quote: str = '"') -> str:
 
     def _repl(m: "re.Match") -> str:
         tok = m.group(0)
-        if any(c.isdigit() for c in tok) or _HAS_INNER_DOT.search(tok):
+        if any(c.isdigit() for c in tok) or _DOMAIN_OR_EMAIL.search(tok):
             return tok  # URL / email / code — never a quotable plain name
         s, i, j = m.string, m.start(), m.end()
         before = s[i - 1] if i > 0 else ""
