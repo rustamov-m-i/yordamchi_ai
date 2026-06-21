@@ -857,42 +857,6 @@ async def main():
     check("Whisper: kalitsiz no-op (_transcribe_whisper None guard)",
           "_openai_client is None" in _vs_src)
 
-    print("\n── Checklist (vazifa bosqichlari) ──")
-    _ctid = await database.create_task({"title": "Hisobot tayyorlash",
-                                        "checklist": ["Ma'lumot yig'ish", "Tahlil", "Yozish"]})
-    _ct = await database.get_task(_ctid)
-    _citems = handlers._parse_checklist(_ct)
-    check("checklist: create 3 bosqich (hammasi ochiq)",
-          len(_citems) == 3 and not any(i["done"] for i in _citems))
-    check("checklist: progress '0/3'", handlers._checklist_progress(_ct) == "0/3")
-    _citems[1]["done"] = True  # mirrors cb_checklist_toggle
-    await database.update_task(_ctid, {"checklist": _citems})
-    _ct = await database.get_task(_ctid)
-    check("checklist: toggle → '1/3'", handlers._checklist_progress(_ct) == "1/3")
-    _cblk = handlers._format_checklist_block(_ct)
-    check("checklist: blok (progress + ☑/☐)", "1/3" in _cblk and "☑" in _cblk and "☐" in _cblk)
-    check("checklist: karta blokni ko'rsatadi", "Bosqichlar" in handlers._format_task_card(_ct))
-    _ckcbs = [b.callback_data for r in handlers._task_card_kb_with_back(_ct).inline_keyboard for b in r]
-    check("checklist: karta tugmasi 'chkview' (bosqich bor)", f"chkview:{_ctid}" in _ckcbs)
-    _ntid = await database.create_task({"title": "Bosqichsiz"})
-    _nkcbs = [b.callback_data for r in handlers._task_card_kb_with_back(await database.get_task(_ntid)).inline_keyboard for b in r]
-    check("checklist: bo'sh vazifa → 'chkadd' tugma", f"chkadd:{_ntid}" in _nkcbs)
-    _vcbs = [b.callback_data for r in handlers._checklist_view_kb(_ct).inline_keyboard for b in r]
-    check("checklist: view kb (toggle+del+add+orqaga)",
-          any(c.startswith(f"chk:{_ctid}:") for c in _vcbs)
-          and any(c.startswith(f"chkdel:{_ctid}:") for c in _vcbs)
-          and f"chkadd:{_ctid}" in _vcbs and f"taskopen:{_ctid}" in _vcbs)
-    check("checklist: handlerlar + FSM mavjud",
-          all(hasattr(handlers, n) for n in
-              ("cb_checklist_view", "cb_checklist_toggle", "cb_checklist_del",
-               "cb_checklist_add", "handle_checklist_add", "ChecklistAddFSM")))
-    check("checklist: empty → None (oxirgi bosqich o'chsa)",
-          (await database.update_task(_ntid, {"checklist": []})) is not None
-          or (await database.get_task(_ntid)).get("checklist") is None)
-    import pathlib as _plc2
-    _oc = (_plc2.Path(handlers.__file__).resolve().parent / "system_prompts" / "60_output_contract.md").read_text(encoding="utf-8")
-    check("checklist: output-contract'da hujjatlangan (LLM populate qila oladi)", "checklist" in _oc)
-
     print("\n── Sub-vazifa (to'liq bola-vazifa) ──")
     _pid = await database.create_task({"title": "Asosiy loyiha SUB", "priority": "P0"})
     _c1 = await database.create_task({"title": "Tahlil", "assignee": "A.Karimov",

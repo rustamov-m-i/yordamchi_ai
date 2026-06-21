@@ -332,7 +332,7 @@ async def init() -> None:
         if "assignee" not in task_cols:
             await db.execute("ALTER TABLE tasks ADD COLUMN assignee TEXT")
         for col in ("recurrence_rule", "recurrence_next_at", "recurrence_parent_id",
-                    "category", "checklist", "parent_id"):
+                    "category", "parent_id"):
             if col not in task_cols:
                 await db.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)")
@@ -373,32 +373,6 @@ async def _log_history(db, task_id: str, action: str, field: Optional[str] = Non
     )
 
 
-def _normalize_checklist(value) -> str | None:
-    """Normalize a checklist input → JSON string of [{"text":str,"done":bool}].
-    Accepts a list of strings, a list of {text,done} dicts, or a JSON string.
-    Returns None for empty/invalid (no checklist)."""
-    if not value:
-        return None
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (ValueError, TypeError):
-            return None
-    if not isinstance(value, list):
-        return None
-    items: list[dict] = []
-    for it in value:
-        if isinstance(it, str):
-            t = it.strip()
-            if t:
-                items.append({"text": t[:200], "done": False})
-        elif isinstance(it, dict):
-            t = str(it.get("text") or "").strip()
-            if t:
-                items.append({"text": t[:200], "done": bool(it.get("done"))})
-    return json.dumps(items, ensure_ascii=False) if items else None
-
-
 async def create_task(data: dict) -> str:
     task_id = new_id("t-")
     now = now_iso()
@@ -410,9 +384,9 @@ async def create_task(data: dict) -> str:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO tasks (id, title, description, deadline, priority, status, tags, category, assignee,
-                                  recurrence_rule, recurrence_next_at, recurrence_parent_id, checklist, parent_id,
+                                  recurrence_rule, recurrence_next_at, recurrence_parent_id, parent_id,
                                   source, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 data.get("title", "Vazifa"),
@@ -426,7 +400,6 @@ async def create_task(data: dict) -> str:
                 recurrence_rule,
                 recurrence_next_at,
                 data.get("recurrence_parent_id"),
-                _normalize_checklist(data.get("checklist")),
                 (data.get("parent_id") or None),
                 source,
                 now,
@@ -442,9 +415,6 @@ async def create_task(data: dict) -> str:
 async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
     if not data:
         return False
-    # Normalize checklist (list[str] | list[dict] | json-str) → canonical JSON string.
-    if "checklist" in data:
-        data = {**data, "checklist": _normalize_checklist(data["checklist"])}
     # Read old values first so we can log diffs.
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -458,7 +428,7 @@ async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
         changes: list[tuple[str, str, str]] = []  # (field, old, new)
         for key in (
             "title", "description", "deadline", "priority", "status", "source", "assignee",
-            "category", "recurrence_rule", "recurrence_next_at", "recurrence_parent_id", "checklist",
+            "category", "recurrence_rule", "recurrence_next_at", "recurrence_parent_id",
         ):
             if key in data:
                 if key == "recurrence_rule":

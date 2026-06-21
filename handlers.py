@@ -4669,41 +4669,6 @@ async def cb_new_type(query: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-def _parse_checklist(task: dict) -> list:
-    """Task's checklist as a list of {text, done}; [] if none/invalid."""
-    raw = task.get("checklist")
-    if not raw:
-        return []
-    try:
-        items = json.loads(raw) if isinstance(raw, str) else raw
-    except (ValueError, TypeError):
-        return []
-    return [i for i in items if isinstance(i, dict) and (i.get("text") or "").strip()]
-
-
-def _checklist_progress(task: dict) -> str:
-    """Compact 'done/total' for the card/button; '' when there's no checklist."""
-    items = _parse_checklist(task)
-    if not items:
-        return ""
-    return f"{sum(1 for i in items if i.get('done'))}/{len(items)}"
-
-
-def _format_checklist_block(task: dict) -> str:
-    """Progress bar + ☐/☑ items for the task card; '' when there's no checklist."""
-    items = _parse_checklist(task)
-    if not items:
-        return ""
-    done = sum(1 for i in items if i.get("done"))
-    total = len(items)
-    filled = round(5 * done / total)
-    bar = "▓" * filled + "░" * (5 - filled)
-    lines = [f"📋 Bosqichlar: {bar} {done}/{total}"]
-    for i in items:
-        lines.append(f"  {'☑' if i.get('done') else '☐'} {(i.get('text') or '').strip()}")
-    return "\n".join(lines)
-
-
 def _format_task_card(t: dict, idx: int = None, show_status: bool = True) -> str:
     """Compact task card for the main task drill-down screen."""
     badge = _task_badge(t)  # unified with the list — same dot for the same task
@@ -4726,10 +4691,6 @@ def _format_task_card(t: dict, idx: int = None, show_status: bool = True) -> str
         " · ".join(meta),
         f"⏰ Muddat: {deadline_label}",
     ]
-    _chk = _format_checklist_block(t)
-    if _chk:
-        out.append("")  # blank line — separate the checklist from the metadata
-        out.append(_chk)
     return "\n".join(out)
 
 
@@ -4765,10 +4726,6 @@ def _format_task_detail_card(t: dict, idx: int = None) -> str:
         lines.append(f"🏷 Teglar: {', '.join(tags)}")
     if t.get("recurrence_rule"):
         lines.append(f"🔁 Takroriy: {_format_recurrence_label(t.get('recurrence_rule'))}")
-    _chk = _format_checklist_block(t)
-    if _chk:
-        lines.append("")  # blank line — separate the checklist from the metadata
-        lines.append(_chk)
     return "\n".join(lines)
 
 
@@ -13950,16 +13907,9 @@ def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📅 +1 hafta", callback_data=f"snooze:{tid}:week"),
             InlineKeyboardButton(text="📅 Dushanba", callback_data=f"snooze:{tid}:monday"),
         ])
-    # Breakdown tools (top-level tasks only — depth-1 subtasks, no nesting):
-    #   🌳 Sub-vazifalar = real child tasks (own assignee/deadline/status/reminders)
-    #   📋 Bosqichlar    = lightweight checklist steps (no assignee/deadline)
+    # Breakdown into real child tasks (top-level only — depth-1, no nesting).
     if not task.get("parent_id"):
         rows.append([InlineKeyboardButton(text="🌳 Sub-vazifalar", callback_data=f"subview:{tid}")])
-    _prog = _checklist_progress(task)
-    if _prog:
-        rows.append([InlineKeyboardButton(text=f"📋 Bosqichlar ({_prog})", callback_data=f"chkview:{tid}")])
-    elif not task.get("parent_id"):
-        rows.append([InlineKeyboardButton(text="☑️ Bosqich qo'shish", callback_data=f"chkadd:{tid}")])
     # Destructive action on its own row, away from ✅/✏️ (misclick guard). It still
     # routes through cb_task_del_confirm, which asks before deleting.
     rows.append([
@@ -13967,135 +13917,6 @@ def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⬅️ Ro'yxatga", callback_data=back),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-class ChecklistAddFSM(StatesGroup):
-    awaiting = State()
-
-
-def _checklist_view_kb(task: dict) -> InlineKeyboardMarkup:
-    """Checklist view: a toggle button + 🗑 per item, then add + back-to-task."""
-    tid = task["id"]
-    rows: list = []
-    for i, it in enumerate(_parse_checklist(task)):
-        mark = "☑" if it.get("done") else "☐"
-        rows.append([
-            InlineKeyboardButton(text=f"{mark} {_truncate(it.get('text', ''), 32)}",
-                                 callback_data=f"chk:{tid}:{i}"),
-            InlineKeyboardButton(text="🗑", callback_data=f"chkdel:{tid}:{i}"),
-        ])
-    rows.append([InlineKeyboardButton(text="➕ Bosqich qo'shish", callback_data=f"chkadd:{tid}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Vazifaga", callback_data=f"taskopen:{tid}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-async def _render_checklist_view(query: CallbackQuery, task: dict) -> None:
-    items = _parse_checklist(task)
-    done = sum(1 for i in items if i.get("done"))
-    head = f"📋 **{(task.get('title') or 'Vazifa').strip()}** — bosqichlar"
-    body = f"{head}\n{done}/{len(items)} bajarildi" if items else f"{head}\n_Hali bosqich yo'q._"
-    try:
-        await query.message.edit_text(body, parse_mode="Markdown", reply_markup=_checklist_view_kb(task))
-    except TelegramBadRequest:
-        await _safe_answer(query.message, body, parse_mode="Markdown", reply_markup=_checklist_view_kb(task))
-
-
-@router.callback_query(F.data.startswith("chkview:"))
-async def cb_checklist_view(query: CallbackQuery) -> None:
-    task = await database.get_task(query.data.split(":", 1)[1])
-    if not task:
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    await query.answer()
-    await _render_checklist_view(query, task)
-
-
-@router.callback_query(F.data.startswith("chk:"))
-async def cb_checklist_toggle(query: CallbackQuery) -> None:
-    parts = query.data.split(":")
-    tid = parts[1]
-    try:
-        idx = int(parts[2])
-    except (IndexError, ValueError):
-        await query.answer()
-        return
-    task = await database.get_task(tid)
-    if not task:
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    items = _parse_checklist(task)
-    state_done = False
-    if 0 <= idx < len(items):
-        items[idx]["done"] = not items[idx].get("done")
-        state_done = items[idx]["done"]
-        await database.update_task(tid, {"checklist": items}, source="checklist")
-        task = await database.get_task(tid)
-    await query.answer("☑ bajarildi" if state_done else "☐ ochiq")
-    await _render_checklist_view(query, task)
-
-
-@router.callback_query(F.data.startswith("chkdel:"))
-async def cb_checklist_del(query: CallbackQuery) -> None:
-    parts = query.data.split(":")
-    tid = parts[1]
-    try:
-        idx = int(parts[2])
-    except (IndexError, ValueError):
-        await query.answer()
-        return
-    task = await database.get_task(tid)
-    if not task:
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    items = _parse_checklist(task)
-    if 0 <= idx < len(items):
-        items.pop(idx)
-        await database.update_task(tid, {"checklist": items}, source="checklist")
-        task = await database.get_task(tid)
-    await query.answer("🗑 O'chirildi")
-    await _render_checklist_view(query, task)
-
-
-@router.callback_query(F.data.startswith("chkadd:"))
-async def cb_checklist_add(query: CallbackQuery, state: FSMContext) -> None:
-    tid = query.data.split(":", 1)[1]
-    if not await database.get_task(tid):
-        await query.answer("Vazifa topilmadi", show_alert=True)
-        return
-    await state.set_state(ChecklistAddFSM.awaiting)
-    await state.update_data(tid=tid)
-    await query.answer()
-    await query.message.answer(
-        "➕ Bosqich matnini yozing (matn yoki ovoz). Bir nechta — har qatorga bittadan.")
-
-
-@router.message(StateFilter(ChecklistAddFSM.awaiting), F.text | F.voice)
-async def handle_checklist_add(message: Message, state: FSMContext, bot: Bot) -> None:
-    text = await _get_text_or_transcribe(message, bot=bot)
-    if text is None:
-        return
-    data = await state.get_data()
-    tid = data.get("tid")
-    await state.clear()
-    task = await database.get_task(tid) if tid else None
-    if not task:
-        await message.answer("Vazifa topilmadi.")
-        return
-    items = _parse_checklist(task)
-    added = 0
-    for line in (text or "").splitlines():
-        s = line.strip(" -•\t·")
-        if s:
-            items.append({"text": s[:200], "done": False})
-            added += 1
-    if not added:
-        await message.answer("Bo'sh — bekor qilindi.")
-        return
-    await database.update_task(tid, {"checklist": items}, source="checklist")
-    task = await database.get_task(tid)
-    total = len(_parse_checklist(task))
-    await message.answer(f"✅ {added} ta bosqich qo'shildi (jami {total}).",
-                         reply_markup=_checklist_view_kb(task))
 
 
 class SubtaskAddFSM(StatesGroup):
