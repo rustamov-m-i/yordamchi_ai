@@ -7436,6 +7436,16 @@ async def cb_task_open(query: CallbackQuery) -> None:
         return
     await query.answer()
     text = _format_task_card(task)
+    # Subtask summary (top-level tasks only) — real child tasks live under the parent.
+    if not task.get("parent_id"):
+        subs = await database.list_subtasks(tid)
+        if subs:
+            done = sum(1 for s in subs if s.get("status") in ("done", "cancelled"))
+            text += f"\n\n🌳 **Sub-vazifalar:** {done}/{len(subs)}"
+            for s in subs[:8]:
+                em = _STATUS_EMOJI.get(s.get("status", "todo"), "•")
+                who = (s.get("assignee") or "").strip()
+                text += f"\n  {em} {(s.get('title') or '—').strip()[:40]}" + (f" · 👤{who[:12]}" if who else "")
     try:
         await query.message.edit_text(text, parse_mode="Markdown",
                                        reply_markup=_task_card_kb_with_back(task))
@@ -13860,7 +13870,9 @@ def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
       Row 3: [🗑 O'chirish] [⬅️ Ro'yxatga]  ← destructive sits away from ✅ (misclick guard)
     Field edits + 👤 Ijrochi live under ✏️ Tahrir. 🗑 still goes through a confirm step."""
     tid = task["id"]
-    back = f"taskfilter:{_last_task_filter or 'active'}"
+    # A subtask's "back" returns to its parent's subtask view, not the flat list.
+    back = (f"subview:{task['parent_id']}" if task.get("parent_id")
+            else f"taskfilter:{_last_task_filter or 'active'}")
     is_done = task.get("status") == "done"
     if is_done:
         primary = InlineKeyboardButton(text="↺ Qaytarish", callback_data=f"reopen:{tid}")
@@ -13877,11 +13889,15 @@ def _task_card_kb_with_back(task: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📅 +1 hafta", callback_data=f"snooze:{tid}:week"),
             InlineKeyboardButton(text="📅 Dushanba", callback_data=f"snooze:{tid}:monday"),
         ])
-    # Checklist (bosqichlar): open the picker if any exist, else offer to add the first.
+    # Breakdown tools (top-level tasks only — depth-1 subtasks, no nesting):
+    #   🌳 Sub-vazifalar = real child tasks (own assignee/deadline/status/reminders)
+    #   📋 Bosqichlar    = lightweight checklist steps (no assignee/deadline)
+    if not task.get("parent_id"):
+        rows.append([InlineKeyboardButton(text="🌳 Sub-vazifalar", callback_data=f"subview:{tid}")])
     _prog = _checklist_progress(task)
     if _prog:
         rows.append([InlineKeyboardButton(text=f"📋 Bosqichlar ({_prog})", callback_data=f"chkview:{tid}")])
-    else:
+    elif not task.get("parent_id"):
         rows.append([InlineKeyboardButton(text="☑️ Bosqich qo'shish", callback_data=f"chkadd:{tid}")])
     # Destructive action on its own row, away from ✅/✏️ (misclick guard). It still
     # routes through cb_task_del_confirm, which asks before deleting.
@@ -14019,6 +14035,92 @@ async def handle_checklist_add(message: Message, state: FSMContext, bot: Bot) ->
     total = len(_parse_checklist(task))
     await message.answer(f"✅ {added} ta bosqich qo'shildi (jami {total}).",
                          reply_markup=_checklist_view_kb(task))
+
+
+class SubtaskAddFSM(StatesGroup):
+    awaiting = State()
+
+
+def _subtask_view_kb(parent_id: str, subs: list) -> InlineKeyboardMarkup:
+    """Subtask view: each child opens its full task card; plus add + back-to-parent."""
+    rows: list = []
+    for s in subs:
+        emoji = _STATUS_EMOJI.get(s.get("status", "todo"), "•")
+        bits = [_truncate((s.get("title") or "—").strip(), 28)]
+        if (s.get("assignee") or "").strip():
+            bits.append(f"👤{s['assignee'].strip()[:12]}")
+        rows.append([InlineKeyboardButton(text=f"{emoji} {' · '.join(bits)}",
+                                          callback_data=f"taskopen:{s['id']}")])
+    rows.append([InlineKeyboardButton(text="➕ Sub-vazifa", callback_data=f"subadd:{parent_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Vazifaga", callback_data=f"taskopen:{parent_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_subtask_view(query: CallbackQuery, parent: dict) -> None:
+    subs = await database.list_subtasks(parent["id"])
+    done = sum(1 for s in subs if s.get("status") in ("done", "cancelled"))
+    head = f"🌳 **{(parent.get('title') or 'Vazifa').strip()}** — sub-vazifalar"
+    body = f"{head}\n{done}/{len(subs)} bajarildi" if subs else f"{head}\n_Hali sub-vazifa yo'q._"
+    kb = _subtask_view_kb(parent["id"], subs)
+    try:
+        await query.message.edit_text(body, parse_mode="Markdown", reply_markup=kb)
+    except TelegramBadRequest:
+        await _safe_answer(query.message, body, parse_mode="Markdown", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("subview:"))
+async def cb_subtask_view(query: CallbackQuery) -> None:
+    parent = await database.get_task(query.data.split(":", 1)[1])
+    if not parent:
+        await query.answer("Vazifa topilmadi", show_alert=True)
+        return
+    await query.answer()
+    await _render_subtask_view(query, parent)
+
+
+@router.callback_query(F.data.startswith("subadd:"))
+async def cb_subtask_add(query: CallbackQuery, state: FSMContext) -> None:
+    pid = query.data.split(":", 1)[1]
+    if not await database.get_task(pid):
+        await query.answer("Vazifa topilmadi", show_alert=True)
+        return
+    await state.set_state(SubtaskAddFSM.awaiting)
+    await state.update_data(pid=pid)
+    await query.answer()
+    await query.message.answer(
+        "➕ Sub-vazifa nomini yozing (matn/ovoz). Ijrochi va muddatni keyin sub-vazifani "
+        "ochib «✏️ Tahrir»dan qo'shasiz. Bir nechta — har qatorga bittadan.")
+
+
+@router.message(StateFilter(SubtaskAddFSM.awaiting), F.text | F.voice)
+async def handle_subtask_add(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = await _get_text_or_transcribe(message, bot=bot)
+    if text is None:
+        return
+    data = await state.get_data()
+    pid = data.get("pid")
+    await state.clear()
+    parent = await database.get_task(pid) if pid else None
+    if not parent:
+        await message.answer("Vazifa topilmadi.")
+        return
+    added = 0
+    for line in (text or "").splitlines():
+        s = line.strip(" -•\t·")
+        if s:
+            await database.create_task({
+                "title": s[:200], "parent_id": pid,
+                "priority": parent.get("priority", "P2"), "source": "subtask",
+            })
+            added += 1
+    if not added:
+        await message.answer("Bo'sh — bekor qilindi.")
+        return
+    subs = await database.list_subtasks(pid)
+    await message.answer(
+        f"✅ {added} ta sub-vazifa qo'shildi (jami {len(subs)}). Ijrochi/muddat uchun "
+        f"sub-vazifani ochib «✏️ Tahrir».",
+        reply_markup=_subtask_view_kb(pid, subs))
 
 
 @router.callback_query()

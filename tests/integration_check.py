@@ -854,6 +854,33 @@ async def main():
     _oc = (_plc2.Path(handlers.__file__).resolve().parent / "system_prompts" / "60_output_contract.md").read_text(encoding="utf-8")
     check("checklist: output-contract'da hujjatlangan (LLM populate qila oladi)", "checklist" in _oc)
 
+    print("\n── Sub-vazifa (to'liq bola-vazifa) ──")
+    _pid = await database.create_task({"title": "Asosiy loyiha SUB", "priority": "P0"})
+    _c1 = await database.create_task({"title": "Tahlil", "assignee": "A.Karimov",
+                                      "deadline": "2026-06-25T10:00:00+05:00", "parent_id": _pid})
+    _c2 = await database.create_task({"title": "Yozish", "parent_id": _pid})
+    _subs = await database.list_subtasks(_pid)
+    check("subtask: list_subtasks → 2 bola", len(_subs) == 2)
+    check("subtask: bola o'z ijrochi+muddatiga ega",
+          any(s.get("assignee") == "A.Karimov" and s.get("deadline") for s in _subs))
+    _mainids = {t["id"] for t in await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=500)}
+    check("subtask: asosiy ro'yxatda takrorlanmaydi (parent_id IS NULL)",
+          _pid in _mainids and _c1 not in _mainids and _c2 not in _mainids)
+    _pcbs = [b.callback_data for r in handlers._task_card_kb_with_back(await database.get_task(_pid)).inline_keyboard for b in r]
+    check("subtask: ota kartasida 🌳 Sub-vazifalar tugma", f"subview:{_pid}" in _pcbs)
+    _ccbs = [b.callback_data for r in handlers._task_card_kb_with_back(await database.get_task(_c1)).inline_keyboard for b in r]
+    check("subtask: bola kartasida subview YO'Q + orqa→ota",
+          f"subview:{_c1}" not in _ccbs and f"subview:{_pid}" in _ccbs)
+    _vcbs = [b.callback_data for r in handlers._subtask_view_kb(_pid, _subs).inline_keyboard for b in r]
+    check("subtask: view (bola ochiladi + add + orqaga)",
+          f"taskopen:{_c1}" in _vcbs and f"subadd:{_pid}" in _vcbs and f"taskopen:{_pid}" in _vcbs)
+    check("subtask: handlerlar + FSM mavjud",
+          all(hasattr(handlers, n) for n in
+              ("cb_subtask_view", "cb_subtask_add", "handle_subtask_add", "SubtaskAddFSM")))
+    await database.delete_task(_pid)
+    check("subtask: cascade — ota o'chsa bolalar ham o'chadi",
+          (await database.get_task(_c1)) is None and (await database.get_task(_c2)) is None)
+
     print("\n── Batch-1 tuzatishlar: recurrence / cascade / NULL-end / bulk-count ──")
     from datetime import datetime as _dt2, timedelta as _td2
     _now2 = _dt2.now(database.TZ)

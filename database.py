@@ -331,9 +331,11 @@ async def init() -> None:
         task_cols = {row[1] for row in await cur.fetchall()}
         if "assignee" not in task_cols:
             await db.execute("ALTER TABLE tasks ADD COLUMN assignee TEXT")
-        for col in ("recurrence_rule", "recurrence_next_at", "recurrence_parent_id", "category", "checklist"):
+        for col in ("recurrence_rule", "recurrence_next_at", "recurrence_parent_id",
+                    "category", "checklist", "parent_id"):
             if col not in task_cols:
                 await db.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence ON tasks(recurrence_rule, recurrence_next_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category)")
 
@@ -408,9 +410,9 @@ async def create_task(data: dict) -> str:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO tasks (id, title, description, deadline, priority, status, tags, category, assignee,
-                                  recurrence_rule, recurrence_next_at, recurrence_parent_id, checklist,
+                                  recurrence_rule, recurrence_next_at, recurrence_parent_id, checklist, parent_id,
                                   source, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 data.get("title", "Vazifa"),
@@ -425,6 +427,7 @@ async def create_task(data: dict) -> str:
                 recurrence_next_at,
                 data.get("recurrence_parent_id"),
                 _normalize_checklist(data.get("checklist")),
+                (data.get("parent_id") or None),
                 source,
                 now,
                 now,
@@ -661,6 +664,12 @@ async def delete_task(task_id: str, source: str = "manual") -> bool:
         cur = await db.execute("SELECT title FROM tasks WHERE id = ?", (task_id,))
         row = await cur.fetchone()
         title = row["title"] if row else None
+        # Cascade to subtasks first (real child tasks) — drop their reminders + rows
+        # so deleting a parent removes its whole tree, no orphans left behind.
+        child_cur = await db.execute("SELECT id FROM tasks WHERE parent_id = ?", (task_id,))
+        for cr in await child_cur.fetchall():
+            await db.execute("DELETE FROM reminders WHERE task_id = ?", (cr["id"],))
+        await db.execute("DELETE FROM tasks WHERE parent_id = ?", (task_id,))
         cur = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount > 0:
             # Cascade — there is no FK ON DELETE, so drop linked reminders here to
@@ -794,7 +803,7 @@ async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50) -> 
             placeholders = ",".join("?" * len(status_in))
             cur = await db.execute(
                 f"""SELECT * FROM tasks
-                    WHERE status IN ({placeholders})
+                    WHERE status IN ({placeholders}) AND parent_id IS NULL
                     ORDER BY
                       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
                       CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
@@ -804,11 +813,27 @@ async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50) -> 
             )
         else:
             cur = await db.execute(
-                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM tasks WHERE parent_id IS NULL ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             )
         rows = await cur.fetchall()
         return [_row_to_task(r) for r in rows]
+
+
+async def list_subtasks(parent_id: str) -> list[dict]:
+    """Child tasks of a parent — ordered open-first, then priority. Real tasks
+    (own assignee/deadline/status/reminders); excluded from the flat list_tasks."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM tasks WHERE parent_id = ?
+               ORDER BY
+                 CASE status WHEN 'done' THEN 1 WHEN 'cancelled' THEN 2 ELSE 0 END,
+                 CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+                 created_at ASC""",
+            (parent_id,),
+        )
+        return [_row_to_task(r) for r in await cur.fetchall()]
 
 
 async def list_task_categories() -> list[dict]:
