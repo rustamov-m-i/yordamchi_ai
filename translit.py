@@ -179,6 +179,41 @@ _LATIN_TOKEN = re.compile(
 # "A.B.Karimov") and MUST transliterate — that's an executor's name, not a domain.
 _HAS_INNER_DOT = re.compile(r"[A-Za-z0-9][.@][a-z0-9]")
 
+# Multi-word PROPER NAMES built from everyday Uzbek words (project/campaign names
+# like "Pulli Gap"). The words individually ("pulli"=paid, "gap"=talk) MUST stay
+# transliterable, so they are recognised only as the whole phrase, kept Latin and
+# quoted. Add new names here (lowercase). Matched case-insensitively with flexible
+# spacing and an optional Uzbek NOUN suffix; a trailing \b prevents mid-word eats
+# ("Pulli gaplashdi" → 'gaplashdi' stays a verb and transliterates normally).
+_KEEP_PHRASES = ("pulli gap",)
+_PHRASE_SUFFIX = (r"(?:lar(?:i|ini|ida|ning|ga|dan)?|ni|ning|ga|da|dan|ka|qa|si|i|"
+                  r"miz|ngiz)?")
+_PHRASE_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(p).replace(r"\ ", r"\s+") for p in _KEEP_PHRASES)
+    + r")" + _PHRASE_SUFFIX + r"\b",
+    re.IGNORECASE,
+) if _KEEP_PHRASES else None
+
+# Combined matcher for to_cyrillic_pro: a known phrase (kept Latin) OR one Latin
+# token. Phrase is tried first so it wins over the single-token alternative.
+if _PHRASE_RE:
+    _CYR_SCAN = re.compile(
+        r"(?P<phrase>" + _PHRASE_RE.pattern + r")|(?P<tok>" + _LATIN_TOKEN.pattern + r")",
+        re.IGNORECASE,
+    )
+else:
+    _CYR_SCAN = re.compile(r"(?P<tok>" + _LATIN_TOKEN.pattern + r")")
+
+
+def _wrap_quote(m: "re.Match", quote: str) -> str:
+    """Wrap a phrase match in `quote`, unless it is already adjacent to a quote."""
+    s, i, j = m.string, m.start(), m.end()
+    before = s[i - 1] if i > 0 else ""
+    after = s[j] if j < len(s) else ""
+    if before in _QUOTE_CHARS or after in _QUOTE_CHARS:
+        return m.group(0)
+    return f"{quote}{m.group(0)}{quote}"
+
 
 def _brand_stem(tok: str, names_sorted: list) -> tuple | None:
     """If `tok` is a capitalized keep-set name followed by a lowercase Uzbek
@@ -229,7 +264,10 @@ def to_cyrillic_pro(text: str) -> str:
     """
     if not text:
         return text
-    return _LATIN_TOKEN.sub(lambda m: _to_cyr_token(m.group(0)), text)
+    return _CYR_SCAN.sub(
+        lambda m: m.group(0) if m.lastgroup == "phrase" else _to_cyr_token(m.group(0)),
+        text,
+    )
 
 
 def quote_names(text: str, quote: str = '"') -> str:
@@ -243,6 +281,10 @@ def quote_names(text: str, quote: str = '"') -> str:
     """
     if not text:
         return text
+
+    # Phrase pre-pass: quote known multi-word names ("Pulli Gap") as a unit.
+    if _PHRASE_RE:
+        text = _PHRASE_RE.sub(lambda m: _wrap_quote(m, quote), text)
 
     def _repl(m: "re.Match") -> str:
         tok = m.group(0)

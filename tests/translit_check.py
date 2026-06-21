@@ -137,6 +137,18 @@ def main() -> None:
     # false-positive guard: 'Europa' must NOT split on the 'eur' acronym
     check("no-split: Europa", pro("Europa bozori"), "Эуропа бозори")
 
+    print("\n── multi-word proper names kept Latin (Pulli Gap) ──")
+    check("phrase: quoted name stays Latin",
+          qp('"Pulli Gap" bo\'yicha shartnoma'), '"Pulli Gap" бўйича шартнома')
+    check("phrase: unquoted name gets quoted+Latin",
+          qp("Pulli Gap loyihasi"), '"Pulli Gap" лойиҳаси')
+    check("phrase: plural Pulli Gaplar", qp("Pulli Gaplar hisoboti"), '"Pulli Gaplar" ҳисоботи')
+    check("phrase: case suffix Pulli Gapni", qp("Pulli Gapni yakunlash"), '"Pulli Gapni" якунлаш')
+    # the constituent words MUST still transliterate on their own
+    check("word 'pulli' alone converts", pro("pulli xizmat"), "пулли хизмат")
+    check("word 'gap' alone converts", pro("muhim gap"), "муҳим гап")
+    check("verb 'gaplashdi' NOT frozen", pro("pulli gaplashdi"), "пулли гаплашди")
+
     print("\n── tech terms kept Latin (user request) ──")
     for term in ("FIFA", "LED", "mobile", "iframe", "online", "banner", "SMM",
                  "SEO", "target", "content", "reels", "stories", "website"):
