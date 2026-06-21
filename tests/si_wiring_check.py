@@ -478,6 +478,19 @@ async def main():
     check("O: _proactive_dependency_check metodi saqlangan (keyin qayta yoqsa bo'ladi)",
           hasattr(scheduler_module.YordamchiScheduler, "_proactive_dependency_check"))
 
+    print("\n[ P. Proaktiv digestlar faqat Dushanba–Juma (mon-fri) ]")
+    check("P: morning briefing mon-fri (08:00)",
+          'day_of_week="mon-fri", hour=8, minute=0' in _sched_src)
+    check("P: evening summary mon-fri (18:00)",
+          'day_of_week="mon-fri", hour=18, minute=0' in _sched_src)
+    check("P: delegation digest mon-fri (09:30)",
+          'day_of_week="mon-fri", hour=9, minute=30' in _sched_src)
+    check("P: apply_briefing reschedule ham mon-fri (≥5 marta)",
+          _sched_src.count('day_of_week="mon-fri"') >= 5)
+    check("P: follow-up (interval) dam-olishni o'tkazadi (weekday>=5)",
+          "weekday() >= 5" in _sched_src
+          and "weekday() >= 5" in _insp_n.getsource(scheduler_module.YordamchiScheduler._followup_check))
+
     print("\n" + "=" * 56)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
     if FAILED:

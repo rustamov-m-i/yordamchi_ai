@@ -100,13 +100,13 @@ class YordamchiScheduler:
         # call right after start() reschedules them with the user's settings.
         self.scheduler.add_job(
             self._morning_briefing,
-            CronTrigger(hour=8, minute=0, timezone=config.TIMEZONE),
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=config.TIMEZONE),
             id="morning_briefing",
             replace_existing=True,
         )
         self.scheduler.add_job(
             self._evening_summary,
-            CronTrigger(hour=18, minute=0, timezone=config.TIMEZONE),
+            CronTrigger(day_of_week="mon-fri", hour=18, minute=0, timezone=config.TIMEZONE),
             id="evening_summary",
             replace_existing=True,
         )
@@ -221,7 +221,7 @@ class YordamchiScheduler:
         # others that have been open too long. Pushes only when stale ones exist.
         self.scheduler.add_job(
             self._stale_delegation_digest,
-            CronTrigger(hour=9, minute=30, timezone=config.TIMEZONE),
+            CronTrigger(day_of_week="mon-fri", hour=9, minute=30, timezone=config.TIMEZONE),
             id="stale_delegation_digest",
             replace_existing=True,
         )
@@ -304,11 +304,11 @@ class YordamchiScheduler:
         )
         self.scheduler.reschedule_job(
             "morning_briefing",
-            trigger=CronTrigger(hour=morning_h, minute=morning_m, timezone=config.TIMEZONE),
+            trigger=CronTrigger(day_of_week="mon-fri", hour=morning_h, minute=morning_m, timezone=config.TIMEZONE),
         )
         self.scheduler.reschedule_job(
             "evening_summary",
-            trigger=CronTrigger(hour=evening_h, minute=evening_m, timezone=config.TIMEZONE),
+            trigger=CronTrigger(day_of_week="mon-fri", hour=evening_h, minute=evening_m, timezone=config.TIMEZONE),
         )
         logger.info("Briefings rescheduled from settings — morning %02d:%02d, evening %02d:%02d",
                     morning_h, morning_m, evening_h, evening_m)
@@ -391,9 +391,13 @@ class YordamchiScheduler:
         # entirely in those cases instead of paying to produce a message we'd drop.
         # (Fixed 22:00–08:00 sleep window is checked IN ADDITION to quiet hours,
         # which may be disabled in settings yet a 3 AM follow-up is still useless.)
-        hour = datetime.now(database.TZ).hour
+        now_local = datetime.now(database.TZ)
+        hour = now_local.hour
         if hour >= 22 or hour < 8:
             logger.info("Skipping follow-up check during sleep hours (%02d:00 local)", hour)
+            return
+        if now_local.weekday() >= 5:  # Sat/Sun — proactive nudges are workdays-only (Mon–Fri)
+            logger.info("Skipping follow-up check on weekend")
             return
         try:
             settings = await database.get_settings()
