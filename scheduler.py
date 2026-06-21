@@ -100,7 +100,7 @@ class YordamchiScheduler:
         # call right after start() reschedules them with the user's settings.
         self.scheduler.add_job(
             self._morning_briefing,
-            CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=config.TIMEZONE),
+            CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=config.TIMEZONE),
             id="morning_briefing",
             replace_existing=True,
         )
@@ -297,7 +297,7 @@ class YordamchiScheduler:
         """
         settings = await database.get_settings()
         morning_h, morning_m = self._parse_hhmm(
-            settings.get("morning_briefing_time", "08:00"), default=(8, 0)
+            settings.get("morning_briefing_time", "09:00"), default=(9, 0)
         )
         evening_h, evening_m = self._parse_hhmm(
             settings.get("evening_summary_time", "18:00"), default=(18, 0)

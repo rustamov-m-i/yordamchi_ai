@@ -801,7 +801,7 @@ def settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
     """Settings menu — actions + Back."""
     notif_on = settings.get("notifications_enabled", True)
     notif_label = "🔔 Bildirishnomalar: YOQ" if notif_on else "🔕 Bildirishnomalar: O'CHIQ"
-    morning_time = settings.get("morning_briefing_time", "08:00")
+    morning_time = settings.get("morning_briefing_time", "09:00")
     evening_time = settings.get("evening_summary_time", "18:00")
     quiet_on = settings.get("quiet_hours_enabled", False)
     qh_start = settings.get("quiet_hours_start", "22:00")
@@ -4258,7 +4258,7 @@ def _format_settings_summary(settings: dict) -> str:
     return (
         "⚙️ **SOZLAMALAR**\n\n"
         f"🔔 Bildirishnomalar: {'yoqilgan' if settings.get('notifications_enabled', True) else 'oʻchirilgan'}\n"
-        f"⏰ Ertalab brifing: `{settings.get('morning_briefing_time', '08:00')}`\n"
+        f"⏰ Ertalab brifing: `{settings.get('morning_briefing_time', '09:00')}`\n"
         f"🌙 Kechki yakun: `{settings.get('evening_summary_time', '18:00')}`\n"
         f"📞 Uchrashuv eslatmasi: `{settings.get('meeting_reminder_min', 15)} daq oldin`\n"
         f"📌 Vazifa eslatmasi: `{settings.get('task_reminder_hours', 2)} soat oldin`\n"

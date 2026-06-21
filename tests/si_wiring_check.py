@@ -479,8 +479,8 @@ async def main():
           hasattr(scheduler_module.YordamchiScheduler, "_proactive_dependency_check"))
 
     print("\n[ P. Proaktiv digestlar faqat Dushanba–Juma (mon-fri) ]")
-    check("P: morning briefing mon-fri (08:00)",
-          'day_of_week="mon-fri", hour=8, minute=0' in _sched_src)
+    check("P: morning briefing mon-fri (09:00)",
+          'day_of_week="mon-fri", hour=9, minute=0' in _sched_src)
     check("P: evening summary mon-fri (18:00)",
           'day_of_week="mon-fri", hour=18, minute=0' in _sched_src)
     check("P: delegation digest mon-fri (09:30)",

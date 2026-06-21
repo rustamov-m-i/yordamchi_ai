@@ -2552,7 +2552,7 @@ async def list_recent_corrections(limit: int = 10) -> list[dict]:
 DEFAULT_SETTINGS = {
     "notifications_enabled": True,
     "language": "uz",
-    "morning_briefing_time": "08:00",
+    "morning_briefing_time": "09:00",
     "evening_summary_time": "18:00",
     "meeting_reminder_min": 15,
     "task_reminder_hours": 2,
