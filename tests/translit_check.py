@@ -65,6 +65,30 @@ def main() -> None:
     check("unknown script → unchanged", translit.transliterate("salom", "xyz"), "salom")
     check("empty string", translit.transliterate("", "kiril"), "")
 
+    print("\n── to_cyrillic_pro() — brands/acronyms/codes kept Latin ──")
+    p = translit.to_cyrillic_pro
+    # Uzbek words still convert
+    check("plain Uzbek converts", p("Aktiv vazifalar"), "Актив вазифалар")
+    check("ALL CAPS Uzbek converts", p("AKTIV VAZIFALAR"), "АКТИВ ВАЗИФАЛАР")
+    check("oʻ/gʻ inside still convert", p("oʻquv gʻalaba"), "ўқув ғалаба")
+    # Brand names stay Latin (any casing)
+    check("brand: Agrobank", p("Agrobank rejasi"), "Agrobank режаси")
+    check("brand: VISA caps", p("VISA karta"), "VISA карта")
+    check("brand: HUMO + UzCard", p("HUMO va UzCard"), "HUMO ва UzCard")
+    check("acronym: KPI", p("KPI hisoboti"), "KPI ҳисоботи")
+    check("app: Telegram", p("Telegram bot"), "Telegram бот")
+    # Codes / numbers / URLs / emails stay verbatim
+    check("card code *9088", p("VISA *9088 karta"), "VISA *9088 карта")
+    check("version 4.6", p("Claude 4.6 versiya"), "Claude 4.6 версия")
+    check("domain humo.uz", p("humo.uz sayti"), "humo.uz сайти")
+    check("email kept", p("ali@bank.uz ga"), "ali@bank.uz га")
+    # Colon must split (not be swallowed as a code)
+    check("colon splits word", p("Hisobot: natija"), "Ҳисобот: натижа")
+    # 'it' (dog) is NOT in the keep-list → must convert (collision guard)
+    check("uzbek 'it' converts", p("it va mushuk"), "ит ва мушук")
+    check("empty string", p(""), "")
+    check("transliterate(cyr) uses pro", translit.transliterate("Agrobank reja", "kiril"), "Agrobank режа")
+
     print("\n── Round-trip (Latin→Cyrillic→Latin) ──")
     for w in ("ozbekiston", "shahar", "choy", "yaxshi", "xalq", "huquq", "marketing"):
         rt = la(c(w))

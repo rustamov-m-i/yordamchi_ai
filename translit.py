@@ -14,6 +14,8 @@ KNOWN LIMITS (the protocol UI keeps an edit path on purpose):
 Pure functions, no deps — safe to import anywhere.
 """
 
+import re
+
 # Apostrophe-like marks: oʻ/gʻ modifier AND the tutuq belgisi. We accept every
 # common variant a keyboard or copy-paste might produce.
 _APOS = "'’ʼ‘ʻ`´ʹ"
@@ -101,6 +103,58 @@ def to_cyrillic(text: str) -> str:
     return "".join(out)
 
 
+# ── Professional pass: keep brand names / acronyms / codes in Latin ──────────
+# Tokens whose Cyrillic transliteration would look wrong in a formal document.
+# Matched case-insensitively (so "Agrobank"/"AGROBANK"/"agrobank" all qualify).
+# Deliberately EXCLUDES anything that collides with a real Uzbek word
+# (e.g. "it" = dog, "ish", "or") so genuine Uzbek text still converts.
+_KEEP_LATIN = {
+    # local banks & payment systems
+    "agrobank", "humo", "uzcard", "visa", "mastercard", "maestro", "unionpay",
+    "swift", "click", "payme", "uzum", "anorbank", "kapitalbank", "ipoteka",
+    "octobank", "tbc", "paynet", "apelsin", "nbu", "sqb", "infinbank", "davr",
+    # software / apps / platforms
+    "telegram", "excel", "word", "powerpoint", "outlook", "pdf", "icloud",
+    "claude", "openai", "chatgpt", "whisper", "gmail", "zoom", "google",
+    "microsoft", "windows", "github", "android", "ios", "iphone", "macbook",
+    "youtube", "instagram", "facebook", "linkedin", "whatsapp", "viber",
+    "http", "https", "www",
+    # business acronyms & units (kept Latin in formal Uzbek writing)
+    "kpi", "crm", "erp", "api", "sla", "swot", "qr", "sms", "vip", "ceo",
+    "cfo", "coo", "cto", "usd", "uzs", "eur", "rub", "gb", "mb", "tb",
+}
+
+# A maximal run that STARTS with a Latin letter and may carry domain/code chars
+# (dot, @, +, _, -) and Uzbek apostrophes (oʻ/gʻ/tutuq) — but NOT ":" or "/", so
+# "Hisobot:" splits cleanly while "example.com" / "oʻquv" stay whole.
+_LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9.+_@" + _APOS + r"-]*")
+
+
+def _keep_latin_token(tok: str) -> bool:
+    """True if the token should stay in Latin (brand, acronym, code, URL, id)."""
+    if any(c.isdigit() for c in tok):      # *9088, model ids, "4.6", dates
+        return True
+    if any(c in ".@" for c in tok):        # domains, emails, code fragments
+        return True
+    core = tok.strip(_APOS + "-._").casefold()
+    return core in _KEEP_LATIN
+
+
+def to_cyrillic_pro(text: str) -> str:
+    """Professional Latin → Cyrillic for formal documents.
+
+    Transliterates Uzbek words but KEEPS brand names, acronyms, alphanumeric
+    codes, URLs and emails in Latin — so "Agrobank", "VISA *9088", "KPI" and
+    "humo.uz" survive intact while "Aktiv vazifalar" → "Актив вазифалар".
+    """
+    if not text:
+        return text
+    return _LATIN_TOKEN.sub(
+        lambda m: m.group(0) if _keep_latin_token(m.group(0)) else to_cyrillic(m.group(0)),
+        text,
+    )
+
+
 # Cyrillic → Latin (digraphs/special first). Soft sign is dropped; е→e (lossy).
 _C2L = [
     ("ў", "oʻ"), ("ғ", "gʻ"), ("ш", "sh"), ("ч", "ch"),
@@ -140,7 +194,7 @@ def transliterate(text: str, script: str) -> str:
     'latin'/'lotin'). Unknown script → text unchanged."""
     s = (script or "").strip().lower()
     if s in ("cyrillic", "cyril", "kiril", "krill", "cyr", "kr"):
-        return to_cyrillic(text)
+        return to_cyrillic_pro(text)
     if s in ("latin", "lotin", "lat", "lt"):
         return to_latin(text)
     return text

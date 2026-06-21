@@ -2830,7 +2830,9 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     if script == "cyr":
         import translit
         def _tr(s):
-            return translit.to_cyrillic(s) if isinstance(s, str) and s else s
+            # to_cyrillic_pro keeps brand names / acronyms / codes in Latin
+            # (Agrobank, VISA *9088, KPI, humo.uz) — professional Uzbek output.
+            return translit.to_cyrillic_pro(s) if isinstance(s, str) and s else s
     else:
         def _tr(s):
             return s
