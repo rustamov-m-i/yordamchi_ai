@@ -190,7 +190,8 @@ async def main():
         check("Export: Xulosa sarlavha + KPI",
               _wb["Xulosa"]["A1"].value == "VAZIFALAR — XULOSA"
               and "Jami" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext)
-        check("Export: sarlavha B1", _ws["B1"].value == "VAZIFALAR RO'YXATI")
+        check("Export: dinamik sarlavha B1 (doira)", "AKTIV VAZIFALAR" in (_ws["B1"].value or ""),
+              _ws["B1"].value)
         check("Export: header A3=№ B3=Vazifa", _ws["A3"].value == "№" and _ws["B3"].value == "Vazifa")
         check("Export: header Arial 14", _ws["B3"].font.name == "Arial" and int(_ws["B3"].font.sz) == 14)
         check("Export: Kategoriya ustuni (H)", _ws["H3"].value == "Kategoriya")
@@ -231,6 +232,44 @@ async def main():
     _fa_active = await handlers._fetch_tasks_for_export("active")
     check("_fetch_tasks_for_export('active') → done yo'q",
           all(t.get("status") in ("todo", "in_progress", "blocked") for t in _fa_active))
+
+    # ── Phase-2 eksport: ierarxik subtask + dinamik sarlavha + per-ijrochi "Ota vazifa" ──
+    _xp = await database.create_task({"title": "EXP_parent", "priority": "P0", "category": "Loyihalar"})
+    await database.create_task({"title": "EXP_child", "assignee": "EXP_Karimov",
+                                "deadline": "2026-07-01T10:00:00+05:00", "priority": "P1", "parent_id": _xp})
+
+    class _SubMsg:
+        chat = type("C", (), {"id": 1})()
+        cap: dict = {}
+        async def answer_document(self, file, caption=None, parse_mode=None, reply_markup=None):
+            _SubMsg.cap["b"] = file.data
+        async def answer(self, *a, **k):
+            _SubMsg.cap.setdefault("m", []).append(a)
+
+    _SubMsg.cap = {}
+    await handlers._send_tasks_export(_SubMsg())
+    try:
+        _hw = _lwb(_io.BytesIO(_SubMsg.cap["b"]))["Vazifalar"]
+        _hnums = [_hw.cell(row=r, column=1).value for r in range(4, 34)]
+        _htitles = [str(_hw.cell(row=r, column=2).value or "") for r in range(4, 34)]
+        check("export subtask: ierarxik 'N.M' raqamlash", any("." in str(n) for n in _hnums if n))
+        check("export subtask: '↳' bilan ichkariga surilgan", any(t.startswith("↳") for t in _htitles))
+    except Exception as e:
+        check("export subtask: ierarxik", False, f"{type(e).__name__}: {e}")
+
+    _SubMsg.cap = {}
+    await handlers._send_tasks_export(_SubMsg(), assignee="EXP_Karimov")
+    try:
+        _aw = _lwb(_io.BytesIO(_SubMsg.cap["b"]))["Vazifalar"]
+        check("export subtask: per-ijrochi 'Ota vazifa' ustuni",
+              _aw.cell(row=3, column=3).value == "Ota vazifa")
+        check("export subtask: sub-vazifa otasi ko'rsatilgan (EXP_parent)",
+              _aw.cell(row=4, column=3).value == "EXP_parent")
+        check("export subtask: per-ijrochi dinamik sarlavha (ism)",
+              "EXP_KARIMOV" in (_aw["B1"].value or ""), _aw["B1"].value)
+    except Exception as e:
+        check("export subtask: per-ijrochi", False, f"{type(e).__name__}: {e}")
+    await database.delete_task(_xp)
 
     class _StMsg:
         chat = type("C", (), {"id": 1})()
@@ -804,7 +843,7 @@ async def main():
           "ExpDone" in {t["title"] for t in await handlers._fetch_tasks_for_export("all")})
     import inspect as _iexp
     check("export default → aktiv (hammasi emas)",
-          '_fetch_tasks_for_export("active")' in _iexp.getsource(handlers._send_tasks_export))
+          '_fetch_tasks_for_export("active"' in _iexp.getsource(handlers._send_tasks_export))
     # OpenAI/Whisper ixtiyoriy — bot OpenAI kalitisiz ham ishlaydi (STT zaxirasi skip)
     import pathlib as _pl
     _root_dir = _pl.Path(handlers.__file__).resolve().parent

@@ -2717,6 +2717,25 @@ _EXPORT_FILTER_LABEL = {
     "important": "Muhim", "urgent": "Shoshilinch", "done": "Bajarilgan",
     "recurring": "Takroriy", "all": "Barchasi",
 }
+
+
+def _export_title(status, assignee) -> str:
+    """Dynamic Excel B1 title: department + scope — e.g. 'MARKETING BOSHQARMASI ·
+    AKTIV VAZIFALAR', '… · MUDDATI O'TGAN VAZIFALAR', '… · J.KOMILOV VAZIFALARI'."""
+    try:
+        import protocol_doc
+        dept = (protocol_doc.DEFAULTS.get("org_dept") or "").strip()
+    except Exception:
+        dept = ""
+    if assignee:
+        scope = f"{assignee.strip()} vazifalari"
+    elif status and status != "all":
+        scope = f"{_EXPORT_FILTER_LABEL.get(status, status)} vazifalar"
+    elif status == "all":
+        scope = "Barcha vazifalar"
+    else:
+        scope = "Aktiv vazifalar"
+    return (f"{dept} · {scope}" if dept else scope).upper()
 # /export <so'z> va ovoz: O'zbekcha status so'zi → kanonik filtr kaliti.
 _EXPORT_STATUS_WORDS = {
     "bajarilgan": "done", "bajarilganlar": "done", "yakunlangan": "done", "done": "done",
@@ -2730,24 +2749,26 @@ _EXPORT_STATUS_WORDS = {
 }
 
 
-async def _fetch_tasks_for_export(filt: str) -> list:
+async def _fetch_tasks_for_export(filt: str, include_subtasks: bool = False) -> list:
     """Status/filter kaliti → vazifalar (eksport uchun, cheklovsiz). Semantikasi
-    _render_tasks_for_filter bilan bir xil (izchillik)."""
+    _render_tasks_for_filter bilan bir xil (izchillik). include_subtasks=True —
+    per-ijrochi eksportда sub-vazifalarni ham qamrash uchun."""
+    inc = include_subtasks
     if filt == "active":
-        return await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000)
+        return await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000, include_subtasks=inc)
     if filt == "today":
         return await database.list_today_tasks()
     if filt == "overdue":
         return await database.list_overdue_tasks()
     if filt == "done":
-        return await database.list_tasks(status_in=["done"], limit=10000)
+        return await database.list_tasks(status_in=["done"], limit=10000, include_subtasks=inc)
     if filt in ("important", "urgent"):
-        act = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000)
+        act = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000, include_subtasks=inc)
         pset = ("P0", "P1") if filt == "important" else ("P0",)
         return [t for t in act if t.get("priority") in pset]
     if filt == "recurring":
         return await database.list_recurring_tasks(limit=10000)
-    return await database.list_tasks(limit=10000)  # all
+    return await database.list_tasks(limit=10000, include_subtasks=inc)  # all
 
 
 async def _send_tasks_export(message: Message, assignee: str | None = None,
@@ -2766,14 +2787,15 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         await message.answer("⚠️ Excel kutubxonasi (openpyxl) o'rnatilmagan.")
         return
 
+    _inc_sub = bool(assignee)  # per-assignee export is flat → include subtasks too
     if status == "all":
-        tasks = await database.list_tasks(limit=10000)  # explicit "hammasi" → everything
+        tasks = await database.list_tasks(limit=10000, include_subtasks=_inc_sub)  # "hammasi"
     elif status:
-        tasks = await _fetch_tasks_for_export(status)
+        tasks = await _fetch_tasks_for_export(status, include_subtasks=_inc_sub)
     else:
         # DEFAULT: active only (todo/in_progress/blocked) — old done/cancelled tasks
         # don't clutter the working file. Use "/export hammasi" for everything.
-        tasks = await _fetch_tasks_for_export("active")
+        tasks = await _fetch_tasks_for_export("active", include_subtasks=_inc_sub)
     if assignee:
         al = assignee.strip().lower()
         tasks = [t for t in tasks if (t.get("assignee") or "").strip().lower() == al]
@@ -2787,6 +2809,30 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
                              if _what else "📭 Eksport qilish uchun vazifa yo'q.")
         return
 
+    # ── Row model: hierarchical (top-level + indented subtasks 1.1) for a full/status
+    #    export; flat-with-"Ota vazifa" for a per-assignee export (subtasks shown with
+    #    their parent's name since the parent itself may belong to someone else). ──
+    flat_mode = bool(assignee)
+    export_rows: list = []  # (number_str, is_sub, parent_title, task)
+    if flat_mode:
+        _ptitles: dict = {}
+        for _t in tasks:
+            _pid = _t.get("parent_id")
+            if _pid and _pid not in _ptitles:
+                _p = await database.get_task(_pid)
+                _ptitles[_pid] = (_p.get("title") or "").strip() if _p else ""
+        for _i, _t in enumerate(tasks, 1):
+            export_rows.append((str(_i), bool(_t.get("parent_id")),
+                                _ptitles.get(_t.get("parent_id"), ""), _t))
+    else:
+        _i = 0
+        for _t in tasks:
+            _i += 1
+            export_rows.append((str(_i), False, "", _t))
+            for _j, _s in enumerate(await database.list_subtasks(_t["id"]), 1):
+                export_rows.append((f"{_i}.{_j}", True, "", _s))
+    row_tasks = [r[3] for r in export_rows]  # all task dicts (incl. subtasks) for Xulosa
+
     # ── Template style: clean document look — bold black title/header, hair-line
     #    borders, no fills (only the subtitle is shaded), a № column, real dates.
     #    Visible cols: №..Kategoriya; ID is the last, hidden column (round-trip). ──
@@ -2794,9 +2840,20 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     SUB = "F2F2F2"
     hair = Side(style="hair")
     grid = Border(left=hair, right=hair, top=hair, bottom=hair)
-    n_visible = len(_EXPORT_HEADERS)            # 8 visible (№ … Kategoriya)
-    id_col = n_visible + 1                       # 9 — hidden ID
-    last_col = get_column_letter(n_visible)      # "H"
+    # Per-assignee export is flat → add an "Ota vazifa" column so a subtask shows which
+    # project it belongs to. The hierarchical export indents subtasks under the parent.
+    headers = (["№", "Vazifa", "Ota vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya"]
+               if flat_mode else _EXPORT_HEADERS)
+    n_visible = len(headers)
+    id_col = n_visible + 1
+    last_col = get_column_letter(n_visible)
+    title_col = headers.index("Vazifa") + 1
+    deadline_col = headers.index("Muddat") + 1
+    prio_col = headers.index("Ustuvorlik") + 1
+    desc_col = headers.index("Izoh") + 1
+    ota_col = (headers.index("Ota vazifa") + 1) if flat_mode else None
+    left_cols = {title_col} | ({ota_col} if flat_mode else set())
+    wrap_cols = {title_col, desc_col} | ({ota_col} if flat_mode else set())
 
     wb = Workbook()
     ws = wb.active
@@ -2804,7 +2861,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
 
     ws.merge_cells(f"B1:{last_col}1")
     t1 = ws["B1"]
-    t1.value = "VAZIFALAR RO'YXATI"
+    t1.value = _export_title(status, assignee)
     t1.font = Font(name=ARIAL, size=18, bold=True, color="000000")
     t1.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
@@ -2812,7 +2869,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ws.merge_cells(f"B2:{last_col}2")
     t2 = ws["B2"]
     now_s = datetime.now(database.TZ).strftime("%d-%m-%Y %H:%M")
-    sub = f"Yaratilgan: {now_s}      Jami: {len(tasks)} ta vazifa"
+    sub = f"Yaratilgan: {now_s}      Jami: {len(export_rows)} ta"
     if status and status != "all":
         sub += f"      ·  Holat: {_EXPORT_FILTER_LABEL.get(status, status)}"
     if assignee:
@@ -2823,7 +2880,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     t2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 20
 
-    for i, h in enumerate(_EXPORT_HEADERS, 1):
+    for i, h in enumerate(headers, 1):
         c = ws.cell(row=3, column=i, value=h)
         c.font = Font(name=ARIAL, size=14, bold=True, color="000000")
         c.alignment = Alignment(horizontal="center", vertical="center")
@@ -2834,8 +2891,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     now_dt = datetime.now(database.TZ)
     OVERDUE_FILL = PatternFill("solid", fgColor="FDE7E9")  # light red — muddati o'tgan
     DONE_FILL = PatternFill("solid", fgColor="EFEFEF")     # grey — bajarilgan/bekor
-    for n, t in enumerate(tasks, start=1):
-        r = n + 3
+    for rn, (num, is_sub, ptitle, t) in enumerate(export_rows, start=1):
+        r = rn + 3
         _st = t.get("status", "todo")
         _is_done = _st in ("done", "cancelled")
         _overdue = False
@@ -2844,12 +2901,15 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
                 _overdue = datetime.fromisoformat(t["deadline"]).astimezone(database.TZ) < now_dt
             except (ValueError, TypeError):
                 _overdue = False
-        # Conditional row fill — instant visual triage in Excel.
         row_fill = DONE_FILL if _is_done else (OVERDUE_FILL if _overdue else None)
         base_color = "808080" if _is_done else "000000"
-        cells = [
-            n,
-            (t.get("title") or "").strip(),
+        title = (t.get("title") or "").strip()
+        if is_sub and not flat_mode:
+            title = "↳ " + title  # indent subtasks under the parent in hierarchical mode
+        vals = [num, title]
+        if flat_mode:
+            vals.append(ptitle if is_sub else "")
+        vals += [
             (t.get("assignee") or "").strip(),
             _export_date(t.get("deadline")),
             _PRIORITY_LABEL_UZ.get(t.get("priority", "P2"), "Rejadagi"),
@@ -2857,19 +2917,18 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             (t.get("description") or "").strip(),
             (t.get("category") or "").strip(),
         ]
-        for i, val in enumerate(cells, 1):
+        for i, val in enumerate(vals, 1):
             c = ws.cell(row=r, column=i, value=val)
-            _p0 = (i == 5 and t.get("priority") == "P0")  # Shoshilinch → red + bold
+            _p0 = (i == prio_col and t.get("priority") == "P0")  # Shoshilinch → red + bold
             c.font = Font(name=ARIAL, size=13, color=("C00000" if _p0 else base_color), bold=_p0)
             c.border = grid
             if row_fill:
                 c.fill = row_fill
-            left = (i == 2)  # only Vazifa is left-aligned; the rest centered
             c.alignment = Alignment(
-                horizontal="left" if left else "center",
-                vertical="center", wrap_text=(i in (2, 7)), indent=1 if left else 0,
+                horizontal="left" if i in left_cols else "center",
+                vertical="center", wrap_text=(i in wrap_cols), indent=1 if i in left_cols else 0,
             )
-            if i == 4 and val is not None:
+            if i == deadline_col and val is not None:
                 c.number_format = "DD-MM-YYYY"  # date only — no clock
         idc = ws.cell(row=r, column=id_col, value=t.get("id"))
         idc.font = Font(name=ARIAL, size=11, color="808080")
@@ -2878,18 +2937,20 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             idc.fill = row_fill
         ws.row_dimensions[r].height = 45
 
-    for col, w in zip("ABCDEFGH", [8.8, 61.8, 33.2, 31.5, 28.5, 23.3, 58.0, 22.0]):
-        ws.column_dimensions[col].width = w
+    widths = ([8.8, 50.0, 40.0, 30.0, 28.0, 26.0, 22.0, 50.0, 20.0] if flat_mode
+              else [8.8, 61.8, 33.2, 31.5, 28.5, 23.3, 58.0, 22.0])
+    for ci, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
     ws.column_dimensions[get_column_letter(id_col)].hidden = True  # ID — round-trip, hidden
     ws.freeze_panes = "A4"  # title + subtitle + header stay visible while scrolling
 
     # ── "Xulosa" — executive at-a-glance summary as the FIRST tab ──
     from collections import Counter
-    _stc = Counter(t.get("status", "todo") for t in tasks)
-    _prc = Counter(t.get("priority", "P2") for t in tasks)
-    _asc = Counter((t.get("assignee") or "—").strip() or "—" for t in tasks)
+    _stc = Counter(t.get("status", "todo") for t in row_tasks)
+    _prc = Counter(t.get("priority", "P2") for t in row_tasks)
+    _asc = Counter((t.get("assignee") or "—").strip() or "—" for t in row_tasks)
     _overdue_n = sum(
-        1 for t in tasks if t.get("deadline") and t.get("status") not in ("done", "cancelled")
+        1 for t in row_tasks if t.get("deadline") and t.get("status") not in ("done", "cancelled")
         and (lambda d: bool(d) and d < now_dt)(_parse_dt_safe(t.get("deadline"))))
     summ = wb.create_sheet("Xulosa", 0)
     summ.column_dimensions["A"].width = 30
@@ -2906,7 +2967,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     _hc = summ.cell(row=1, column=1, value="VAZIFALAR — XULOSA")
     _hc.font = Font(name=ARIAL, size=16, bold=True, color="1F3864")
     _rr = _sl(3, "Yaratilgan", now_s)
-    _rr = _sl(_rr, "Jami (eksport)", len(tasks), bold=True)
+    _rr = _sl(_rr, "Jami (eksport)", len(export_rows), bold=True)
     _rr = _sl(_rr, "Muddati o'tgan", _overdue_n, bold=True, color="C00000")
     _rr += 1
     _rr = _sl(_rr, "— HOLAT —", "", bold=True, color="1F3864")
@@ -2929,7 +2990,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     _tag_bits = ([status] if (status and status != "all") else []) + [(assignee or "hammasi")]
     tag = "_".join(_tag_bits).strip().replace(" ", "_").replace("/", "-")
     fname = f"vazifalar_{tag}_{datetime.now(database.TZ).strftime('%Y-%m-%d')}.xlsx"
-    cap = f"📤 **{len(tasks)} ta vazifa** eksport qilindi"
+    cap = f"📤 **{len(export_rows)} ta** eksport qilindi"
     _cap_bits = ([_EXPORT_FILTER_LABEL.get(status, status)] if (status and status != "all") else []) \
         + ([assignee] if assignee else [])
     if status is None:               # default scope is active-only — make it explicit
@@ -2942,7 +3003,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     # so the keyboard stays compact and no executor is silently dropped.
     root_kb = None
     if not assignee and not status:
-        has_asg = any((t.get("assignee") or "").strip() for t in tasks)
+        has_asg = any((t.get("assignee") or "").strip() for t in row_tasks)
         root_kb = _export_root_keyboard(has_asg)
     await message.answer_document(
         BufferedInputFile(buf.getvalue(), filename=fname), caption=cap,

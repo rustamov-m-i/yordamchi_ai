@@ -796,14 +796,19 @@ async def get_task(task_id: str) -> Optional[dict]:
         return _row_to_task(row) if row else None
 
 
-async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50) -> list[dict]:
+async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50,
+                     include_subtasks: bool = False) -> list[dict]:
+    # By default the flat list shows only top-level tasks (subtasks live under their
+    # parent). include_subtasks=True drops that filter — used by per-assignee export.
+    sub_clause = "" if include_subtasks else "parent_id IS NULL"
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         if status_in:
             placeholders = ",".join("?" * len(status_in))
+            where = f"status IN ({placeholders})" + (f" AND {sub_clause}" if sub_clause else "")
             cur = await db.execute(
                 f"""SELECT * FROM tasks
-                    WHERE status IN ({placeholders}) AND parent_id IS NULL
+                    WHERE {where}
                     ORDER BY
                       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
                       CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
@@ -812,8 +817,9 @@ async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50) -> 
                 (*status_in, limit),
             )
         else:
+            where = f"WHERE {sub_clause}" if sub_clause else ""
             cur = await db.execute(
-                "SELECT * FROM tasks WHERE parent_id IS NULL ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             )
         rows = await cur.fetchall()
