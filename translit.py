@@ -69,6 +69,10 @@ def to_cyrillic(text: str) -> str:
         for lat, cyr in _L2C_DIGRAPHS:
             seg = text[i:i + len(lat)]
             if seg.lower() == lat:
+                # "yo'" = y + oʻ (ў), NOT yo (ё) + ʼ: the apostrophe binds the o.
+                # Skip the digraph so y→й then oʻ→ў give "йў" (yoʻl→йўл, yoʻq→йўқ).
+                if lat == "yo" and i + 2 < n and text[i + 2] in _APOS:
+                    break
                 out.append(_cased(seg, cyr))
                 i += len(lat)
                 matched = True
