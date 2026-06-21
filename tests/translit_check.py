@@ -116,6 +116,10 @@ def main() -> None:
     check("period: two sentences", pro("Reja tayyor. Yangi reja."), "Режа тайёр. Янги режа.")
     check("period: brand+period quotes+converts", qp("Agrobank uchun reja."), '"Agrobank" учун режа.')
     check("domain still kept", pro("humo.uz sayti"), "humo.uz сайти")
+    # name initials with a dot must transliterate (NOT be mistaken for a domain)
+    check("name initial: J.Komilov", pro("J.Komilov"), "Ж.Комилов")
+    check("name initial: A.B.Karimov", pro("A.B.Karimov"), "А.Б.Каримов")
+    check("email still kept", pro("ali@bank.uz ga"), "ali@bank.uz га")
     # (2) inflected (suffixed) brands/acronyms keep the stem Latin
     check("suffix: Excelda → Excelда", pro("Excelda hisobot"), "Excelда ҳисобот")
     check("suffix: KPI-larni kept", pro("KPI-larni belgilash"), "KPI-ларни белгилаш")

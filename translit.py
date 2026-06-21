@@ -162,8 +162,11 @@ _LATIN_TOKEN = re.compile(
     r"[A-Za-z][A-Za-z0-9+_" + _APOS + r"-]*"
     r"(?:[.@][A-Za-z0-9][A-Za-z0-9+_" + _APOS + r"-]*)*"
 )
-# Internal '.'/'@' (alnum on BOTH sides) = real domain/email/code → keep in Latin.
-_HAS_INNER_DOT = re.compile(r"[A-Za-z0-9][.@][A-Za-z0-9]")
+# Internal '.'/'@' that looks like a real domain/email/code → keep in Latin. The
+# char AFTER the dot/@ must be LOWERCASE (or a digit): domains/TLDs are lowercase
+# ("humo.uz", "a@b.com"), whereas a name initial is uppercase ("J.Komilov",
+# "A.B.Karimov") and MUST transliterate — that's an executor's name, not a domain.
+_HAS_INNER_DOT = re.compile(r"[A-Za-z0-9][.@][a-z0-9]")
 
 
 def _brand_stem(tok: str, names_sorted: list) -> tuple | None:
