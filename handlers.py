@@ -2645,8 +2645,17 @@ async def cmd_export(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("exportby:"))
 async def cb_export_by(query: CallbackQuery) -> None:
-    """Quick per-assignee export (button under the full export)."""
-    assignee = query.data.split(":", 1)[1]
+    """Quick per-assignee export. callback_data carries the assignee INDEX into
+    _export_assignee_names() (byte-safe); falls back to a raw name for any legacy
+    keyboard still in a chat."""
+    raw = query.data.split(":", 1)[1]
+    try:
+        assignee = (await _export_assignee_names())[int(raw)]
+    except ValueError:
+        assignee = raw  # legacy raw-name callback
+    except IndexError:
+        await query.answer("Ijrochi topilmadi", show_alert=True)
+        return
     await query.answer(f"📤 {assignee}…")
     await _send_tasks_export(query.message, assignee=assignee)
 
@@ -2662,12 +2671,20 @@ async def cb_export_status(query: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("exportcyr"))
 async def cb_export_cyr(query: CallbackQuery) -> None:
     """Re-export in Uzbek Cyrillic, preserving the current scope:
-    'exportcyr' (default active) | 'exportcyr:who:<name>' | 'exportcyr:st:<status>'."""
+    'exportcyr' (default active) | 'exportcyr:wi:<idx>' (assignee index) |
+    'exportcyr:st:<status>' | legacy 'exportcyr:who:<name>'."""
     parts = (query.data or "").split(":", 2)
     kind = parts[1] if len(parts) > 1 else ""
     val = parts[2] if len(parts) > 2 else ""
     await query.answer("🔤 Krillcha…")
-    if kind == "who" and val:
+    if kind == "wi" and val:
+        try:
+            name = (await _export_assignee_names())[int(val)]
+            await _send_tasks_export(query.message, assignee=name, script="cyr")
+            return
+        except (ValueError, IndexError):
+            pass
+    if kind == "who" and val:          # legacy raw-name callback (back-compat)
         await _send_tasks_export(query.message, assignee=val, script="cyr")
     elif kind == "st" and val:
         await _send_tasks_export(query.message, status=val, script="cyr")
@@ -2699,11 +2716,15 @@ def _export_who_keyboard(names: list, page: int) -> InlineKeyboardMarkup:
     """Paginated assignee picker — shows ALL executors across pages (no 8-cap drop)."""
     total = max(1, (len(names) + _EXPORT_WHO_PER_PAGE - 1) // _EXPORT_WHO_PER_PAGE)
     page = max(0, min(page, total - 1))
-    chunk = names[page * _EXPORT_WHO_PER_PAGE:(page + 1) * _EXPORT_WHO_PER_PAGE]
+    start = page * _EXPORT_WHO_PER_PAGE
+    chunk = names[start:start + _EXPORT_WHO_PER_PAGE]
     rows: list = []
     r: list = []
-    for nm in chunk:
-        r.append(InlineKeyboardButton(text=f"👤 {nm}", callback_data=f"exportby:{nm}"[:64]))
+    for off, nm in enumerate(chunk):
+        # callback carries the INDEX, not the name — Telegram caps callback_data at
+        # 64 BYTES, and a Cyrillic/long patronymic would overflow (crash) or be
+        # truncated mid-name (wrong scope). The index resolves back via the list.
+        r.append(InlineKeyboardButton(text=f"👤 {nm}"[:64], callback_data=f"exportby:{start + off}"))
         if len(r) == 2:
             rows.append(r)
             r = []
@@ -2723,8 +2744,10 @@ def _export_who_keyboard(names: list, page: int) -> InlineKeyboardMarkup:
 
 
 async def _export_assignee_names() -> list:
-    """Distinct assignees from the export scope (active tasks), sorted."""
-    tasks = await _fetch_tasks_for_export("active")
+    """Distinct assignees in the active export scope, INCLUDING subtask assignees
+    (the per-assignee export pulls subtasks too, so someone who only owns subtasks
+    must still appear in the picker and resolve by index)."""
+    tasks = await _fetch_tasks_for_export("active", include_subtasks=True)
     return sorted({(t.get("assignee") or "").strip() for t in tasks if (t.get("assignee") or "").strip()})
 
 
@@ -3071,11 +3094,21 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         has_asg = any((t.get("assignee") or "").strip() for t in row_tasks)
         root_kb = _export_root_keyboard(has_asg)
     elif script != "cyr":
-        # Filtered Latin export → offer the SAME scope in Cyrillic (scope carried
-        # in the callback so names/statuses transliterate too, not just "all tasks").
-        _cyr_cb = (f"exportcyr:who:{assignee}" if assignee else f"exportcyr:st:{status}")[:64]
-        root_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔤 Krillcha versiya", callback_data=_cyr_cb)]])
+        # Filtered Latin export → offer the SAME scope in Cyrillic. Carry the scope
+        # byte-safely: assignee as an INDEX (names overflow the 64-byte callback
+        # limit), status as its short ASCII key. If the assignee isn't in the
+        # active list (e.g. a done-only filter), skip the button rather than risk
+        # a wrong/empty re-export.
+        _cyr_cb = None
+        if assignee:
+            _anames = await _export_assignee_names()
+            if assignee in _anames:
+                _cyr_cb = f"exportcyr:wi:{_anames.index(assignee)}"
+        else:
+            _cyr_cb = f"exportcyr:st:{status}"
+        if _cyr_cb:
+            root_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔤 Krillcha versiya", callback_data=_cyr_cb)]])
     await message.answer_document(
         BufferedInputFile(buf.getvalue(), filename=fname), caption=cap,
         parse_mode="Markdown", reply_markup=root_kb,

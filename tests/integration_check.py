@@ -289,11 +289,15 @@ async def main():
     await handlers._send_tasks_export(_SubMsg(), assignee="EXP_Karimov")
     _fkb = _SubMsg.cap.get("kb")
     _fcbs = [b.callback_data for r in _fkb.inline_keyboard for b in r] if _fkb else []
-    check("export: filtrlangan eksportда 'Krillcha' tugma (scope bilan)",
-          any(str(c).startswith("exportcyr:who:") for c in _fcbs), _fcbs)
-    # Click that Cyrillic button → assignee name must be transliterated, not Latin
+    _cyr_btn = next((str(c) for c in _fcbs if str(c).startswith("exportcyr:")), None)
+    check("export: filtrlangan eksportда 'Krillcha' tugma (indeks-scope bilan)",
+          _cyr_btn is not None and _cyr_btn.startswith("exportcyr:wi:"), _fcbs)
+    # callback_data must be byte-safe (≤64 bytes) even for Cyrillic/long names
+    check("export: krill callback ≤64 bayt",
+          _cyr_btn is not None and len(_cyr_btn.encode()) <= 64, _cyr_btn)
+    # Click that Cyrillic button (real callback) → assignee must be transliterated
     class _CyrQ:
-        data = "exportcyr:who:EXP_Karimov"
+        data = _cyr_btn or "exportcyr"
         message = _SubMsg()
         async def answer(self, *a, **k): pass
     _SubMsg.cap = {}

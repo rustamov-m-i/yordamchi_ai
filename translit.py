@@ -118,13 +118,18 @@ def to_cyrillic(text: str) -> str:
 _QUOTE_NAMES = {
     # local banks & payment systems
     "agrobank", "humo", "uzcard", "visa", "mastercard", "maestro", "unionpay",
-    "swift", "click", "payme", "uzum", "anorbank", "kapitalbank", "ipoteka",
-    "octobank", "tbc", "paynet", "apelsin", "nbu", "sqb", "infinbank", "davr",
+    "swift", "click", "payme", "anorbank", "kapitalbank",
+    "octobank", "tbc", "paynet", "nbu", "sqb", "infinbank",
     # software / apps / platforms (proper-noun products)
     "telegram", "excel", "word", "powerpoint", "outlook", "icloud", "claude",
     "openai", "chatgpt", "whisper", "gmail", "zoom", "google", "microsoft",
     "windows", "github", "iphone", "macbook", "youtube", "instagram",
     "facebook", "linkedin", "whatsapp", "viber",
+    # NOTE: deliberately NOT here — they are everyday Uzbek words that would be
+    # wrongly frozen/quoted far more often than they name the brand:
+    #   davr (era/period), ipoteka (mortgage), uzum (grape), apelsin (orange).
+    # The bank brands "Davr"/"Ipoteka-bank"/"Uzum"/"Apelsin" are left to the
+    # manual-edit path. Add the full multi-token brand if ever needed.
 }
 _KEEP_LATIN_ONLY = {
     "pdf", "http", "https", "www", "android", "ios",
@@ -134,25 +139,69 @@ _KEEP_LATIN_ONLY = {
 }
 _KEEP_LATIN = _QUOTE_NAMES | _KEEP_LATIN_ONLY
 
+# Names eligible for STEM matching of inflected forms (Agrobankda, Excelга,
+# KPI-larni). 2-letter entries (gb/mb/tb/qr) are excluded — too short to prefix
+# real Uzbek words safely; they only match in their bare form.
+_KEEP_SORTED = sorted((n for n in _KEEP_LATIN if len(n) >= 3), key=len, reverse=True)
+_QUOTE_SORTED = sorted((n for n in _QUOTE_NAMES if len(n) >= 3), key=len, reverse=True)
+# A trailing lowercase Uzbek inflection: -da, -ning, -ga, -larni, optionally
+# hyphen-led for acronyms (KPI-larni). Lowercase only → never eats a new word.
+_INFLECTION = re.compile(r"-?[a-z]+")
+
 # Quote-like marks already in the source — used to avoid double-quoting a name.
 # A SET (not a str): membership of an empty string in a str is always True, which
 # would wrongly suppress quoting for a name at the very start/end of a cell.
 _QUOTE_CHARS = frozenset("\"«»“”„‘’" + _APOS)
 
-# A maximal run that STARTS with a Latin letter and may carry domain/code chars
-# (dot, @, +, _, -) and Uzbek apostrophes (oʻ/gʻ/tutuq) — but NOT ":" or "/", so
-# "Hisobot:" splits cleanly while "example.com" / "oʻquv" stay whole.
-_LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9.+_@" + _APOS + r"-]*")
+# A run that STARTS with a Latin letter, carrying inner code chars (+ _ - and the
+# Uzbek apostrophes oʻ/gʻ/tutuq) — but '.'/'@' are allowed ONLY as a domain/email
+# tail (a dot/at that is immediately followed by an alphanumeric). This is the key
+# fix that stops a sentence-final "bajarildi." from swallowing its period and
+# being mistaken for a domain, while "humo.uz" / "a@b.com" still match whole.
+_LATIN_TOKEN = re.compile(
+    r"[A-Za-z][A-Za-z0-9+_" + _APOS + r"-]*"
+    r"(?:[.@][A-Za-z0-9][A-Za-z0-9+_" + _APOS + r"-]*)*"
+)
+# Internal '.'/'@' (alnum on BOTH sides) = real domain/email/code → keep in Latin.
+_HAS_INNER_DOT = re.compile(r"[A-Za-z0-9][.@][A-Za-z0-9]")
+
+
+def _brand_stem(tok: str, names_sorted: list) -> tuple | None:
+    """If `tok` is a capitalized keep-set name followed by a lowercase Uzbek
+    suffix (Agrobankda, Excelga, KPI-larni), return (latin_stem, suffix); else
+    None. Only proper-noun-cased stems qualify, so a lowercase common word that
+    merely starts with a brand never false-matches; 3-letter names must be
+    ALL-CAPS acronyms (so "KPI-larni" splits but "Europa" does not via "eur")."""
+    cf = tok.casefold()
+    for n in names_sorted:
+        if len(tok) > len(n) and cf.startswith(n):
+            stem, suffix = tok[:len(n)], tok[len(n):]
+            if not _INFLECTION.fullmatch(suffix):
+                continue
+            if not (stem[0].isupper() or stem.isupper()):
+                continue
+            if len(n) < 4 and not stem.isupper():
+                continue
+            return stem, suffix
+    return None
 
 
 def _keep_latin_token(tok: str) -> bool:
-    """True if the token should stay in Latin (brand, acronym, code, URL, id)."""
-    if any(c.isdigit() for c in tok):      # *9088, model ids, "4.6", dates
+    """True if the WHOLE token should stay in Latin (brand, acronym, code, id)."""
+    if any(c.isdigit() for c in tok):       # *9088, model ids, "v4.6"
         return True
-    if any(c in ".@" for c in tok):        # domains, emails, code fragments
+    if _HAS_INNER_DOT.search(tok):          # humo.uz, a@b.com (NOT "word.")
         return True
-    core = tok.strip(_APOS + "-._").casefold()
-    return core in _KEEP_LATIN
+    return tok.strip(_APOS + "-._").casefold() in _KEEP_LATIN
+
+
+def _to_cyr_token(tok: str) -> str:
+    if _keep_latin_token(tok):
+        return tok
+    split = _brand_stem(tok, _KEEP_SORTED)  # Excelda → keep "Excel", convert "da"
+    if split:
+        return split[0] + to_cyrillic(split[1])
+    return to_cyrillic(tok)
 
 
 def to_cyrillic_pro(text: str) -> str:
@@ -160,19 +209,18 @@ def to_cyrillic_pro(text: str) -> str:
 
     Transliterates Uzbek words but KEEPS brand names, acronyms, alphanumeric
     codes, URLs and emails in Latin — so "Agrobank", "VISA *9088", "KPI" and
-    "humo.uz" survive intact while "Aktiv vazifalar" → "Актив вазифалар".
+    "humo.uz" survive intact while "Aktiv vazifalar." → "Актив вазифалар.".
+    Inflected brands keep the stem Latin and convert only the suffix
+    ("Excelda" → "Excelда", "KPI-larni" → "KPI-ларни").
     """
     if not text:
         return text
-    return _LATIN_TOKEN.sub(
-        lambda m: m.group(0) if _keep_latin_token(m.group(0)) else to_cyrillic(m.group(0)),
-        text,
-    )
+    return _LATIN_TOKEN.sub(lambda m: _to_cyr_token(m.group(0)), text)
 
 
 def quote_names(text: str, quote: str = '"') -> str:
     """Wrap recognized brand / organization / product names in `quote` marks,
-    per the formal-Uzbek norm: Agrobank → "Agrobank".
+    per the formal-Uzbek norm: Agrobank → "Agrobank", Agrobankning → "Agrobank"ning.
 
     Only proper nouns in _QUOTE_NAMES are touched — acronyms (KPI), units (USD),
     codes (*9088), URLs/emails and already-quoted names are left untouched
@@ -184,16 +232,19 @@ def quote_names(text: str, quote: str = '"') -> str:
 
     def _repl(m: "re.Match") -> str:
         tok = m.group(0)
-        if any(c.isdigit() for c in tok) or any(c in ".@" for c in tok):
+        if any(c.isdigit() for c in tok) or _HAS_INNER_DOT.search(tok):
             return tok  # URL / email / code — never a quotable plain name
-        if tok.strip(_APOS + "-._").casefold() not in _QUOTE_NAMES:
-            return tok
         s, i, j = m.string, m.start(), m.end()
         before = s[i - 1] if i > 0 else ""
         after = s[j] if j < len(s) else ""
         if before in _QUOTE_CHARS or after in _QUOTE_CHARS:
             return tok  # already quoted — don't double it
-        return f"{quote}{tok}{quote}"
+        if tok.strip(_APOS + "-._").casefold() in _QUOTE_NAMES:
+            return f"{quote}{tok}{quote}"
+        split = _brand_stem(tok, _QUOTE_SORTED)  # "Agrobankning" → "Agrobank"ning
+        if split:
+            return f"{quote}{split[0]}{quote}{split[1]}"
+        return tok
 
     return _LATIN_TOKEN.sub(_repl, text)
 

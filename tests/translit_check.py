@@ -108,6 +108,26 @@ def main() -> None:
     check("quote+cyr pipeline",
           translit.to_cyrillic_pro(q("Agrobank rejasi")), '"Agrobank" режаси')
 
+    print("\n── AUDIT regressions (to_cyrillic_pro + quote_names) ──")
+    pro = translit.to_cyrillic_pro
+    qp = lambda s: translit.to_cyrillic_pro(translit.quote_names(s))  # noqa: E731
+    # (1) sentence-final period must NOT freeze the last word in Latin
+    check("period: 'bajarildi.' converts", pro("Vazifa bajarildi."), "Вазифа бажарилди.")
+    check("period: two sentences", pro("Reja tayyor. Yangi reja."), "Режа тайёр. Янги режа.")
+    check("period: brand+period quotes+converts", qp("Agrobank uchun reja."), '"Agrobank" учун режа.')
+    check("domain still kept", pro("humo.uz sayti"), "humo.uz сайти")
+    # (2) inflected (suffixed) brands/acronyms keep the stem Latin
+    check("suffix: Excelda → Excelда", pro("Excelda hisobot"), "Excelда ҳисобот")
+    check("suffix: KPI-larni kept", pro("KPI-larni belgilash"), "KPI-ларни белгилаш")
+    check("suffix: brand quoted+suffix", qp("Agrobankning mahsuloti"), '"Agrobank"нинг маҳсулоти')
+    check("suffix: lowercase common word converts", pro("internetda ishlash"), "интернетда ишлаш")
+    # (3) removed dictionary-word collisions now transliterate
+    check("collision: davr (era)", qp("Yangi davr boshlandi"), "Янги давр бошланди")
+    check("collision: ipoteka (mortgage)", qp("Ipoteka krediti"), "Ипотека кредити")
+    check("collision: uzum (grape)", qp("Uzum bozorda"), "Узум бозорда")
+    # false-positive guard: 'Europa' must NOT split on the 'eur' acronym
+    check("no-split: Europa", pro("Europa bozori"), "Эуропа бозори")
+
     print("\n── Round-trip (Latin→Cyrillic→Latin) ──")
     for w in ("ozbekiston", "shahar", "choy", "yaxshi", "xalq", "huquq", "marketing"):
         rt = la(c(w))
