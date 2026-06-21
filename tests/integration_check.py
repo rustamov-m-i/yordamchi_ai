@@ -243,6 +243,7 @@ async def main():
         cap: dict = {}
         async def answer_document(self, file, caption=None, parse_mode=None, reply_markup=None):
             _SubMsg.cap["b"] = file.data
+            _SubMsg.cap["kb"] = reply_markup
         async def answer(self, *a, **k):
             _SubMsg.cap.setdefault("m", []).append(a)
 
@@ -282,6 +283,30 @@ async def main():
     _rkcbs = [b.callback_data for r in handlers._export_root_keyboard(True).inline_keyboard for b in r]
     check("export krill: root kb 'exportcyr' tugma + cb",
           "exportcyr" in _rkcbs and hasattr(handlers, "cb_export_cyr"))
+    # FILTERED export must also offer Cyrillic, carrying its scope in the callback
+    # (regression: per-ijrochi/status eksportlar lotincha qolib ketardi).
+    _SubMsg.cap = {}
+    await handlers._send_tasks_export(_SubMsg(), assignee="EXP_Karimov")
+    _fkb = _SubMsg.cap.get("kb")
+    _fcbs = [b.callback_data for r in _fkb.inline_keyboard for b in r] if _fkb else []
+    check("export: filtrlangan eksportда 'Krillcha' tugma (scope bilan)",
+          any(str(c).startswith("exportcyr:who:") for c in _fcbs), _fcbs)
+    # Click that Cyrillic button → assignee name must be transliterated, not Latin
+    class _CyrQ:
+        data = "exportcyr:who:EXP_Karimov"
+        message = _SubMsg()
+        async def answer(self, *a, **k): pass
+    _SubMsg.cap = {}
+    await handlers.cb_export_cyr(_CyrQ())
+    try:
+        _fw = _lwb(_io.BytesIO(_SubMsg.cap["b"]))["Vazifalar"]
+        _hdr = [_fw.cell(row=3, column=c).value for c in range(1, 10)]
+        _aidx = _hdr.index("Ижрочи") + 1 if "Ижрочи" in _hdr else 4
+        _aval = str(_fw.cell(row=4, column=_aidx).value or "")
+        check("export: filtrlangan KRILL eksport — ijrochi kirilcha",
+              any("Ѐ" <= ch <= "ӿ" for ch in _aval), _aval)
+    except Exception as e:
+        check("export: filtrlangan KRILL eksport", False, f"{type(e).__name__}: {e}")
     await database.delete_task(_xp)
 
     class _StMsg:

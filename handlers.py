@@ -2659,11 +2659,20 @@ async def cb_export_status(query: CallbackQuery) -> None:
     await _send_tasks_export(query.message, status=status)
 
 
-@router.callback_query(F.data == "exportcyr")
+@router.callback_query(F.data.startswith("exportcyr"))
 async def cb_export_cyr(query: CallbackQuery) -> None:
-    """Re-export the default (active) scope in Uzbek Cyrillic."""
+    """Re-export in Uzbek Cyrillic, preserving the current scope:
+    'exportcyr' (default active) | 'exportcyr:who:<name>' | 'exportcyr:st:<status>'."""
+    parts = (query.data or "").split(":", 2)
+    kind = parts[1] if len(parts) > 1 else ""
+    val = parts[2] if len(parts) > 2 else ""
     await query.answer("🔤 Krillcha…")
-    await _send_tasks_export(query.message, script="cyr")
+    if kind == "who" and val:
+        await _send_tasks_export(query.message, assignee=val, script="cyr")
+    elif kind == "st" and val:
+        await _send_tasks_export(query.message, status=val, script="cyr")
+    else:
+        await _send_tasks_export(query.message, script="cyr")
 
 
 _EXPORT_WHO_PER_PAGE = 8
@@ -3061,6 +3070,12 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     if not assignee and not status:
         has_asg = any((t.get("assignee") or "").strip() for t in row_tasks)
         root_kb = _export_root_keyboard(has_asg)
+    elif script != "cyr":
+        # Filtered Latin export → offer the SAME scope in Cyrillic (scope carried
+        # in the callback so names/statuses transliterate too, not just "all tasks").
+        _cyr_cb = (f"exportcyr:who:{assignee}" if assignee else f"exportcyr:st:{status}")[:64]
+        root_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔤 Krillcha versiya", callback_data=_cyr_cb)]])
     await message.answer_document(
         BufferedInputFile(buf.getvalue(), filename=fname), caption=cap,
         parse_mode="Markdown", reply_markup=root_kb,
