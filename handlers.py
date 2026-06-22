@@ -2872,6 +2872,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.page import PageMargins
+        from openpyxl.worksheet.properties import PageSetupProperties
     except ImportError:
         await message.answer("⚠️ Excel kutubxonasi (openpyxl) o'rnatilmagan.")
         return
@@ -2932,7 +2934,9 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             export_rows.append((str(_i), False, "", _t))
             for _j, _s in enumerate(await database.list_subtasks(_t["id"]), 1):
                 export_rows.append((f"{_i}.{_j}", True, "", _s))
-    row_tasks = [r[3] for r in export_rows]  # all task dicts (incl. subtasks) for Xulosa
+    row_tasks = [r[3] for r in export_rows]  # all task dicts (incl. subtasks) for the panel
+    # Top-level tasks that actually have subtasks in this export → their title is bold.
+    parents_with_kids = {r[3].get("parent_id") for r in export_rows if r[3].get("parent_id")}
 
     # ── Visual template: a navy title banner + white-on-navy header band, a thin
     #    blue-grey grid, zebra rows, and accent colours (red overdue/P0, grey done).
@@ -2954,12 +2958,23 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     id_col = n_visible + 1
     last_col = get_column_letter(n_visible)
     title_col = headers.index("Vazifa") + 1
+    asg_col = headers.index("Ijrochi") + 1
     deadline_col = headers.index("Muddat") + 1
     prio_col = headers.index("Ustuvorlik") + 1
     desc_col = headers.index("Izoh") + 1
     ota_col = (headers.index("Asosiy vazifa") + 1) if flat_mode else None
     left_cols = {title_col} | ({ota_col} if flat_mode else set())
-    wrap_cols = {title_col, desc_col} | ({ota_col} if flat_mode else set())
+    # Wrap long text columns (incl. Ijrochi — multi-name cells "A / B" stack cleanly).
+    wrap_cols = {title_col, desc_col, asg_col} | ({ota_col} if flat_mode else set())
+    # Column widths (Excel units). Tuned for landscape print: dates narrow, text wide.
+    widths = ([6.5, 44, 34, 28, 13.5, 14, 15, 40, 18] if flat_mode
+              else [6.5, 54, 28, 13.5, 14, 15, 46, 18])
+
+    def _wrapped_lines(text, col_idx):
+        """Estimate display lines for `text` in the column at col_idx (Arial 13),
+        honouring explicit newlines — used to size the row so nothing is cramped."""
+        cpl = max(6, int(widths[col_idx - 1] * 0.92))
+        return sum(max(1, -(-len(seg) // cpl)) for seg in str(text or "").split("\n")) or 1
 
     wb = Workbook()
     ws = wb.active
@@ -2969,10 +2984,10 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ws.merge_cells(f"A1:{last_col}1")
     t1 = ws["A1"]
     t1.value = _tr(_export_title(status, assignee))
-    t1.font = Font(name=ARIAL, size=16, bold=True, color="FFFFFF")
+    t1.font = Font(name=ARIAL, size=20, bold=True, color="FFFFFF")
     t1.fill = NAVY_FILL
     t1.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[1].height = 30
+    ws.row_dimensions[1].height = 40
 
     ws.merge_cells(f"A2:{last_col}2")
     t2 = ws["A2"]
@@ -2983,20 +2998,20 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     if assignee:
         sub += f"      ·  Ijrochi: {assignee}"
     t2.value = _tr(sub)
-    t2.font = Font(name=ARIAL, size=10, color="33415C")
+    t2.font = Font(name=ARIAL, size=11, color="33415C")
     t2.fill = PatternFill("solid", fgColor=SUB)
     t2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[2].height = 18
+    ws.row_dimensions[2].height = 20
 
     # White-on-navy header band.
     for i in range(1, id_col + 1):
         h = headers[i - 1] if i <= n_visible else "ID"
         c = ws.cell(row=3, column=i, value=_tr(h) if i <= n_visible else "ID")
-        c.font = Font(name=ARIAL, size=12, bold=True, color="FFFFFF")
+        c.font = Font(name=ARIAL, size=13, bold=True, color="FFFFFF")
         c.fill = NAVY_FILL
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border = grid
-    ws.row_dimensions[3].height = 30
+    ws.row_dimensions[3].height = 34
 
     now_dt = datetime.now(database.TZ)
     OVERDUE_FILL = PatternFill("solid", fgColor="FCE4E4")  # light red — muddati o'tgan
@@ -3015,14 +3030,18 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         row_fill = (DONE_FILL if _is_done else OVERDUE_FILL if _overdue
                     else ZEBRA_FILL if rn % 2 == 0 else None)
         base_color = "8C8C8C" if _is_done else "1A1A1A"
+        # A top-level task that HAS subtasks → its title is bold (it's a project head).
+        _is_parent = (not is_sub) and t.get("id") in parents_with_kids
         title = (t.get("title") or "").strip()
         if is_sub and not flat_mode:
             title = "↳ " + title  # indent subtasks under the parent in hierarchical mode
+        # Multi-name cells ("A/B") → " / " so they wrap cleanly into stacked names.
+        asg = " / ".join(p.strip() for p in (t.get("assignee") or "").split("/") if p.strip())
         vals = [num, title]
         if flat_mode:
             vals.append(ptitle if is_sub else "")
         vals += [
-            (t.get("assignee") or "").strip(),
+            asg,
             _export_date(t.get("deadline")),
             _PRIORITY_LABEL_UZ.get(t.get("priority", "P2"), "Rejadagi"),
             _STATUS_LABEL_UZ.get(t.get("status", "todo"), t.get("status", "")),
@@ -3034,7 +3053,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             c = ws.cell(row=r, column=i, value=val)
             _p0 = (i == prio_col and t.get("priority") == "P0")  # Shoshilinch → red + bold
             _overdue_dl = (i == deadline_col and _overdue)       # muddat o'tgan → red
-            c.font = Font(name=ARIAL, size=11, bold=(_p0 or is_sub and i == title_col),
+            c.font = Font(name=ARIAL, size=13, bold=(_p0 or (i == title_col and _is_parent)),
                           color=("C00000" if (_p0 or _overdue_dl) else base_color))
             c.border = grid
             if row_fill:
@@ -3046,18 +3065,26 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             if i == deadline_col and val is not None:
                 c.number_format = "DD-MM-YYYY"  # date only — no clock
         idc = ws.cell(row=r, column=id_col, value=t.get("id"))
-        idc.font = Font(name=ARIAL, size=10, color="A6A6A6")
+        idc.font = Font(name=ARIAL, size=11, color="A6A6A6")
         idc.border = grid
         if row_fill:
             idc.fill = row_fill
-        # No fixed data row height → Excel auto-fits wrapped titles/descriptions.
+        # Size the row to the tallest wrapped cell (Arial 13 ≈ 18px/line) so nothing
+        # is cramped and multi-line titles/names breathe.
+        _lines = max((_wrapped_lines(vals[ci - 1], ci) for ci in wrap_cols), default=1)
+        ws.row_dimensions[r].height = max(26, _lines * 18 + 8)
 
-    widths = ([8.8, 50.0, 40.0, 30.0, 28.0, 26.0, 22.0, 50.0, 20.0] if flat_mode
-              else [8.8, 61.8, 33.2, 31.5, 28.5, 23.3, 58.0, 22.0])
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.column_dimensions[get_column_letter(id_col)].hidden = True  # ID — round-trip, hidden
     ws.freeze_panes = "A4"  # title + subtitle + header stay visible while scrolling
+    # Print-ready: landscape, fit all columns to one page width, repeat the header.
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.print_title_rows = "1:3"
+    ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.4, bottom=0.4, header=0.2, footer=0.2)
 
     # ── "Boshqaruv paneli" — LIVE executive dashboard as the FIRST tab. Every count
     #    is a COUNTIF/SUMPRODUCT formula over the Vazifalar sheet, so it auto-updates
@@ -3154,6 +3181,11 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         for _nm in _names:
             rr = _row(rr, _nm, _countif("Ijrochi", _nm, wild=True))
     dash.sheet_view.zoomScale = 110
+    dash.page_setup.orientation = "portrait"
+    dash.page_setup.fitToWidth = 1
+    dash.page_setup.fitToHeight = 0
+    dash.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    dash.page_margins = PageMargins(left=0.5, right=0.5, top=0.5, bottom=0.5)
 
     buf = io.BytesIO()
     wb.save(buf)

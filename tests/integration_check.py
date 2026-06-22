@@ -207,6 +207,11 @@ async def main():
         check("Export: P0 ustuvorlik qizil+qalin",
               _ws["E4"].font.bold and str(_ws["E4"].font.color.rgb or "").endswith("C00000"),
               f"E4={_ws['E4'].value} bold={_ws['E4'].font.bold} rgb={_ws['E4'].font.color.rgb}")
+        check("Export: data shrift Arial 13", _ws["B4"].font.name == "Arial" and int(_ws["B4"].font.sz) == 13)
+        check("Export: pechatga tayyor (landshaft + fit-width + header takror)",
+              _ws.page_setup.orientation == "landscape" and _ws.page_setup.fitToWidth == 1
+              and _ws.print_title_rows == "$1:$3")
+        check("Export: qator balandligi moslashgan (≥26)", (_ws.row_dimensions[4].height or 0) >= 26)
         # UX: keyboard attached to the file message (one message), compact, with drill-down
         _kb = _ExpMsg.captured.get("kb")
         _kbcbs = [b.callback_data for row in _kb.inline_keyboard for b in row] if _kb else []
@@ -262,6 +267,16 @@ async def main():
         _htitles = [str(_hw.cell(row=r, column=2).value or "") for r in range(4, 34)]
         check("export subtask: ierarxik 'N.M' raqamlash", any("." in str(n) for n in _hnums if n))
         check("export subtask: '↳' bilan ichkariga surilgan", any(t.startswith("↳") for t in _htitles))
+        # Parent (has subtasks) title is BOLD; the subtask row title is not. Resolve
+        # the parent by the subtask's № prefix ("N.M" → "N"), not the first row.
+        _numrow = {str(_hw.cell(row=r, column=1).value or ""): r for r in range(4, 34)}
+        _sub_n = next((n for n in _numrow if "." in n), None)
+        _par_n = _sub_n.split(".")[0] if _sub_n else None
+        _par_r, _sub_r = _numrow.get(_par_n), _numrow.get(_sub_n)
+        check("export subtask: asosiy (ota) sarlavhasi QALIN",
+              bool(_par_r) and bool(_sub_r) and _hw.cell(row=_par_r, column=2).font.bold
+              and not _hw.cell(row=_sub_r, column=2).font.bold,
+              f"par_n={_par_n}@{_par_r} sub_n={_sub_n}@{_sub_r}")
     except Exception as e:
         check("export subtask: ierarxik", False, f"{type(e).__name__}: {e}")
 
