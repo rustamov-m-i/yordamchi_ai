@@ -2934,13 +2934,18 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
                 export_rows.append((f"{_i}.{_j}", True, "", _s))
     row_tasks = [r[3] for r in export_rows]  # all task dicts (incl. subtasks) for Xulosa
 
-    # ── Template style: clean document look — bold black title/header, hair-line
-    #    borders, no fills (only the subtitle is shaded), a № column, real dates.
+    # ── Visual template: a navy title banner + white-on-navy header band, a thin
+    #    blue-grey grid, zebra rows, and accent colours (red overdue/P0, grey done).
     #    Visible cols: №..Kategoriya; ID is the last, hidden column (round-trip). ──
     ARIAL = "Arial"
-    SUB = "F2F2F2"
-    hair = Side(style="hair")
-    grid = Border(left=hair, right=hair, top=hair, bottom=hair)
+    NAVY = "1F3864"          # title banner / header band / section bands
+    SUB = "EAEFF7"           # subtitle strip
+    ZEBRA = "F4F7FB"         # alternating data rows
+    GRIDC = "C8D0DC"         # grid line (light blue-grey)
+    thin = Side(style="thin", color=GRIDC)
+    grid = Border(left=thin, right=thin, top=thin, bottom=thin)
+    NAVY_FILL = PatternFill("solid", fgColor=NAVY)
+    ZEBRA_FILL = PatternFill("solid", fgColor=ZEBRA)
     # Per-assignee export is flat → add an "Asosiy vazifa" column so a subtask shows which
     # project it belongs to. The hierarchical export indents subtasks under the parent.
     headers = (["№", "Vazifa", "Asosiy vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya"]
@@ -2960,15 +2965,17 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ws = wb.active
     ws.title = "Vazifalar"
 
-    ws.merge_cells(f"B1:{last_col}1")
-    t1 = ws["B1"]
+    # Full-width navy title banner (A1 … last col).
+    ws.merge_cells(f"A1:{last_col}1")
+    t1 = ws["A1"]
     t1.value = _tr(_export_title(status, assignee))
-    t1.font = Font(name=ARIAL, size=18, bold=True, color="000000")
+    t1.font = Font(name=ARIAL, size=16, bold=True, color="FFFFFF")
+    t1.fill = NAVY_FILL
     t1.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
 
-    ws.merge_cells(f"B2:{last_col}2")
-    t2 = ws["B2"]
+    ws.merge_cells(f"A2:{last_col}2")
+    t2 = ws["A2"]
     now_s = datetime.now(database.TZ).strftime("%d-%m-%Y %H:%M")
     sub = f"Yaratilgan: {now_s}      Jami: {len(export_rows)} ta"
     if status and status != "all":
@@ -2976,22 +2983,24 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     if assignee:
         sub += f"      ·  Ijrochi: {assignee}"
     t2.value = _tr(sub)
-    t2.font = Font(name=ARIAL, size=11, color="404040")
+    t2.font = Font(name=ARIAL, size=10, color="33415C")
     t2.fill = PatternFill("solid", fgColor=SUB)
     t2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[2].height = 20
+    ws.row_dimensions[2].height = 18
 
-    for i, h in enumerate(headers, 1):
-        c = ws.cell(row=3, column=i, value=_tr(h))
-        c.font = Font(name=ARIAL, size=14, bold=True, color="000000")
-        c.alignment = Alignment(horizontal="center", vertical="center")
+    # White-on-navy header band.
+    for i in range(1, id_col + 1):
+        h = headers[i - 1] if i <= n_visible else "ID"
+        c = ws.cell(row=3, column=i, value=_tr(h) if i <= n_visible else "ID")
+        c.font = Font(name=ARIAL, size=12, bold=True, color="FFFFFF")
+        c.fill = NAVY_FILL
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border = grid
-    ws.cell(row=3, column=id_col, value="ID").font = Font(name=ARIAL, size=11, bold=True, color="808080")
-    ws.row_dimensions[3].height = 38
+    ws.row_dimensions[3].height = 30
 
     now_dt = datetime.now(database.TZ)
-    OVERDUE_FILL = PatternFill("solid", fgColor="FDE7E9")  # light red — muddati o'tgan
-    DONE_FILL = PatternFill("solid", fgColor="EFEFEF")     # grey — bajarilgan/bekor
+    OVERDUE_FILL = PatternFill("solid", fgColor="FCE4E4")  # light red — muddati o'tgan
+    DONE_FILL = PatternFill("solid", fgColor="F0F0F0")     # grey — bajarilgan/bekor
     for rn, (num, is_sub, ptitle, t) in enumerate(export_rows, start=1):
         r = rn + 3
         _st = t.get("status", "todo")
@@ -3002,8 +3011,10 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
                 _overdue = datetime.fromisoformat(t["deadline"]).astimezone(database.TZ) < now_dt
             except (ValueError, TypeError):
                 _overdue = False
-        row_fill = DONE_FILL if _is_done else (OVERDUE_FILL if _overdue else None)
-        base_color = "808080" if _is_done else "000000"
+        # Conditional fill wins; otherwise zebra-stripe every other row for readability.
+        row_fill = (DONE_FILL if _is_done else OVERDUE_FILL if _overdue
+                    else ZEBRA_FILL if rn % 2 == 0 else None)
+        base_color = "8C8C8C" if _is_done else "1A1A1A"
         title = (t.get("title") or "").strip()
         if is_sub and not flat_mode:
             title = "↳ " + title  # indent subtasks under the parent in hierarchical mode
@@ -3022,7 +3033,9 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         for i, val in enumerate(vals, 1):
             c = ws.cell(row=r, column=i, value=val)
             _p0 = (i == prio_col and t.get("priority") == "P0")  # Shoshilinch → red + bold
-            c.font = Font(name=ARIAL, size=13, color=("C00000" if _p0 else base_color), bold=_p0)
+            _overdue_dl = (i == deadline_col and _overdue)       # muddat o'tgan → red
+            c.font = Font(name=ARIAL, size=11, bold=(_p0 or is_sub and i == title_col),
+                          color=("C00000" if (_p0 or _overdue_dl) else base_color))
             c.border = grid
             if row_fill:
                 c.fill = row_fill
@@ -3033,11 +3046,11 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             if i == deadline_col and val is not None:
                 c.number_format = "DD-MM-YYYY"  # date only — no clock
         idc = ws.cell(row=r, column=id_col, value=t.get("id"))
-        idc.font = Font(name=ARIAL, size=11, color="808080")
+        idc.font = Font(name=ARIAL, size=10, color="A6A6A6")
         idc.border = grid
         if row_fill:
             idc.fill = row_fill
-        ws.row_dimensions[r].height = 45
+        # No fixed data row height → Excel auto-fits wrapped titles/descriptions.
 
     widths = ([8.8, 50.0, 40.0, 30.0, 28.0, 26.0, 22.0, 50.0, 20.0] if flat_mode
               else [8.8, 61.8, 33.2, 31.5, 28.5, 23.3, 58.0, 22.0])
@@ -3072,59 +3085,75 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
 
     dash = wb.create_sheet("Boshqaruv paneli", 0)
     dash.column_dimensions["A"].width = 34
-    dash.column_dimensions["B"].width = 12
-    SEC = "1F3864"
-    HEAD_FILL = PatternFill("solid", fgColor=SEC)
+    dash.column_dimensions["B"].width = 13
+    dash.sheet_view.showGridLines = False           # clean dashboard canvas
+    SEC = NAVY
+    _drow = Border(bottom=Side(style="thin", color=GRIDC))
 
-    def _row(r, label, value=None, bold=False, color="000000", size=11):
+    def _row(r, label, value=None, bold=False, color="1A1A1A", size=11):
         a = dash.cell(row=r, column=1, value=_tr(label))
         a.font = Font(name=ARIAL, size=size, bold=bold, color=color)
-        if value is not None:
-            b = dash.cell(row=r, column=2, value=value)
-            b.font = Font(name=ARIAL, size=size, bold=bold, color=color)
-            b.alignment = Alignment(horizontal="center")
+        a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        a.border = _drow
+        b = dash.cell(row=r, column=2, value=value if value is not None else "")
+        b.font = Font(name=ARIAL, size=size, bold=True, color=color)
+        b.alignment = Alignment(horizontal="center", vertical="center")
+        b.border = _drow
+        dash.row_dimensions[r].height = 18
         return r + 1
 
+    def _section(r, label):
+        for _ci in (1, 2):
+            dash.cell(row=r, column=_ci).fill = NAVY_FILL
+        dash.merge_cells(f"A{r}:B{r}")
+        c = dash.cell(row=r, column=1, value=_tr(label))
+        c.font = Font(name=ARIAL, size=11, bold=True, color="FFFFFF")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        dash.row_dimensions[r].height = 21
+        return r + 1
+
+    for _ci in (1, 2):
+        dash.cell(row=1, column=_ci).fill = NAVY_FILL
     dash.merge_cells("A1:B1")
     _t = dash.cell(row=1, column=1, value=_tr(_export_title(status, assignee)))
-    _t.font = Font(name=ARIAL, size=13, bold=True, color="FFFFFF")
-    _t.fill = HEAD_FILL
+    _t.font = Font(name=ARIAL, size=14, bold=True, color="FFFFFF")
     _t.alignment = Alignment(horizontal="center", vertical="center")
-    dash.row_dimensions[1].height = 24
+    dash.row_dimensions[1].height = 30
     rr = _row(3, "Hisobot sanasi", now_s)
     rr += 1
-    rr = _row(rr, "— UMUMIY —", None, bold=True, color=SEC)
-    rr = _row(rr, "Jami vazifalar", f"=COUNTA({_rng('Vazifa')})", bold=True)
+    rr = _section(rr, "UMUMIY")
+    rr = _row(rr, "Jami vazifalar", f"=COUNTA({_rng('Vazifa')})", bold=True, color=SEC)
     rr = _row(rr, "Asosiy vazifa", f'=SUMPRODUCT(--ISERROR(SEARCH(".",{_rng("№")})))')
     rr = _row(rr, "Sub-vazifa", f'=SUMPRODUCT(--ISNUMBER(SEARCH(".",{_rng("№")})))')
     rr = _row(rr, "Muddati o'tgan",
               f'=SUMPRODUCT(({_rng("Muddat")}<>"")*({_rng("Muddat")}<TODAY())'
               f'*({_rng("Holat")}<>"{_done_l}")*({_rng("Holat")}<>"{_canc_l}"))',
               bold=True, color="C00000")
-    rr = _row(rr, "Bajarilgan", _countif("Holat", _STATUS_LABEL_UZ["done"]), color="548235")
+    rr = _row(rr, "Bajarilgan", _countif("Holat", _STATUS_LABEL_UZ["done"]), bold=True, color="548235")
     rr += 1
-    rr = _row(rr, "— HOLAT BO'YICHA —", None, bold=True, color=SEC)
+    rr = _section(rr, "HOLAT BO'YICHA")
     for _code in ("todo", "in_progress", "blocked", "done", "cancelled"):
         if _stc.get(_code):
             rr = _row(rr, _STATUS_LABEL_UZ[_code], _countif("Holat", _STATUS_LABEL_UZ[_code]))
     rr += 1
-    rr = _row(rr, "— USTUVORLIK BO'YICHA —", None, bold=True, color=SEC)
+    rr = _section(rr, "USTUVORLIK BO'YICHA")
     for _code in ("P0", "P1", "P2", "P3"):
         if _prc.get(_code):
             rr = _row(rr, _PRIORITY_LABEL_UZ[_code], _countif("Ustuvorlik", _PRIORITY_LABEL_UZ[_code]))
     _cats = sorted({(t.get("category") or "").strip() for t in row_tasks if (t.get("category") or "").strip()})
     if _cats:
         rr += 1
-        rr = _row(rr, "— KATEGORIYA BO'YICHA —", None, bold=True, color=SEC)
+        rr = _section(rr, "KATEGORIYA BO'YICHA")
         for _cat in _cats:
             rr = _row(rr, _cat, _countif("Kategoriya", _cat))
     _names = sorted({_p.strip() for t in row_tasks
                      for _p in (t.get("assignee") or "").split("/") if _p.strip()})
     if _names:
         rr += 1
-        rr = _row(rr, "— IJROCHI YUKLAMASI —", None, bold=True, color=SEC)
+        rr = _section(rr, "IJROCHI YUKLAMASI")
         for _nm in _names:
             rr = _row(rr, _nm, _countif("Ijrochi", _nm, wild=True))
+    dash.sheet_view.zoomScale = 110
 
     buf = io.BytesIO()
     wb.save(buf)

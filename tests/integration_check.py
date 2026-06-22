@@ -191,10 +191,16 @@ async def main():
               "UMUMIY" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext and "Jami" in _xtext)
         check("Export: panel JONLI formula (COUNTA/COUNTIF Vazifalar)",
               "COUNTA(Vazifalar" in _xtext and "COUNTIF(Vazifalar" in _xtext)
-        check("Export: dinamik sarlavha B1 (doira)", "AKTIV VAZIFALAR" in (_ws["B1"].value or ""),
-              _ws["B1"].value)
+        check("Export: dinamik sarlavha A1 banner", "AKTIV VAZIFALAR" in (_ws["A1"].value or ""),
+              _ws["A1"].value)
+        check("Export: sarlavha banneri navy + oq matn",
+              str(_ws["A1"].fill.fgColor.rgb or "").endswith("1F3864")
+              and str(_ws["A1"].font.color.rgb or "").endswith("FFFFFF"))
         check("Export: header A3=№ B3=Vazifa", _ws["A3"].value == "№" and _ws["B3"].value == "Vazifa")
-        check("Export: header Arial 14", _ws["B3"].font.name == "Arial" and int(_ws["B3"].font.sz) == 14)
+        check("Export: header navy band + oq qalin",
+              _ws["B3"].font.name == "Arial" and _ws["B3"].font.bold
+              and str(_ws["B3"].fill.fgColor.rgb or "").endswith("1F3864")
+              and str(_ws["B3"].font.color.rgb or "").endswith("FFFFFF"))
         check("Export: Kategoriya ustuni (H)", _ws["H3"].value == "Kategoriya")
         check("Export: yashirin ID ustuni (I)", _ws["I3"].value == "ID" and bool(_ws.column_dimensions["I"].hidden))
         # P0 sorts first → row 4 priority cell (E) is red+bold (Shoshilinch)
@@ -268,7 +274,7 @@ async def main():
         check("export subtask: sub-vazifa otasi ko'rsatilgan (EXP_parent)",
               _aw.cell(row=4, column=3).value == "EXP_parent")
         check("export subtask: per-ijrochi dinamik sarlavha (ism)",
-              "EXP_KARIMOV" in (_aw["B1"].value or ""), _aw["B1"].value)
+              "EXP_KARIMOV" in (_aw["A1"].value or ""), _aw["A1"].value)
     except Exception as e:
         check("export subtask: per-ijrochi", False, f"{type(e).__name__}: {e}")
     # Cyrillic export version
@@ -276,8 +282,8 @@ async def main():
     await handlers._send_tasks_export(_SubMsg(), script="cyr")
     try:
         _cw = _lwb(_io.BytesIO(_SubMsg.cap["b"]))["Vazifalar"]
-        check("export krill: B1 kirilcha", any("Ѐ" <= ch <= "ӿ" for ch in (_cw["B1"].value or "")),
-              _cw["B1"].value)
+        check("export krill: A1 kirilcha", any("Ѐ" <= ch <= "ӿ" for ch in (_cw["A1"].value or "")),
+              _cw["A1"].value)
         check("export krill: header 'Вазифа'", _cw.cell(row=3, column=2).value == "Вазифа")
     except Exception as e:
         check("export krill", False, f"{type(e).__name__}: {e}")
@@ -326,7 +332,7 @@ async def main():
     await handlers.cmd_export(_StMsg())  # "/export bajarilgan" → status=done
     try:
         _ws2 = _lwb(_io.BytesIO(_StMsg.cap["b"]))["Vazifalar"]
-        check("Export status: subtitle 'Holat: Bajarilgan'", "Holat: Bajarilgan" in str(_ws2["B2"].value))
+        check("Export status: subtitle 'Holat: Bajarilgan'", "Holat: Bajarilgan" in str(_ws2["A2"].value))
         _holats = [_ws2.cell(row=r, column=6).value for r in range(4, _ws2.max_row + 1)]
         _done_lbl = handlers._STATUS_LABEL_UZ.get("done", "Bajarildi")
         check("Export status: Holat ustuni faqat done",
