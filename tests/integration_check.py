@@ -203,10 +203,13 @@ async def main():
               int(_ws["A1"].font.sz) == 20 and _ws["A1"].font.bold
               and (_ws["A1"].fill.fgColor.rgb in (None, "00000000")))
         check("Export: header A3=№ B3=Vazifa", _ws["A3"].value == "№" and _ws["B3"].value == "Vazifa")
-        check("Export: header navy band + oq qalin",
+        check("Export: header yashil band + oq qalin (to'q ko'k emas)",
               _ws["B3"].font.name == "Arial" and _ws["B3"].font.bold
-              and str(_ws["B3"].fill.fgColor.rgb or "").endswith("1F3864")
+              and str(_ws["B3"].fill.fgColor.rgb or "").endswith("2E7D32")
               and str(_ws["B3"].font.color.rgb or "").endswith("FFFFFF"))
+        check("Export: barcha katak wrap_text (uzun matn o'raladi)",
+              _ws["H4"].alignment.wrap_text and _ws["F4"].alignment.wrap_text
+              and _ws["B4"].alignment.wrap_text)
         check("Export: Kategoriya ustuni (H)", _ws["H3"].value == "Kategoriya")
         check("Export: yashirin ID ustuni (I)", _ws["I3"].value == "ID" and bool(_ws.column_dimensions["I"].hidden))
         # P0 sorts first → row 4 priority cell (E) is red+bold (Shoshilinch)

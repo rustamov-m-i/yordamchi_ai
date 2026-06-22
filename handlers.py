@@ -2942,7 +2942,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     #    blue-grey grid, zebra rows, and accent colours (red overdue/P0, grey done).
     #    Visible cols: №..Kategoriya; ID is the last, hidden column (round-trip). ──
     ARIAL = "Arial"
-    NAVY = "1F3864"          # header band / section bands
+    NAVY = "2E7D32"          # header band / section bands — Agrobank green (not navy)
     ZEBRA = "F4F7FB"         # alternating data rows
     GRIDC = "C8D0DC"         # grid line (light blue-grey)
     thin = Side(style="thin", color=GRIDC)
@@ -2957,14 +2957,12 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     id_col = n_visible + 1
     last_col = get_column_letter(n_visible)
     title_col = headers.index("Vazifa") + 1
-    asg_col = headers.index("Ijrochi") + 1
     deadline_col = headers.index("Muddat") + 1
     prio_col = headers.index("Ustuvorlik") + 1
-    desc_col = headers.index("Izoh") + 1
     ota_col = (headers.index("Asosiy vazifa") + 1) if flat_mode else None
-    left_cols = {title_col} | ({ota_col} if flat_mode else set())
-    # Wrap long text columns (incl. Ijrochi — multi-name cells "A / B" stack cleanly).
-    wrap_cols = {title_col, desc_col, asg_col} | ({ota_col} if flat_mode else set())
+    left_cols = {title_col} | ({ota_col} if flat_mode else set())  # left-aligned text cols
+    # NOTE: every data cell now sets wrap_text=True, so any long value wraps instead
+    # of being clipped — no per-column wrap list needed.
     # Column widths (Excel units) — generous so nothing is clipped (matches the
     # principal's print template). Vazifa/Izoh widest; dates/status comfortable.
     widths = ([7, 50, 34, 32, 17, 18, 22, 46, 24] if flat_mode
@@ -3058,7 +3056,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
                 c.fill = row_fill
             c.alignment = Alignment(
                 horizontal="left" if i in left_cols else "center",
-                vertical="center", wrap_text=(i in wrap_cols), indent=1 if i in left_cols else 0,
+                vertical="center", wrap_text=True, indent=1 if i in left_cols else 0,
             )
             if i == deadline_col and val is not None:
                 c.number_format = "DD-MM-YYYY"  # date only — no clock
@@ -3067,9 +3065,10 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         idc.border = grid
         if row_fill:
             idc.fill = row_fill
-        # Size the row to the tallest wrapped cell (Arial 14 ≈ 20px/line) so nothing
-        # is cramped and multi-line titles/names breathe (≈ the print template).
-        _lines = max((_wrapped_lines(vals[ci - 1], ci) for ci in wrap_cols), default=1)
+        # Size the row to the tallest wrapped cell across ALL columns (every cell
+        # now wraps), so any long value — title, izoh, ijrochi, kategoriya — breathes
+        # instead of being clipped to one line. Arial 14 ≈ 20px/line.
+        _lines = max((_wrapped_lines(vals[ci - 1], ci) for ci in range(1, n_visible + 1)), default=1)
         ws.row_dimensions[r].height = max(32, _lines * 20 + 12)
 
     for ci, w in enumerate(widths, 1):
