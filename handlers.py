@@ -3109,81 +3109,93 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     _canc_l = _tr(_STATUS_LABEL_UZ["cancelled"])
 
     dash = wb.create_sheet("Boshqaruv paneli", 0)
-    dash.column_dimensions["A"].width = 40
-    dash.column_dimensions["B"].width = 16
     dash.sheet_view.showGridLines = False           # clean dashboard canvas
-    SEC = NAVY
+    # GRID layout: 3 label/value column-pairs side by side (A-B | C-D | E-F) so the
+    # sections sit in a balanced dashboard instead of one long cramped strip.
+    for _cl, _w in (("A", 23), ("B", 7), ("C", 28), ("D", 7), ("E", 28), ("F", 7)):
+        dash.column_dimensions[_cl].width = _w
     _drow = Border(bottom=Side(style="thin", color=GRIDC))
 
-    def _row(r, label, value=None, bold=False, color="1A1A1A", size=14):
-        a = dash.cell(row=r, column=1, value=_tr(label))
-        a.font = Font(name=ARIAL, size=size, bold=bold, color=color)
+    def _band(r, c0, c1, label):
+        cs, ce = get_column_letter(c0), get_column_letter(c1)
+        for cc in range(c0, c1 + 1):
+            dash.cell(row=r, column=cc).fill = NAVY_FILL
+        dash.merge_cells(f"{cs}{r}:{ce}{r}")
+        x = dash.cell(row=r, column=c0, value=_tr(label))
+        x.font = Font(name=ARIAL, size=12, bold=True, color="FFFFFF")
+        x.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        dash.row_dimensions[r].height = 23
+
+    def _kv(r, col, label, value, color="1A1A1A", bold=False):
+        a = dash.cell(row=r, column=col, value=_tr(label))
+        a.font = Font(name=ARIAL, size=12, bold=bold, color=color)
         a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
         a.border = _drow
-        b = dash.cell(row=r, column=2, value=value if value is not None else "")
-        b.font = Font(name=ARIAL, size=size, bold=True, color=color)
+        b = dash.cell(row=r, column=col + 1, value=value)
+        b.font = Font(name=ARIAL, size=12, bold=True, color=color)
         b.alignment = Alignment(horizontal="center", vertical="center")
         b.border = _drow
-        dash.row_dimensions[r].height = 26
-        return r + 1
+        dash.row_dimensions[r].height = 22
 
-    def _section(r, label):
-        for _ci in (1, 2):
-            dash.cell(row=r, column=_ci).fill = NAVY_FILL
-        dash.merge_cells(f"A{r}:B{r}")
-        c = dash.cell(row=r, column=1, value=_tr(label))
-        c.font = Font(name=ARIAL, size=14, bold=True, color="FFFFFF")
-        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-        dash.row_dimensions[r].height = 24
-        return r + 1
+    def _panel(top, col, title, items):
+        """A titled block at (top, col-pair). items: (label, value, color, bold)."""
+        _band(top, col, col + 1, title)
+        for i, (lab, val, color, bold) in enumerate(items):
+            _kv(top + 1 + i, col, lab, val, color, bold)
+        return top + 1 + len(items)
 
-    for _ci in (1, 2):
-        dash.cell(row=1, column=_ci).fill = NAVY_FILL
-    dash.merge_cells("A1:B1")
+    # Title banner + report date across all 6 columns.
+    for cc in range(1, 7):
+        dash.cell(row=1, column=cc).fill = NAVY_FILL
+    dash.merge_cells("A1:F1")
     _t = dash.cell(row=1, column=1, value=_tr(_export_title(status, assignee)))
     _t.font = Font(name=ARIAL, size=16, bold=True, color="FFFFFF")
     _t.alignment = Alignment(horizontal="center", vertical="center")
-    dash.row_dimensions[1].height = 32
-    rr = _row(3, "Hisobot sanasi", now_s)
-    rr += 1
-    rr = _section(rr, "UMUMIY")
-    rr = _row(rr, "Jami vazifalar", f"=COUNTA({_rng('Vazifa')})", bold=True, color=SEC)
-    rr = _row(rr, "Asosiy vazifa", f'=SUMPRODUCT(--ISERROR(SEARCH(".",{_rng("№")})))')
-    rr = _row(rr, "Sub-vazifa", f'=SUMPRODUCT(--ISNUMBER(SEARCH(".",{_rng("№")})))')
-    rr = _row(rr, "Muddati o'tgan",
-              f'=SUMPRODUCT(({_rng("Muddat")}<>"")*({_rng("Muddat")}<TODAY())'
-              f'*({_rng("Holat")}<>"{_done_l}")*({_rng("Holat")}<>"{_canc_l}"))',
-              bold=True, color="C00000")
-    rr = _row(rr, "Bajarilgan", _countif("Holat", _STATUS_LABEL_UZ["done"]), bold=True, color="548235")
-    rr += 1
-    rr = _section(rr, "HOLAT BO'YICHA")
-    for _code in ("todo", "in_progress", "blocked", "done", "cancelled"):
-        if _stc.get(_code):
-            rr = _row(rr, _STATUS_LABEL_UZ[_code], _countif("Holat", _STATUS_LABEL_UZ[_code]))
-    rr += 1
-    rr = _section(rr, "USTUVORLIK BO'YICHA")
-    for _code in ("P0", "P1", "P2", "P3"):
-        if _prc.get(_code):
-            rr = _row(rr, _PRIORITY_LABEL_UZ[_code], _countif("Ustuvorlik", _PRIORITY_LABEL_UZ[_code]))
+    dash.row_dimensions[1].height = 34
+    _dc = dash.cell(row=2, column=1, value=_tr(f"Hisobot sanasi: {now_s}"))
+    _dc.font = Font(name=ARIAL, size=10, color="33415C")
+    dash.merge_cells("A2:F2")
+
+    umumiy = [
+        ("Jami vazifalar", f"=COUNTA({_rng('Vazifa')})", NAVY, True),
+        ("Asosiy vazifa", f'=SUMPRODUCT(--ISERROR(SEARCH(".",{_rng("№")})))', "1A1A1A", False),
+        ("Sub-vazifa", f'=SUMPRODUCT(--ISNUMBER(SEARCH(".",{_rng("№")})))', "1A1A1A", False),
+        ("Muddati o'tgan",
+         f'=SUMPRODUCT(({_rng("Muddat")}<>"")*({_rng("Muddat")}<TODAY())'
+         f'*({_rng("Holat")}<>"{_done_l}")*({_rng("Holat")}<>"{_canc_l}"))', "C00000", True),
+        ("Bajarilgan", _countif("Holat", _STATUS_LABEL_UZ["done"]), "548235", True),
+    ]
+    holat = [(_STATUS_LABEL_UZ[c], _countif("Holat", _STATUS_LABEL_UZ[c]), "1A1A1A", False)
+             for c in ("todo", "in_progress", "blocked", "done", "cancelled") if _stc.get(c)]
+    ustuv = [(_PRIORITY_LABEL_UZ[c], _countif("Ustuvorlik", _PRIORITY_LABEL_UZ[c]), "1A1A1A", False)
+             for c in ("P0", "P1", "P2", "P3") if _prc.get(c)]
     _cats = sorted({(t.get("category") or "").strip() for t in row_tasks if (t.get("category") or "").strip()})
-    if _cats:
-        rr += 1
-        rr = _section(rr, "KATEGORIYA BO'YICHA")
-        for _cat in _cats:
-            rr = _row(rr, _cat, _countif("Kategoriya", _cat))
+    kateg = [(c, _countif("Kategoriya", c), "1A1A1A", False) for c in _cats]
     _names = sorted({_p.strip() for t in row_tasks
                      for _p in (t.get("assignee") or "").split("/") if _p.strip()})
+
+    # Row 1 of blocks: UMUMIY | HOLAT | USTUVORLIK (side by side).
+    b1 = _panel(4, 1, "UMUMIY", umumiy)
+    b2 = _panel(4, 3, "HOLAT BO'YICHA", holat)
+    b3 = _panel(4, 5, "USTUVORLIK BO'YICHA", ustuv)
+    row2 = max(b1, b2, b3) + 1
+
+    # Row 2 of blocks: KATEGORIYA (A-B) | IJROCHI YUKLAMASI (C-F, split into 2 columns).
+    if kateg:
+        _panel(row2, 1, "KATEGORIYA BO'YICHA", kateg)
     if _names:
-        rr += 1
-        rr = _section(rr, "IJROCHI YUKLAMASI")
-        for _nm in _names:
-            rr = _row(rr, _nm, _countif("Ijrochi", _nm, wild=True))
-    dash.sheet_view.zoomScale = 110
-    dash.page_setup.orientation = "portrait"
+        _band(row2, 3, 6, "IJROCHI YUKLAMASI")
+        half = -(-len(_names) // 2)
+        for idx, _nm in enumerate(_names):
+            _col = 3 if idx < half else 5
+            _kv(row2 + 1 + (idx if idx < half else idx - half), _col,
+                _nm, _countif("Ijrochi", _nm, wild=True))
+
+    dash.page_setup.orientation = "landscape"
     dash.page_setup.fitToWidth = 1
     dash.page_setup.fitToHeight = 0
     dash.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
-    dash.page_margins = PageMargins(left=0.5, right=0.5, top=0.5, bottom=0.5)
+    dash.page_margins = PageMargins(left=0.4, right=0.4, top=0.4, bottom=0.4)
 
     buf = io.BytesIO()
     wb.save(buf)

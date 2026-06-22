@@ -191,6 +191,12 @@ async def main():
               "UMUMIY" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext and "Jami" in _xtext)
         check("Export: panel JONLI formula (COUNTA/COUNTIF Vazifalar)",
               "COUNTA(Vazifalar" in _xtext and "COUNTIF(Vazifalar" in _xtext)
+        # GRID layout: sections sit side by side (a band beyond column A), not one strip.
+        _dash = _wb["Boshqaruv paneli"]
+        _band_cols = {c.column for row in _dash.iter_rows() for c in row
+                      if isinstance(c.value, str) and c.value.endswith("BO'YICHA")}
+        check("Export: panel GRID (bo'limlar yonma-yon, A dan tashqarida ham)",
+              any(col > 1 for col in _band_cols), sorted(_band_cols))
         check("Export: dinamik sarlavha A1", "AKTIV VAZIFALAR" in (_ws["A1"].value or ""),
               _ws["A1"].value)
         check("Export: sarlavha sz20 qalin, fillsiz (template)",
