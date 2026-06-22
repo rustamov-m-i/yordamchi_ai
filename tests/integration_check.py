@@ -348,6 +348,35 @@ async def main():
     check("Import: 20+ qator cheklovsiz parse (25→25)", len(_big_acts) == 25, f"got {len(_big_acts)}")
     check("Import backstop 1000 (chat-cap 20 dan yuqori)", handlers._MAX_IMPORT_TASKS == 1000 and handlers._MAX_IMPORT_TASKS > handlers._MAX_CREATE_ACTIONS_PER_MSG, f"{getattr(handlers, '_MAX_IMPORT_TASKS', None)}")
 
+    # № hierarchy: "3.1" → subtask of "3" (Variant 1, authoritative parent_id)
+    _hacts = handlers._structured_tasks_from_table(
+        [("№", "Vazifa", "Ijrochi"),
+         ("3", "IMPN_ota", "Aziz"), ("3.1", "IMPN_bola1", "Aziz"),
+         ("3.2", "IMPN_bola2", "Aziz"), ("4", "IMPN_ota2", "Aziz")])
+    check("Import №: _num o'qiladi", [a.get("_num") for a in _hacts] == ["3", "3.1", "3.2", "4"])
+    for _a in _hacts:
+        _a.setdefault("data", {})["source"] = "excel"
+    await handlers._execute_actions(_hacts)
+    _ota = next((t for t in await database.list_tasks(status_in=None, limit=9000)
+                 if t["title"] == "IMPN_ota"), None)
+    _kids = await database.list_subtasks(_ota["id"]) if _ota else []
+    check("Import №: 3.1/3.2 → 3 ning sub-vazifasi", _ota is not None and len(_kids) == 2,
+          f"ota={bool(_ota)} kids={len(_kids)}")
+    check("Import №: 4 alohida top-level (sub emas)",
+          any(t["title"] == "IMPN_ota2" and not t.get("parent_id")
+              for t in await database.list_tasks(status_in=None, limit=9000, include_subtasks=True)))
+    # Re-parent (authoritative): move IMPN_bola1 to top-level by dropping the dot
+    _b1 = next((t for t in _kids if t["title"] == "IMPN_bola1"), None)
+    if _b1:
+        _re = [{"type": "update_task", "id": _b1["id"], "data": {"source": "excel"}, "_num": "9"}]
+        await handlers._execute_actions(_re)
+        _b1b = await database.get_task(_b1["id"])
+        check("Import №: nuqtasiz raqam → top-level'ga ko'tariladi (re-parent)",
+              not (_b1b or {}).get("parent_id"))
+    for _t in await database.list_tasks(status_in=None, limit=9000, include_subtasks=True):
+        if _t["title"].startswith("IMPN_"):
+            await database.delete_task(_t["id"])
+
     print("\n── Kategoriyalar ──")
     _cid = await database.create_task({"title": "Kat sinov", "priority": "P1", "status": "todo", "category": "Shartnomalar"})
     _ct = await database.get_task(_cid)

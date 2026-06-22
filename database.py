@@ -429,6 +429,7 @@ async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
         for key in (
             "title", "description", "deadline", "priority", "status", "source", "assignee",
             "category", "recurrence_rule", "recurrence_next_at", "recurrence_parent_id",
+            "parent_id",  # allow Excel № re-parenting (move a task under another / promote)
         ):
             if key in data:
                 if key == "recurrence_rule":

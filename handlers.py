@@ -1173,6 +1173,18 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     }
     _existing_cats: "set | None" = None       # lazy allowlist — categories (manual/Excel only)
     _existing_contacts: "set | None" = None   # lazy allowlist — assignees (manual/Excel only)
+    # Excel hierarchy: "3.1" → subtask of the row numbered "3". Maps each row's №
+    # to the task id it created/updated, so a child resolves its parent_id. Parents
+    # ("3") precede children ("3.1") in the file, so the map is populated in time.
+    num_to_id: dict[str, str] = {}
+
+    def _resolve_parent(act: dict, data: dict) -> None:
+        """№-driven re-parenting (authoritative): a dotted № → child of its top-level
+        ancestor; a plain № → top-level (parent_id=None). No-op for non-Excel rows."""
+        num = act.get("_num")
+        if not num:
+            return
+        data["parent_id"] = num_to_id.get(num.split(".")[0]) if "." in num else None
 
     for action in actions:
         atype = action.get("type", "")
@@ -1208,8 +1220,11 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                             _existing_contacts.add(_asg.casefold())
                         else:
                             data["assignee"] = None  # unknown executor on an LLM turn → unassigned
+                _resolve_parent(action, data)
                 tid = await database.create_task(data)
                 created_ids["task"].append(tid)
+                if action.get("_num"):
+                    num_to_id[action["_num"]] = tid
             elif atype == "create_reminder":
                 rid = await database.create_reminder(data)
                 created_ids["reminder"].append(rid)
@@ -1227,8 +1242,11 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                             _existing_contacts.add(_asg.casefold())
                         else:
                             data.pop("assignee", None)
+                _resolve_parent(action, data)
                 await database.update_task(target_id, data)
                 created_ids["task"].append(target_id)
+                if action.get("_num"):
+                    num_to_id[action["_num"]] = target_id
             elif atype == "complete_task" and target_id:
                 await database.complete_task(target_id)
                 created_ids["task"].append(target_id)
@@ -3125,6 +3143,7 @@ def _norm_header(c) -> str:
 
 
 # Column synonyms (normalized) — keep the importer forgiving about header names.
+_COL_NUMBER = ("№", "no", "tr", "t/r", "nomer", "raqam", "tartib", "tartibraqami", "#")
 _COL_TITLE = ("vazifa", "topshiriq", "nomi", "ish", "title", "task")
 _COL_ASSIGNEE = ("ijrochi", "masul", "masulxodim", "bajaruvchi", "kim", "kimbajaradi", "assignee")
 _COL_DEADLINE = ("muddat", "muddati", "sana", "tugatishsanasi", "tugashsanasi", "deadline")
@@ -3176,9 +3195,16 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         cat = str(pick(d, _COL_CATEGORY) or "").strip()
         if cat and cat != "(boshqa)":
             data["category"] = cat
-        # Carry the optional ID (hidden export column) so the caller can turn this
-        # into an UPDATE when the task still exists — instead of a duplicate.
-        out.append({"type": "create_task", "data": data, "_id": str(pick(d, ("id",)) or "").strip()})
+        act = {"type": "create_task", "data": data,
+               # Carry the optional ID (hidden export column) so the caller can turn this
+               # into an UPDATE when the task still exists — instead of a duplicate.
+               "_id": str(pick(d, ("id",)) or "").strip()}
+        # Hierarchy from the № column: "3.1" → subtask of "3". _execute_actions
+        # resolves _num/parent into a real parent_id at create/update time.
+        num = str(pick(d, _COL_NUMBER) or "").strip().rstrip(".")
+        if num:
+            act["_num"] = num
+        out.append(act)
     return out
 
 
@@ -3293,7 +3319,10 @@ def _format_import_page(actions: list[dict], page: int) -> str:
     page = max(0, min(page, pages - 1))
     start = page * _IMPORT_PAGE_SIZE
     chunk = actions[start:start + _IMPORT_PAGE_SIZE]
+    n_sub = sum(1 for a in actions if "." in (a.get("_num") or ""))
     lines = ["⚠️ **TASDIQLAYSIZMI?**", "", f"📋 {total} ta yozuv topildi"]
+    if n_sub:
+        lines.append(f"🌳 {total - n_sub} ta asosiy + {n_sub} ta sub-vazifa (№ bo'yicha)")
     if pages > 1:
         lines.append(f"_Ko'rsatilmoqda: {start + 1}–{start + len(chunk)} / {total}_")
     lines.append("")
@@ -3302,7 +3331,12 @@ def _format_import_page(actions: list[dict], page: int) -> str:
         title = (d.get("title") or "—").strip()
         assignee = (d.get("assignee") or "belgilanmagan").strip() or "belgilanmagan"
         upd = " ✏️" if a.get("type") == "update_task" else ""
-        lines.append(f"**{i}. {title}**{upd}")
+        num = a.get("_num") or ""
+        is_sub = "." in num
+        prefix = "↳ " if is_sub else ""
+        lines.append(f"**{i}. {prefix}{title}**{upd}")
+        if is_sub:
+            lines.append(f"   🌳 sub-vazifa (ota: №{num.split('.')[0]})")
         lines.append(f"   👤 {assignee}")
         lines.append(f"   ⏳ {_import_deadline_label(d.get('deadline'))}")
         lines.append("")
