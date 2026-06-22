@@ -414,6 +414,42 @@ async def main():
         if _t["title"].startswith("IMPN_"):
             await database.delete_task(_t["id"])
 
+    # Round-trip CLEAR: a blank cell in a PRESENT column clears the field on update
+    # (the reported "to'liq yangilanmaydi" bug — blank assignee/izoh/kategoriya stayed).
+    _clrid = await database.create_task({"title": "IMPCLR", "assignee": "Aziz",
+        "category": "Hujjatlar", "priority": "P1", "status": "todo", "description": "eski izoh"})
+    _clr = handlers._structured_tasks_from_table([
+        ("№", "Vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya", "ID"),
+        ("1", "IMPCLR", "", "", "Muhim", "Aktiv", "", "", _clrid)])
+    for _a in _clr:
+        _rid = _a.pop("_id", "")
+        if _rid and await database.get_task(_rid):
+            _a["type"] = "update_task"; _a["id"] = _rid
+        _a.setdefault("data", {})["source"] = "excel"
+    await handlers._execute_actions(_clr)
+    _ct2 = await database.get_task(_clrid)
+    check("Import: bo'sh katak maydonni TOZALAYDI (izoh/ijrochi/kategoriya)",
+          not _ct2["description"] and not _ct2["assignee"] and not _ct2["category"],
+          f"d={_ct2['description']!r} a={_ct2['assignee']!r} c={_ct2['category']!r}")
+    # value-edit still applies; absent column left untouched
+    check("Import: mavjud ustun yangilanadi (Muhim→P1, Aktiv→todo)",
+          _ct2["priority"] == "P1" and _ct2["status"] == "todo")
+    _keepid = await database.create_task({"title": "IMPKEEP", "assignee": "Bek",
+        "priority": "P0", "status": "todo", "description": "saqlan"})
+    _keep = handlers._structured_tasks_from_table([("Vazifa", "Holat"), ("IMPKEEP", "Jarayonda")])
+    _bt = {(t.get("title") or "").strip().lower(): t["id"]
+           for t in await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=2000)}
+    handlers._apply_title_dedup(_keep, _bt)
+    for _a in _keep:
+        _a.setdefault("data", {})["source"] = "excel"
+    await handlers._execute_actions(_keep)
+    _kt = await database.get_task(_keepid)
+    check("Import: YO'Q ustun maydonga tegmaydi (ijrochi/ustuvorlik/izoh saqlanadi)",
+          _kt["status"] == "in_progress" and _kt["assignee"] == "Bek"
+          and _kt["priority"] == "P0" and _kt["description"] == "saqlan")
+    for _x in (_clrid, _keepid):
+        await database.delete_task(_x)
+
     print("\n── Kategoriyalar ──")
     _cid = await database.create_task({"title": "Kat sinov", "priority": "P1", "status": "todo", "category": "Shartnomalar"})
     _ct = await database.get_task(_cid)

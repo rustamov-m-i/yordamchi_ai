@@ -3291,6 +3291,10 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
                 return v
         return None
 
+    def has(names):
+        """Is a column for this field present in the file's header?"""
+        return any(n in header for n in names)
+
     out: list[dict] = []
     for r in table[header_idx + 1:]:
         d = {header[i]: r[i] for i in range(min(len(header), len(r)))}
@@ -3299,23 +3303,27 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         title = str(pick(d, _COL_TITLE) or "").strip().lstrip("↳ ").strip()
         if not title:
             continue
-        data = {
-            "title": title,
-            "priority": _import_priority(pick(d, _COL_PRIORITY)),
-            "status": _import_status(pick(d, _COL_STATUS)),
-            "deadline": _import_deadline(pick(d, _COL_DEADLINE)),
-            "source": "excel",  # trusted to introduce new assignees/categories (A)
-        }
+        # Only touch a field whose COLUMN exists in the file: a blank cell in a
+        # PRESENT column CLEARS that field on update (full round-trip edit), while an
+        # ABSENT column is left untouched (a partial file never wipes other fields).
+        # Previously blank assignee/category/izoh were skipped → clearing didn't apply.
+        data = {"title": title, "source": "excel"}  # source: trusted for new assignee/category (A)
+        if has(_COL_PRIORITY):
+            data["priority"] = _import_priority(pick(d, _COL_PRIORITY))
+        if has(_COL_STATUS):
+            data["status"] = _import_status(pick(d, _COL_STATUS))
+        if has(_COL_DEADLINE):
+            data["deadline"] = _import_deadline(pick(d, _COL_DEADLINE))
         asg = str(pick(d, _COL_ASSIGNEE) or "").strip()
-        if asg:
-            data["assignee"] = asg
-        desc = str(pick(d, _COL_DESC) or "").strip()
-        # Never let the assignee leak into the description (reported field-mix bug).
-        if desc and not (asg and desc.strip().lower() == asg.strip().lower()):
-            data["description"] = desc
-        cat = str(pick(d, _COL_CATEGORY) or "").strip()
-        if cat and cat != "(boshqa)":
-            data["category"] = cat
+        if has(_COL_ASSIGNEE):
+            data["assignee"] = asg          # "" → clears the executor on update
+        if has(_COL_DESC):
+            desc = str(pick(d, _COL_DESC) or "").strip()
+            # Never let the assignee leak into the description (reported field-mix bug).
+            data["description"] = "" if (asg and desc.lower() == asg.lower()) else desc
+        if has(_COL_CATEGORY):
+            cat = str(pick(d, _COL_CATEGORY) or "").strip()
+            data["category"] = "" if cat == "(boshqa)" else cat
         act = {"type": "create_task", "data": data,
                # Carry the optional ID (hidden export column) so the caller can turn this
                # into an UPDATE when the task still exists — instead of a duplicate.
