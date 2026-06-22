@@ -185,11 +185,12 @@ async def main():
         _wb = _lwb(_io.BytesIO(_ExpMsg.captured["b"]))
         _ws = _wb["Vazifalar"]
         check("Export: xlsx yaratildi", _ExpMsg.captured.get("b") is not None)
-        check("Export: 'Xulosa' birinchi varaq", _wb.sheetnames[0] == "Xulosa")
-        _xtext = " ".join(str(c.value) for row in _wb["Xulosa"].iter_rows() for c in row if c.value)
-        check("Export: Xulosa sarlavha + KPI",
-              _wb["Xulosa"]["A1"].value == "VAZIFALAR — XULOSA"
-              and "Jami" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext)
+        check("Export: 'Boshqaruv paneli' birinchi varaq", _wb.sheetnames[0] == "Boshqaruv paneli")
+        _xtext = " ".join(str(c.value) for row in _wb["Boshqaruv paneli"].iter_rows() for c in row if c.value)
+        check("Export: panel bo'limlari (UMUMIY/HOLAT/USTUVORLIK)",
+              "UMUMIY" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext and "Jami" in _xtext)
+        check("Export: panel JONLI formula (COUNTA/COUNTIF Vazifalar)",
+              "COUNTA(Vazifalar" in _xtext and "COUNTIF(Vazifalar" in _xtext)
         check("Export: dinamik sarlavha B1 (doira)", "AKTIV VAZIFALAR" in (_ws["B1"].value or ""),
               _ws["B1"].value)
         check("Export: header A3=№ B3=Vazifa", _ws["A3"].value == "№" and _ws["B3"].value == "Vazifa")

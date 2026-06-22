@@ -3046,46 +3046,85 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ws.column_dimensions[get_column_letter(id_col)].hidden = True  # ID — round-trip, hidden
     ws.freeze_panes = "A4"  # title + subtitle + header stay visible while scrolling
 
-    # ── "Xulosa" — executive at-a-glance summary as the FIRST tab ──
+    # ── "Boshqaruv paneli" — LIVE executive dashboard as the FIRST tab. Every count
+    #    is a COUNTIF/SUMPRODUCT formula over the Vazifalar sheet, so it auto-updates
+    #    whenever a cell is edited — a real control panel, not a static snapshot.
+    #    Counters below only decide WHICH rows to show (skip empty buckets). ──
     from collections import Counter
     _stc = Counter(t.get("status", "todo") for t in row_tasks)
     _prc = Counter(t.get("priority", "P2") for t in row_tasks)
-    _asc = Counter((t.get("assignee") or "—").strip() or "—" for t in row_tasks)
-    _overdue_n = sum(
-        1 for t in row_tasks if t.get("deadline") and t.get("status") not in ("done", "cancelled")
-        and (lambda d: bool(d) and d < now_dt)(_parse_dt_safe(t.get("deadline"))))
-    summ = wb.create_sheet("Xulosa", 0)
-    summ.column_dimensions["A"].width = 30
-    summ.column_dimensions["B"].width = 14
+    n_rows = len(export_rows)
+    r0, r1 = 4, max(4, n_rows + 3)              # Vazifalar data rows (header on row 3)
 
-    def _sl(row, label, val, bold=False, color="000000", size=12):
-        a = summ.cell(row=row, column=1, value=_tr(label))
+    def _C(name):                               # header → column letter (layout-independent)
+        return get_column_letter(headers.index(name) + 1)
+
+    def _rng(name):
+        c = _C(name)
+        return f"Vazifalar!${c}${r0}:${c}${r1}"
+
+    def _countif(name, crit, wild=False):
+        c = _tr(str(crit)).replace('"', '""')
+        return f'=COUNTIF({_rng(name)},"{("*" + c + "*") if wild else c}")'
+
+    _done_l = _tr(_STATUS_LABEL_UZ["done"])
+    _canc_l = _tr(_STATUS_LABEL_UZ["cancelled"])
+
+    dash = wb.create_sheet("Boshqaruv paneli", 0)
+    dash.column_dimensions["A"].width = 34
+    dash.column_dimensions["B"].width = 12
+    SEC = "1F3864"
+    HEAD_FILL = PatternFill("solid", fgColor=SEC)
+
+    def _row(r, label, value=None, bold=False, color="000000", size=11):
+        a = dash.cell(row=r, column=1, value=_tr(label))
         a.font = Font(name=ARIAL, size=size, bold=bold, color=color)
-        b = summ.cell(row=row, column=2, value=_tr(val) if isinstance(val, str) else val)
-        b.font = Font(name=ARIAL, size=size, bold=bold, color=color)
-        b.alignment = Alignment(horizontal="right")
-        return row + 1
+        if value is not None:
+            b = dash.cell(row=r, column=2, value=value)
+            b.font = Font(name=ARIAL, size=size, bold=bold, color=color)
+            b.alignment = Alignment(horizontal="center")
+        return r + 1
 
-    _hc = summ.cell(row=1, column=1, value=_tr("VAZIFALAR — XULOSA"))
-    _hc.font = Font(name=ARIAL, size=16, bold=True, color="1F3864")
-    _rr = _sl(3, "Yaratilgan", now_s)
-    _rr = _sl(_rr, "Jami (eksport)", len(export_rows), bold=True)
-    _rr = _sl(_rr, "Muddati o'tgan", _overdue_n, bold=True, color="C00000")
-    _rr += 1
-    _rr = _sl(_rr, "— HOLAT —", "", bold=True, color="1F3864")
-    for _code, _lbl in (("todo", "Aktiv"), ("in_progress", "Jarayonda"),
-                        ("blocked", "To'silgan"), ("done", "Bajarilgan"), ("cancelled", "Bekor")):
+    dash.merge_cells("A1:B1")
+    _t = dash.cell(row=1, column=1, value=_tr(_export_title(status, assignee)))
+    _t.font = Font(name=ARIAL, size=13, bold=True, color="FFFFFF")
+    _t.fill = HEAD_FILL
+    _t.alignment = Alignment(horizontal="center", vertical="center")
+    dash.row_dimensions[1].height = 24
+    rr = _row(3, "Hisobot sanasi", now_s)
+    rr += 1
+    rr = _row(rr, "— UMUMIY —", None, bold=True, color=SEC)
+    rr = _row(rr, "Jami vazifalar", f"=COUNTA({_rng('Vazifa')})", bold=True)
+    rr = _row(rr, "Asosiy vazifa", f'=SUMPRODUCT(--ISERROR(SEARCH(".",{_rng("№")})))')
+    rr = _row(rr, "Sub-vazifa", f'=SUMPRODUCT(--ISNUMBER(SEARCH(".",{_rng("№")})))')
+    rr = _row(rr, "Muddati o'tgan",
+              f'=SUMPRODUCT(({_rng("Muddat")}<>"")*({_rng("Muddat")}<TODAY())'
+              f'*({_rng("Holat")}<>"{_done_l}")*({_rng("Holat")}<>"{_canc_l}"))',
+              bold=True, color="C00000")
+    rr = _row(rr, "Bajarilgan", _countif("Holat", _STATUS_LABEL_UZ["done"]), color="548235")
+    rr += 1
+    rr = _row(rr, "— HOLAT BO'YICHA —", None, bold=True, color=SEC)
+    for _code in ("todo", "in_progress", "blocked", "done", "cancelled"):
         if _stc.get(_code):
-            _rr = _sl(_rr, _lbl, _stc[_code])
-    _rr += 1
-    _rr = _sl(_rr, "— USTUVORLIK —", "", bold=True, color="1F3864")
-    for _code, _lbl in (("P0", "Shoshilinch"), ("P1", "Muhim"), ("P2", "Rejadagi"), ("P3", "Oddiy")):
+            rr = _row(rr, _STATUS_LABEL_UZ[_code], _countif("Holat", _STATUS_LABEL_UZ[_code]))
+    rr += 1
+    rr = _row(rr, "— USTUVORLIK BO'YICHA —", None, bold=True, color=SEC)
+    for _code in ("P0", "P1", "P2", "P3"):
         if _prc.get(_code):
-            _rr = _sl(_rr, _lbl, _prc[_code])
-    _rr += 1
-    _rr = _sl(_rr, "— IJROCHI (top 8) —", "", bold=True, color="1F3864")
-    for _name, _cnt in _asc.most_common(8):
-        _rr = _sl(_rr, _name[:28], _cnt)
+            rr = _row(rr, _PRIORITY_LABEL_UZ[_code], _countif("Ustuvorlik", _PRIORITY_LABEL_UZ[_code]))
+    _cats = sorted({(t.get("category") or "").strip() for t in row_tasks if (t.get("category") or "").strip()})
+    if _cats:
+        rr += 1
+        rr = _row(rr, "— KATEGORIYA BO'YICHA —", None, bold=True, color=SEC)
+        for _cat in _cats:
+            rr = _row(rr, _cat, _countif("Kategoriya", _cat))
+    _names = sorted({_p.strip() for t in row_tasks
+                     for _p in (t.get("assignee") or "").split("/") if _p.strip()})
+    if _names:
+        rr += 1
+        rr = _row(rr, "— IJROCHI YUKLAMASI —", None, bold=True, color=SEC)
+        for _nm in _names:
+            rr = _row(rr, _nm, _countif("Ijrochi", _nm, wild=True))
 
     buf = io.BytesIO()
     wb.save(buf)
