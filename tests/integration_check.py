@@ -450,6 +450,28 @@ async def main():
     for _x in (_clrid, _keepid):
         await database.delete_task(_x)
 
+    # Subtask round-trip: editing/clearing a subtask row updates it AND keeps the
+    # parent link (same code path as top-level + № re-parenting).
+    _spid = await database.create_task({"title": "IMPSP_ota", "priority": "P0", "status": "todo"})
+    _ssid = await database.create_task({"title": "IMPSP_sub", "assignee": "Aziz", "priority": "P1",
+        "status": "todo", "description": "sub izoh", "parent_id": _spid})
+    _sub = handlers._structured_tasks_from_table([
+        ("№", "Vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya", "ID"),
+        ("1", "IMPSP_ota", "", "", "Shoshilinch", "Aktiv", "", "", _spid),
+        ("1.1", "IMPSP_sub", "", "", "Muhim", "Bajarildi", "", "", _ssid)])
+    for _a in _sub:
+        _rid = _a.pop("_id", "")
+        if _rid and await database.get_task(_rid):
+            _a["type"] = "update_task"; _a["id"] = _rid
+        _a.setdefault("data", {})["source"] = "excel"
+    await handlers._execute_actions(_sub)
+    _sst = await database.get_task(_ssid)
+    check("Import: sub-vazifa yangilanadi + ota saqlanadi + izoh/ijrochi tozalanadi",
+          _sst["status"] == "done" and _sst["parent_id"] == _spid
+          and not _sst["description"] and not _sst["assignee"],
+          f"st={_sst['status']} parent={_sst['parent_id']==_spid} d={_sst['description']!r} a={_sst['assignee']!r}")
+    await database.delete_task(_spid)
+
     print("\n── Kategoriyalar ──")
     _cid = await database.create_task({"title": "Kat sinov", "priority": "P1", "status": "todo", "category": "Shartnomalar"})
     _ct = await database.get_task(_cid)
