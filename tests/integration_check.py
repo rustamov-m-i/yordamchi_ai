@@ -191,11 +191,11 @@ async def main():
               "UMUMIY" in _xtext and "HOLAT" in _xtext and "USTUVORLIK" in _xtext and "Jami" in _xtext)
         check("Export: panel JONLI formula (COUNTA/COUNTIF Vazifalar)",
               "COUNTA(Vazifalar" in _xtext and "COUNTIF(Vazifalar" in _xtext)
-        check("Export: dinamik sarlavha A1 banner", "AKTIV VAZIFALAR" in (_ws["A1"].value or ""),
+        check("Export: dinamik sarlavha A1", "AKTIV VAZIFALAR" in (_ws["A1"].value or ""),
               _ws["A1"].value)
-        check("Export: sarlavha banneri navy + oq matn",
-              str(_ws["A1"].fill.fgColor.rgb or "").endswith("1F3864")
-              and str(_ws["A1"].font.color.rgb or "").endswith("FFFFFF"))
+        check("Export: sarlavha sz20 qalin, fillsiz (template)",
+              int(_ws["A1"].font.sz) == 20 and _ws["A1"].font.bold
+              and (_ws["A1"].fill.fgColor.rgb in (None, "00000000")))
         check("Export: header A3=№ B3=Vazifa", _ws["A3"].value == "№" and _ws["B3"].value == "Vazifa")
         check("Export: header navy band + oq qalin",
               _ws["B3"].font.name == "Arial" and _ws["B3"].font.bold
@@ -207,7 +207,7 @@ async def main():
         check("Export: P0 ustuvorlik qizil+qalin",
               _ws["E4"].font.bold and str(_ws["E4"].font.color.rgb or "").endswith("C00000"),
               f"E4={_ws['E4'].value} bold={_ws['E4'].font.bold} rgb={_ws['E4'].font.color.rgb}")
-        check("Export: data shrift Arial 13", _ws["B4"].font.name == "Arial" and int(_ws["B4"].font.sz) == 13)
+        check("Export: data shrift Arial 14", _ws["B4"].font.name == "Arial" and int(_ws["B4"].font.sz) == 14)
         check("Export: pechatga tayyor (landshaft + fit-width + header takror)",
               _ws.page_setup.orientation == "landscape" and _ws.page_setup.fitToWidth == 1
               and _ws.print_title_rows == "$1:$3")
@@ -376,6 +376,12 @@ async def main():
          ("3", "IMPN_ota", "Aziz"), ("3.1", "IMPN_bola1", "Aziz"),
          ("3.2", "IMPN_bola2", "Aziz"), ("4", "IMPN_ota2", "Aziz")])
     check("Import №: _num o'qiladi", [a.get("_num") for a in _hacts] == ["3", "3.1", "3.2", "4"])
+    # round-trip: the export indent marker "↳" must NOT accumulate on re-import
+    _arrowacts = handlers._structured_tasks_from_table(
+        [("№", "Vazifa", "Ijrochi"), ("2.1", "↳ ↳ Bildirishnoma yozish", "Umrzoq")])
+    check("Import: '↳' marker tozalanadi",
+          bool(_arrowacts) and _arrowacts[0]["data"]["title"] == "Bildirishnoma yozish",
+          _arrowacts and _arrowacts[0]["data"]["title"])
     for _a in _hacts:
         _a.setdefault("data", {})["source"] = "excel"
     await handlers._execute_actions(_hacts)

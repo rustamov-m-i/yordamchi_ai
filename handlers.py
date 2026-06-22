@@ -2942,8 +2942,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     #    blue-grey grid, zebra rows, and accent colours (red overdue/P0, grey done).
     #    Visible cols: №..Kategoriya; ID is the last, hidden column (round-trip). ──
     ARIAL = "Arial"
-    NAVY = "1F3864"          # title banner / header band / section bands
-    SUB = "EAEFF7"           # subtitle strip
+    NAVY = "1F3864"          # header band / section bands
     ZEBRA = "F4F7FB"         # alternating data rows
     GRIDC = "C8D0DC"         # grid line (light blue-grey)
     thin = Side(style="thin", color=GRIDC)
@@ -2966,14 +2965,15 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     left_cols = {title_col} | ({ota_col} if flat_mode else set())
     # Wrap long text columns (incl. Ijrochi — multi-name cells "A / B" stack cleanly).
     wrap_cols = {title_col, desc_col, asg_col} | ({ota_col} if flat_mode else set())
-    # Column widths (Excel units). Tuned for landscape print: dates narrow, text wide.
-    widths = ([6.5, 44, 34, 28, 13.5, 14, 15, 40, 18] if flat_mode
-              else [6.5, 54, 28, 13.5, 14, 15, 46, 18])
+    # Column widths (Excel units) — generous so nothing is clipped (matches the
+    # principal's print template). Vazifa/Izoh widest; dates/status comfortable.
+    widths = ([7, 50, 34, 32, 17, 18, 22, 46, 24] if flat_mode
+              else [7, 60, 34, 17, 18, 22, 50, 24])
 
     def _wrapped_lines(text, col_idx):
-        """Estimate display lines for `text` in the column at col_idx (Arial 13),
+        """Estimate display lines for `text` in the column at col_idx (Arial 14),
         honouring explicit newlines — used to size the row so nothing is cramped."""
-        cpl = max(6, int(widths[col_idx - 1] * 0.92))
+        cpl = max(6, int(widths[col_idx - 1] * 0.85))
         return sum(max(1, -(-len(seg) // cpl)) for seg in str(text or "").split("\n")) or 1
 
     wb = Workbook()
@@ -2984,8 +2984,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ws.merge_cells(f"A1:{last_col}1")
     t1 = ws["A1"]
     t1.value = _tr(_export_title(status, assignee))
-    t1.font = Font(name=ARIAL, size=20, bold=True, color="FFFFFF")
-    t1.fill = NAVY_FILL
+    t1.font = Font(name=ARIAL, size=20, bold=True, color="1A1A1A")  # plain bold (no banner fill)
     t1.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 40
 
@@ -2998,8 +2997,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     if assignee:
         sub += f"      ·  Ijrochi: {assignee}"
     t2.value = _tr(sub)
-    t2.font = Font(name=ARIAL, size=11, color="33415C")
-    t2.fill = PatternFill("solid", fgColor=SUB)
+    t2.font = Font(name=ARIAL, size=11, color="33415C")  # plain grey caption (no fill)
     t2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 20
 
@@ -3007,7 +3005,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     for i in range(1, id_col + 1):
         h = headers[i - 1] if i <= n_visible else "ID"
         c = ws.cell(row=3, column=i, value=_tr(h) if i <= n_visible else "ID")
-        c.font = Font(name=ARIAL, size=13, bold=True, color="FFFFFF")
+        c.font = Font(name=ARIAL, size=14, bold=True, color="FFFFFF")
         c.fill = NAVY_FILL
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border = grid
@@ -3053,7 +3051,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             c = ws.cell(row=r, column=i, value=val)
             _p0 = (i == prio_col and t.get("priority") == "P0")  # Shoshilinch → red + bold
             _overdue_dl = (i == deadline_col and _overdue)       # muddat o'tgan → red
-            c.font = Font(name=ARIAL, size=13, bold=(_p0 or (i == title_col and _is_parent)),
+            c.font = Font(name=ARIAL, size=14, bold=(_p0 or (i == title_col and _is_parent)),
                           color=("C00000" if (_p0 or _overdue_dl) else base_color))
             c.border = grid
             if row_fill:
@@ -3069,10 +3067,10 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         idc.border = grid
         if row_fill:
             idc.fill = row_fill
-        # Size the row to the tallest wrapped cell (Arial 13 ≈ 18px/line) so nothing
-        # is cramped and multi-line titles/names breathe.
+        # Size the row to the tallest wrapped cell (Arial 14 ≈ 20px/line) so nothing
+        # is cramped and multi-line titles/names breathe (≈ the print template).
         _lines = max((_wrapped_lines(vals[ci - 1], ci) for ci in wrap_cols), default=1)
-        ws.row_dimensions[r].height = max(26, _lines * 18 + 8)
+        ws.row_dimensions[r].height = max(32, _lines * 20 + 12)
 
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
@@ -3111,13 +3109,13 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     _canc_l = _tr(_STATUS_LABEL_UZ["cancelled"])
 
     dash = wb.create_sheet("Boshqaruv paneli", 0)
-    dash.column_dimensions["A"].width = 34
-    dash.column_dimensions["B"].width = 13
+    dash.column_dimensions["A"].width = 40
+    dash.column_dimensions["B"].width = 16
     dash.sheet_view.showGridLines = False           # clean dashboard canvas
     SEC = NAVY
     _drow = Border(bottom=Side(style="thin", color=GRIDC))
 
-    def _row(r, label, value=None, bold=False, color="1A1A1A", size=11):
+    def _row(r, label, value=None, bold=False, color="1A1A1A", size=14):
         a = dash.cell(row=r, column=1, value=_tr(label))
         a.font = Font(name=ARIAL, size=size, bold=bold, color=color)
         a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -3126,7 +3124,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
         b.font = Font(name=ARIAL, size=size, bold=True, color=color)
         b.alignment = Alignment(horizontal="center", vertical="center")
         b.border = _drow
-        dash.row_dimensions[r].height = 18
+        dash.row_dimensions[r].height = 26
         return r + 1
 
     def _section(r, label):
@@ -3134,18 +3132,18 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             dash.cell(row=r, column=_ci).fill = NAVY_FILL
         dash.merge_cells(f"A{r}:B{r}")
         c = dash.cell(row=r, column=1, value=_tr(label))
-        c.font = Font(name=ARIAL, size=11, bold=True, color="FFFFFF")
+        c.font = Font(name=ARIAL, size=14, bold=True, color="FFFFFF")
         c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-        dash.row_dimensions[r].height = 21
+        dash.row_dimensions[r].height = 24
         return r + 1
 
     for _ci in (1, 2):
         dash.cell(row=1, column=_ci).fill = NAVY_FILL
     dash.merge_cells("A1:B1")
     _t = dash.cell(row=1, column=1, value=_tr(_export_title(status, assignee)))
-    _t.font = Font(name=ARIAL, size=14, bold=True, color="FFFFFF")
+    _t.font = Font(name=ARIAL, size=16, bold=True, color="FFFFFF")
     _t.alignment = Alignment(horizontal="center", vertical="center")
-    dash.row_dimensions[1].height = 30
+    dash.row_dimensions[1].height = 32
     rr = _row(3, "Hisobot sanasi", now_s)
     rr += 1
     rr = _section(rr, "UMUMIY")
@@ -3275,7 +3273,9 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
     out: list[dict] = []
     for r in table[header_idx + 1:]:
         d = {header[i]: r[i] for i in range(min(len(header), len(r)))}
-        title = str(pick(d, _COL_TITLE) or "").strip()
+        # Strip the export's subtask indent marker so it doesn't accumulate on
+        # re-import ("↳ ↳ Title" → "Title"); hierarchy comes from the № column.
+        title = str(pick(d, _COL_TITLE) or "").strip().lstrip("↳ ").strip()
         if not title:
             continue
         data = {
