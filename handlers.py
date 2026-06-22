@@ -3112,9 +3112,18 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     dash.sheet_view.showGridLines = False           # clean dashboard canvas
     # GRID layout: 3 label/value column-pairs side by side (A-B | C-D | E-F) so the
     # sections sit in a balanced dashboard instead of one long cramped strip.
-    for _cl, _w in (("A", 23), ("B", 7), ("C", 28), ("D", 7), ("E", 28), ("F", 7)):
-        dash.column_dimensions[_cl].width = _w
+    _dw = {1: 30, 2: 7, 3: 30, 4: 7, 5: 30, 6: 7}   # widths by column index
+    for _ci, _w in _dw.items():
+        dash.column_dimensions[get_column_letter(_ci)].width = _w
     _drow = Border(bottom=Side(style="thin", color=GRIDC))
+
+    def _bump_height(r, label, col, base=22):
+        """Grow the row to fit a (possibly wrapped) label so long category/executor
+        names never get clipped into one cramped line. Takes the max across the
+        cells already placed on this row (grid rows are shared by 3 panels)."""
+        cpl = max(6, int(_dw.get(col, 24) * 0.92))
+        lines = max(1, -(-len(_tr(str(label))) // cpl))
+        dash.row_dimensions[r].height = max(dash.row_dimensions[r].height or 0, base, lines * 17 + 7)
 
     def _band(r, c0, c1, label):
         cs, ce = get_column_letter(c0), get_column_letter(c1)
@@ -3129,13 +3138,14 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     def _kv(r, col, label, value, color="1A1A1A", bold=False):
         a = dash.cell(row=r, column=col, value=_tr(label))
         a.font = Font(name=ARIAL, size=12, bold=bold, color=color)
-        a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        # wrap_text → a long name wraps to a 2nd line instead of being clipped.
+        a.alignment = Alignment(horizontal="left", vertical="center", indent=1, wrap_text=True)
         a.border = _drow
         b = dash.cell(row=r, column=col + 1, value=value)
         b.font = Font(name=ARIAL, size=12, bold=True, color=color)
         b.alignment = Alignment(horizontal="center", vertical="center")
         b.border = _drow
-        dash.row_dimensions[r].height = 22
+        _bump_height(r, label, col)
 
     def _panel(top, col, title, items):
         """A titled block at (top, col-pair). items: (label, value, color, bold)."""
