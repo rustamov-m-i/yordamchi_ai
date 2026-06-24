@@ -518,6 +518,14 @@ async def main():
         handlers._process_and_reply = _orig_par
     check("Bug3: yangi uchrashuv matni create-meeting niyati bilan yo'naltiriladi",
           _routed.get("text", "").startswith("Yangi uchrashuv qo'sh:"), _routed.get("text"))
+    # Opened meeting must be in LLM context so "uchrashuv sarlavhasini o'zgartir" resolves
+    # to THAT meeting (update_meeting{id}) instead of the bot asking "which meeting?".
+    handlers.claude_service.set_last_meeting_view(
+        [{"n": 1, "id": "m-test", "title": "World Wide bilan uchrashuv"}])
+    _blk = await handlers.claude_service._build_state_block()
+    check("Meeting-view: ochilgan uchrashuv LLM kontekstida (id + update_meeting)",
+          "m-test" in _blk and "OXIRGI KO'RSATILGAN UCHRASHUV" in _blk and "update_meeting{id}" in _blk)
+    handlers.claude_service.set_last_meeting_view([])
 
     print("\n── Kategoriyalar ──")
     _cid = await database.create_task({"title": "Kat sinov", "priority": "P1", "status": "todo", "category": "Shartnomalar"})

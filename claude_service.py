@@ -146,6 +146,19 @@ def set_last_task_view(items: list) -> None:
     _last_task_view = (items or [])[:25]
 
 
+# Same idea for meetings: when a meeting card/list is shown, remember it so a
+# follow-up like "uchrashuv sarlavhasini o'zgartir" / "shu uchrashuvni ko'chir"
+# resolves to that meeting's id instead of the bot asking "which meeting?".
+_last_meeting_view: list = []
+
+
+def set_last_meeting_view(items: list) -> None:
+    """Remember the meeting(s) just shown (a single opened card or a numbered list)
+    so a later reference ("shu uchrashuv", "N-uchrashuv") resolves to the right id."""
+    global _last_meeting_view
+    _last_meeting_view = (items or [])[:25]
+
+
 async def _build_state_block() -> str:
     """Dynamic, DB-backed snapshot appended after the cached system prompt.
 
@@ -261,6 +274,11 @@ async def _build_state_block() -> str:
            "(\"N ta vazifa\" = miqdor, boshqacha):",
            *(f"  {it['n']}. «{it['title']}» (id: {it['id']})" for it in _last_task_view), ""]
           if _last_task_view else []),
+        *(["## OXIRGI KO'RSATILGAN UCHRASHUV(LAR) (raqam → id) — \"shu uchrashuv\", "
+           "\"uchrashuvni/sarlavhasini o'zgartir\", \"N-uchrashuv\" SHU id'ni bildiradi; "
+           "bitta bo'lsa \"uchrashuv\" = o'sha. update_meeting{id} ishlat, qayta so'rama:",
+           *(f"  {it['n']}. «{it['title']}» (id: {it['id']})" for it in _last_meeting_view), ""]
+          if _last_meeting_view else []),
         f"## OVERDUE TASKS ({len(overdue)})",
         *(task_line(t) for t in overdue[:10]),
         "  (none)" if not overdue else "",

@@ -8123,6 +8123,13 @@ async def _render_meetings_for_filter(message: Message, filt: str = "week",
     total_pages = max(1, (len(meetings) + _MEETINGS_PER_PAGE - 1) // _MEETINGS_PER_PAGE)
     page = max(1, min(page, total_pages))
 
+    # Remember the meetings shown on this page so a later "N-uchrashuv ..." / "shu
+    # uchrashuv" reference resolves to the right id (mirrors the task list view).
+    _pm_start = (page - 1) * _MEETINGS_PER_PAGE
+    claude_service.set_last_meeting_view(
+        [{"n": _pm_start + i + 1, "id": m["id"], "title": (m.get("title") or "—")[:50]}
+         for i, m in enumerate(meetings[_pm_start:_pm_start + _MEETINGS_PER_PAGE])])
+
     text = _format_meetings_compact(meetings, label, stats=stats, page=page)
     kb = meetings_filter_keyboard(filt, meetings, page=page, total_pages=total_pages)
 
@@ -8235,6 +8242,10 @@ async def cb_meeting_open(query: CallbackQuery) -> None:
         await query.answer("Uchrashuv topilmadi", show_alert=True)
         return
     await query.answer()
+    # Remember the opened meeting so a follow-up like "uchrashuv sarlavhasini
+    # o'zgartir" resolves to THIS meeting (update_meeting{id}) instead of "which?".
+    claude_service.set_last_meeting_view(
+        [{"n": 1, "id": meeting["id"], "title": (meeting.get("title") or "—")[:50]}])
     text = _format_meeting_card(meeting, show_date=True)
     try:
         await query.message.edit_text(text, parse_mode="Markdown", reply_markup=meeting_inline_actions(meeting))
