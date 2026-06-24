@@ -7063,6 +7063,9 @@ async def cb_note_open(query: CallbackQuery) -> None:
         await query.answer("Qayd topilmadi", show_alert=True)
         return
     await query.answer()
+    # Mark the opened note as "current" so "shu qaydni ..." resolves to it.
+    claude_service.set_last_note_view(
+        [{"n": 1, "id": note["id"], "title": (note.get("title") or note.get("content") or "—")[:50]}])
     text, parse_mode = _format_note_detail(note)
     await _safe_answer(
         query.message,
@@ -7456,6 +7459,9 @@ async def cb_reminder_open(query: CallbackQuery) -> None:
         await query.answer("Eslatma topilmadi", show_alert=True)
         return
     await query.answer()
+    # Mark the opened reminder as "current" so "shu eslatmani ..." resolves to it.
+    claude_service.set_last_reminder_view(
+        [{"n": 1, "id": reminder["id"], "title": (reminder.get("title") or "—")[:50]}])
     text = _format_reminder_card(reminder)
     try:
         await query.message.edit_text(text, parse_mode="Markdown", reply_markup=reminder_detail_menu(reminder))
@@ -7765,6 +7771,9 @@ async def cb_task_open(query: CallbackQuery) -> None:
         await query.answer("Vazifa topilmadi", show_alert=True)
         return
     await query.answer()
+    # Mark the opened task as "current" so "shu vazifani ..." resolves to it.
+    claude_service.set_last_task_view(
+        [{"n": 1, "id": task["id"], "title": (task.get("title") or "—")[:50]}])
     text = _format_task_card(task)
     # Subtask summary (top-level tasks only) — real child tasks live under the parent.
     if not task.get("parent_id"):

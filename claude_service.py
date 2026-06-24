@@ -159,6 +159,24 @@ def set_last_meeting_view(items: list) -> None:
     _last_meeting_view = (items or [])[:25]
 
 
+# Same for notes and reminders, so "shu qaydni vazifa qil" / "shu eslatmani o'chir"
+# after opening that card resolves to the right id (whole-system consistency).
+_last_note_view: list = []
+_last_reminder_view: list = []
+
+
+def set_last_note_view(items: list) -> None:
+    """Remember the note(s) just shown so "shu qayd" / "N-qayd" resolves by id."""
+    global _last_note_view
+    _last_note_view = (items or [])[:25]
+
+
+def set_last_reminder_view(items: list) -> None:
+    """Remember the reminder(s) just shown so "shu eslatma" / "N-eslatma" resolves."""
+    global _last_reminder_view
+    _last_reminder_view = (items or [])[:25]
+
+
 async def _build_state_block() -> str:
     """Dynamic, DB-backed snapshot appended after the cached system prompt.
 
@@ -279,6 +297,14 @@ async def _build_state_block() -> str:
            "bitta bo'lsa \"uchrashuv\" = o'sha. update_meeting{id} ishlat, qayta so'rama:",
            *(f"  {it['n']}. «{it['title']}» (id: {it['id']})" for it in _last_meeting_view), ""]
           if _last_meeting_view else []),
+        *(["## OXIRGI KO'RSATILGAN QAYD(LAR) (raqam → id) — \"shu qayd\" / \"N-qayd\" SHU id; "
+           "bitta bo'lsa \"qayd\" = o'sha:",
+           *(f"  {it['n']}. «{it['title']}» (id: {it['id']})" for it in _last_note_view), ""]
+          if _last_note_view else []),
+        *(["## OXIRGI KO'RSATILGAN ESLATMA(LAR) (raqam → id) — \"shu eslatma\" / \"N-eslatma\" SHU id; "
+           "bitta bo'lsa \"eslatma\" = o'sha:",
+           *(f"  {it['n']}. «{it['title']}» (id: {it['id']})" for it in _last_reminder_view), ""]
+          if _last_reminder_view else []),
         f"## OVERDUE TASKS ({len(overdue)})",
         *(task_line(t) for t in overdue[:10]),
         "  (none)" if not overdue else "",
