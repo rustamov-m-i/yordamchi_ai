@@ -264,6 +264,19 @@ class NoteCaptureFSM(StatesGroup):
     awaiting_text = State()
 
 
+class NewMeetingTextFSM(StatesGroup):
+    """One-shot capture after "➕ Yangi uchrashuv" — the next text/voice is routed
+    to create-meeting (with an explicit intent) instead of being reinterpreted as
+    an unrelated command. Without this the button only printed a prompt and left
+    the user in the section state, so the reply was treated as a fresh command."""
+    awaiting_text = State()
+
+
+class NewTaskTextFSM(StatesGroup):
+    """One-shot capture after "➕ Yangi vazifa" — next text/voice → create-task."""
+    awaiting_text = State()
+
+
 # ── Statistika section labels ──
 SBTN_STATS_TODAY = "Bugun"
 SBTN_STATS_WEEK = "7 kun"
@@ -2193,22 +2206,23 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
     voice messages silently creating wrong items.
 
     Wrapped in a pending_actions row so:
-      - a redelivered Telegram update doesn't double-process (UNIQUE update_id),
+      - a redelivered Telegram update doesn't double-process (dedup on the stable
+        (chat_id, message_id) pair — a slow turn that Telegram redelivers used to
+        produce a SECOND confirm card),
       - a crash mid-handler is recoverable / observable on next bot start."""
 
     if not user_text or not user_text.strip():
         await message.answer("Bo'sh xabar. Iltimos, matn yoki ovoz yuboring.")
         return
 
-    update_id = getattr(getattr(message, "_update", None), "update_id", None)
     pending_id = await database.enqueue_pending_action(
-        update_id=update_id,
+        update_id=None,  # aiogram 3.x doesn't surface update_id; dedup by chat+message
         chat_id=message.chat.id if message.chat else None,
         message_id=message.message_id,
         user_text=user_text,
     )
     if pending_id is None:
-        # Duplicate Telegram update — already handled, swallow silently.
+        # Redelivered Telegram update for an already-enqueued message — swallow.
         return
 
     typing_task = asyncio.create_task(_keep_typing(message.bot, message.chat.id))
@@ -6903,6 +6917,32 @@ async def handle_note_capture(message: Message, state: FSMContext) -> None:
                                 "ovoz orqali" if source == "voice" else "qo'lda")
     # Restore section if we were in one
     await _maybe_refresh_section(message, state, {"note": [nid]})
+
+
+async def _capture_new_item(message: Message, state: FSMContext, intent_uz: str, kind: str) -> None:
+    """One-shot capture for '➕ Yangi vazifa/uchrashuv': the next text/voice is routed
+    to the LLM WITH an explicit create intent, so it can't be reinterpreted as an
+    unrelated command. A tapped nav button / command cancels the capture and routes."""
+    content = (await _get_text_or_transcribe(message) or "").strip()
+    if not content:
+        await message.answer(f"Bo'sh xabar — {kind} yaratilmadi.")
+        return
+    if _is_note_noise(content):  # a tapped button/command isn't the item text
+        await state.clear()
+        await message.answer("✕ Bekor qilindi.", reply_markup=main_reply_keyboard())
+        return
+    await state.clear()
+    await _process_and_reply(message, f"{intent_uz}: {content}", state=state)
+
+
+@router.message(StateFilter(NewMeetingTextFSM.awaiting_text), F.text | F.voice)
+async def handle_new_meeting_capture(message: Message, state: FSMContext) -> None:
+    await _capture_new_item(message, state, "Yangi uchrashuv qo'sh", "uchrashuv")
+
+
+@router.message(StateFilter(NewTaskTextFSM.awaiting_text), F.text | F.voice)
+async def handle_new_task_capture(message: Message, state: FSMContext) -> None:
+    await _capture_new_item(message, state, "Yangi vazifa qo'sh", "vazifa")
 
 
 async def _note_capture_reply(message: Message, note_id: str, source_hint: str) -> None:
@@ -11857,10 +11897,12 @@ async def handle_tasks_section_button(message: Message, state: FSMContext) -> No
         await _render_categories(message)
         return
     if label == TBTN_TASKS_NEW:
+        await state.set_state(NewTaskTextFSM.awaiting_text)  # capture next msg → create-task
         await _safe_answer(
             message,
             "➕ **YANGI VAZIFA**\n\nMatn yoki ovoz yuboring. Misol:\n"
-            "_\"Ertaga ertalab Aziz akaga marketing hisobotini yuborish\"_",
+            "_\"Ertaga ertalab Aziz akaga marketing hisobotini yuborish\"_\n"
+            "Bekor qilish: /cancel",
             parse_mode="Markdown",
         )
         return
@@ -11925,10 +11967,12 @@ async def handle_meetings_section_button(message: Message, state: FSMContext) ->
         await _render_meetings_for_filter(message, _MEETINGS_SECTION_FILTERS[label])
         return
     if label == MBTN_MEETINGS_NEW:
+        await state.set_state(NewMeetingTextFSM.awaiting_text)  # capture next msg → create-meeting
         await _safe_answer(
             message,
             "➕ **YANGI UCHRASHUV**\n\nMatn yoki ovoz yuboring. Misol:\n"
-            "_\"Ertaga soat 12:00 da Dinislam bilan biznes forum\"_",
+            "_\"Ertaga soat 12:00 da Dinislam bilan biznes forum\"_\n"
+            "Bekor qilish: /cancel",
             parse_mode="Markdown",
         )
         return
@@ -12080,6 +12124,14 @@ async def handle_new_section_button(message: Message, state: FSMContext) -> None
             "Bekor qilish: /cancel",
             parse_mode="Markdown",
         )
+        return
+    if label == NBTN_NEW_MEETING:
+        await state.set_state(NewMeetingTextFSM.awaiting_text)  # capture next msg → create-meeting
+        await _safe_answer(message, prompts[label] + "\nBekor qilish: /cancel", parse_mode="Markdown")
+        return
+    if label == NBTN_NEW_TASK:
+        await state.set_state(NewTaskTextFSM.awaiting_text)     # capture next msg → create-task
+        await _safe_answer(message, prompts[label] + "\nBekor qilish: /cancel", parse_mode="Markdown")
         return
     if label in prompts:
         await _safe_answer(message, prompts[label], parse_mode="Markdown")

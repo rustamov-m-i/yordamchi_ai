@@ -339,6 +339,19 @@ async def init() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence ON tasks(recurrence_rule, recurrence_next_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category)")
 
+        # Idempotency for redelivered Telegram updates. aiogram 3.x doesn't expose
+        # the raw update_id on Message, so update_id was always NULL (NULLs never
+        # collide in a UNIQUE column) → the dedup was dead and a slow turn that
+        # Telegram redelivered produced a SECOND confirm card. Dedup on the stable
+        # (chat_id, message_id) pair instead. Pre-clean any existing dup rows so the
+        # UNIQUE index can be created.
+        await db.execute(
+            "DELETE FROM pending_actions WHERE chat_id IS NOT NULL AND message_id IS NOT NULL "
+            "AND id NOT IN (SELECT MIN(id) FROM pending_actions "
+            "WHERE chat_id IS NOT NULL AND message_id IS NOT NULL GROUP BY chat_id, message_id)")
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_chatmsg "
+                         "ON pending_actions(chat_id, message_id)")
+
         for col in ("prep_sent_at", "followup_sent_at", "completed_at"):
             if col not in meeting_cols:
                 await db.execute(f"ALTER TABLE meetings ADD COLUMN {col} TEXT")
@@ -1861,6 +1874,18 @@ async def find_meeting_conflicts(start_iso: Optional[str],
     return conflicts
 
 
+def _as_list(value) -> list:
+    """Normalize participants / follow_up_actions to a list. The LLM sometimes
+    sends a comma/semicolon/newline STRING instead of a JSON array — stored raw it
+    fails json.loads on read and silently resets to [] (data loss). Coerce here."""
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        s = value.replace(";", ",").replace("\n", ",")
+        return [p.strip() for p in s.split(",") if p.strip()]
+    return []
+
+
 async def create_meeting(data: dict) -> str:
     meeting_id = new_id("m-")
     # Materialize a default end (start + 60 min) when absent — so free-slot and
@@ -1882,11 +1907,11 @@ async def create_meeting(data: dict) -> str:
                 data.get("title", "Uchrashuv"),
                 _start,
                 _end,
-                json.dumps(data.get("participants", []), ensure_ascii=False),
+                json.dumps(_as_list(data.get("participants")), ensure_ascii=False),
                 data.get("location_or_link"),
                 _agenda_to_text(data.get("agenda")),
                 data.get("prep_notes"),
-                json.dumps(data.get("follow_up_actions", []), ensure_ascii=False),
+                json.dumps(_as_list(data.get("follow_up_actions")), ensure_ascii=False),
                 now_iso(),
             ),
         )
@@ -1908,8 +1933,8 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
         if key not in allowed:
             continue
         fields.append(f"{key} = ?")
-        if key in ("participants", "follow_up_actions") and isinstance(value, list):
-            value = json.dumps(value, ensure_ascii=False)
+        if key in ("participants", "follow_up_actions"):
+            value = json.dumps(_as_list(value), ensure_ascii=False)  # coerce str→list (no [] data loss)
         elif key == "agenda":
             value = _agenda_to_text(value)
         values.append(value)
@@ -2992,8 +3017,9 @@ async def enqueue_pending_action(update_id: Optional[int], chat_id: Optional[int
             await db.commit()
             return cur.lastrowid
         except aiosqlite.IntegrityError:
-            # update_id UNIQUE constraint hit — already processed.
-            logger.info("Skipping duplicate Telegram update_id=%s", update_id)
+            # (chat_id, message_id) UNIQUE hit — this message was already enqueued,
+            # i.e. Telegram redelivered the same update. Swallow the duplicate.
+            logger.info("Skipping duplicate message chat=%s msg=%s", chat_id, message_id)
             return None
 
 

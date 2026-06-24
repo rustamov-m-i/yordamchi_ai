@@ -472,6 +472,53 @@ async def main():
           f"st={_sst['status']} parent={_sst['parent_id']==_spid} d={_sst['description']!r} a={_sst['assignee']!r}")
     await database.delete_task(_spid)
 
+    print("\n── Bug-fix regressions (3 muammo) ──")
+    # 1) Double-confirm: dedup a redelivered Telegram update by (chat_id, message_id)
+    _d1 = await database.enqueue_pending_action(update_id=None, chat_id=900, message_id=77, user_text="x")
+    _d2 = await database.enqueue_pending_action(update_id=None, chat_id=900, message_id=77, user_text="x")
+    _d3 = await database.enqueue_pending_action(update_id=None, chat_id=900, message_id=78, user_text="y")
+    check("Bug1: bir xil (chat,msg) qayta-yetkazish dedup (2-marta None)",
+          bool(_d1) and _d2 is None and bool(_d3))
+    # 2) Meeting update: participants as a STRING → list (no [] data loss), time persists
+    _mid = await database.create_meeting({"title": "M", "datetime_start": "2026-07-09T10:00:00+05:00",
+                                          "participants": ["A"]})
+    await database.update_meeting(_mid, {"participants": "Sardor, Bobur; Aziz"})
+    _m = await database.get_meeting(_mid)
+    check("Bug2: meeting participants STRING → ro'yxat (revert/[] yo'q)",
+          _m["participants"] == ["Sardor", "Bobur", "Aziz"], _m["participants"])
+    await database.update_meeting(_mid, {"datetime_start": "2026-07-09T15:00:00+05:00", "title": "Yangi M"})
+    _m2 = await database.get_meeting(_mid)
+    check("Bug2: meeting vaqt+nom yangilanadi, participants saqlanadi",
+          "15:00" in _m2["datetime_start"] and _m2["title"] == "Yangi M"
+          and _m2["participants"] == ["Sardor", "Bobur", "Aziz"])
+    await database.cancel_meeting(_mid)
+    check("Bug2: _as_list matn/ro'yxatni normallaydi",
+          database._as_list("A; B, C") == ["A", "B", "C"] and database._as_list(["X", " Y "]) == ["X", "Y"])
+    # 3) New-X one-shot FSM exists + capture routes with an explicit create intent
+    check("Bug3: NewMeeting/NewTask FSM + capture handlerlar mavjud",
+          all(hasattr(handlers, n) for n in
+              ("NewMeetingTextFSM", "NewTaskTextFSM", "handle_new_meeting_capture", "handle_new_task_capture")))
+    _routed: dict = {}
+    _orig_par = handlers._process_and_reply
+    async def _fake_par(msg, text, state=None, **k):  # noqa: E306
+        _routed["text"] = text
+    handlers._process_and_reply = _fake_par
+    try:
+        class _CapMsg:
+            text = "Ertaga 12:00 Aziz bilan forum"; voice = None
+            chat = type("C", (), {"id": 1})()
+            async def answer(self, *a, **k): pass
+        class _CapState:
+            async def clear(self): pass
+            async def set_state(self, *a, **k): pass
+            async def get_data(self): return {}
+            async def update_data(self, **k): pass
+        await handlers.handle_new_meeting_capture(_CapMsg(), _CapState())
+    finally:
+        handlers._process_and_reply = _orig_par
+    check("Bug3: yangi uchrashuv matni create-meeting niyati bilan yo'naltiriladi",
+          _routed.get("text", "").startswith("Yangi uchrashuv qo'sh:"), _routed.get("text"))
+
     print("\n── Kategoriyalar ──")
     _cid = await database.create_task({"title": "Kat sinov", "priority": "P1", "status": "todo", "category": "Shartnomalar"})
     _ct = await database.get_task(_cid)

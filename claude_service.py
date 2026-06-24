@@ -162,9 +162,12 @@ async def _build_state_block() -> str:
     today_tasks = await database.list_today_tasks()
     done_today = await database.list_tasks_done_today()
     today_meetings = await database.list_today_meetings()
+    # Upcoming meetings (next 30 days, not just this week) — so a reschedule/rename
+    # of a meeting more than a week out still has its id in CURRENT STATE and the
+    # model emits update_meeting{id} instead of a duplicate schedule_meeting.
     week_meetings = [
         m for m in await database.list_meetings_in_window(
-            today_start.isoformat(), (today_start + timedelta(days=7)).isoformat())
+            today_start.isoformat(), (today_start + timedelta(days=30)).isoformat())
         if not m.get("completed_at")
     ]
     reminders = await database.list_reminders(status_in=["scheduled"], limit=20)
@@ -261,8 +264,8 @@ async def _build_state_block() -> str:
         f"## OVERDUE TASKS ({len(overdue)})",
         *(task_line(t) for t in overdue[:10]),
         "  (none)" if not overdue else "",
-        f"## MEETINGS — today + this week ({len(week_meetings)})",
-        *(meeting_line(m) for m in week_meetings[:12]),
+        f"## MEETINGS — upcoming, next 30 days ({len(week_meetings)})",
+        *(meeting_line(m) for m in week_meetings[:20]),
         "  (none)" if not week_meetings else "",
         f"## SCHEDULED REMINDERS ({len(reminders)})",
         *(reminder_line(r) for r in reminders[:12]),
