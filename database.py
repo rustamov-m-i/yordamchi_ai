@@ -1927,6 +1927,26 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
         "agenda", "prep_notes", "follow_up_actions", "reminded_at", "prep_sent_at",
         "followup_sent_at", "icloud_uid",
     }
+    # RENAME → propagate into the saved bayonnoma body. The protocol prose is frozen
+    # in follow_up_actions at generation time; without this, correcting a mis-heard
+    # meeting name leaves the OLD name in the exported bayonnoma (reported bug).
+    if "title" in data and "follow_up_actions" not in data:
+        async with aiosqlite.connect(config.DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT title, follow_up_actions FROM meetings WHERE id = ?", (meeting_id,))
+            row = await cur.fetchone()
+        if row:
+            old_title = (row["title"] or "").strip()
+            new_title = (data.get("title") or "").strip()
+            try:
+                body = json.loads(row["follow_up_actions"]) if row["follow_up_actions"] else []
+            except (json.JSONDecodeError, TypeError):
+                body = []
+            if old_title and new_title and old_title != new_title and body:
+                fixed = [b.replace(old_title, new_title) if isinstance(b, str) else b for b in body]
+                if fixed != body:
+                    data = {**data, "follow_up_actions": fixed}
     fields = []
     values: list[Any] = []
     for key, value in data.items():

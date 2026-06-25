@@ -494,6 +494,16 @@ async def main():
     await database.cancel_meeting(_mid)
     check("Bug2: _as_list matn/ro'yxatni normallaydi",
           database._as_list("A; B, C") == ["A", "B", "C"] and database._as_list(["X", " Y "]) == ["X", "Y"])
+    # Renaming a meeting propagates into the SAVED bayonnoma body (mis-heard-name fix):
+    # without this the protocol export kept the old (wrong) name after a title correction.
+    _rmid = await database.create_meeting({"title": "FCB bilan uchrashuv",
+                                           "datetime_start": "2026-07-10T15:00:00+05:00"})
+    await database.update_meeting(_rmid, {"follow_up_actions": ["Mavzu: FCB bilan uchrashuv\nEshitildi: muhokama."]})
+    await database.update_meeting(_rmid, {"title": "Barcelona bilan uchrashuv"})
+    _rb = (await database.get_meeting(_rmid)).get("follow_up_actions") or [""]
+    check("Bug: nom to'g'rilash saqlangan bayonnoma tanasida ham yangilanadi",
+          "Barcelona bilan uchrashuv" in _rb[0] and "FCB bilan uchrashuv" not in _rb[0], _rb[0][:60])
+    await database.cancel_meeting(_rmid)
     # 3) New-X one-shot FSM exists + capture routes with an explicit create intent
     check("Bug3: NewMeeting/NewTask FSM + capture handlerlar mavjud",
           all(hasattr(handlers, n) for n in
