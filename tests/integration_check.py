@@ -22,6 +22,7 @@ config.DATABASE_PATH = _TMP
 
 import database  # noqa: E402
 import handlers  # noqa: E402
+import translit  # noqa: E402
 
 TZ = database.TZ
 PASS = 0
@@ -210,8 +211,9 @@ async def main():
         check("Export: barcha katak wrap_text (uzun matn o'raladi)",
               _ws["H4"].alignment.wrap_text and _ws["F4"].alignment.wrap_text
               and _ws["B4"].alignment.wrap_text)
-        check("Export: Kategoriya ustuni (H)", _ws["H3"].value == "Kategoriya")
-        check("Export: yashirin ID ustuni (I)", _ws["I3"].value == "ID" and bool(_ws.column_dimensions["I"].hidden))
+        check("Export: Takroriylik ustuni (G)", _ws["G3"].value == "Takroriylik")
+        check("Export: Kategoriya ustuni (I)", _ws["I3"].value == "Kategoriya")
+        check("Export: yashirin ID ustuni (J)", _ws["J3"].value == "ID" and bool(_ws.column_dimensions["J"].hidden))
         # P0 sorts first → row 4 priority cell (E) is red+bold (Shoshilinch)
         check("Export: P0 ustuvorlik qizil+qalin",
               _ws["E4"].font.bold and str(_ws["E4"].font.color.rgb or "").endswith("C00000"),
@@ -227,8 +229,9 @@ async def main():
         check("Export: klaviatura faylga biriktirilgan (bitta xabar)", _kb is not None)
         check("Export: 'Hammasi' + ijrochi-drilldown tugmalari",
               "exportst:all" in _kbcbs and "exportwho:0" in _kbcbs)
-        check("Export: ixcham (≤7 tugma, alohida ijrochi tugmasi yo'q)",
-              len(_kbcbs) <= 7 and not any(c.startswith("exportby:") for c in _kbcbs))
+        check("Export: ixcham (≤8 tugma, alohida ijrochi tugmasi yo'q)",
+              len(_kbcbs) <= 8 and not any(c.startswith("exportby:") for c in _kbcbs))
+        check("Export: 'Shu hafta' filtri tugmasi bor", "exportst:week" in _kbcbs)
         _wk = handlers._export_who_keyboard([f"N{i}" for i in range(20)], 0)
         _wkcbs = [b.callback_data for row in _wk.inline_keyboard for b in row]
         check("Export: ijrochi-picker paginated (kesish yo'q: 8/sahifa + next + orqaga)",
@@ -547,6 +550,47 @@ async def main():
     check("Batafsil kartada kategoriya", "Shartnomalar" in handlers._format_task_detail_card(_ct))
     _imp_cat = handlers._structured_tasks_from_table([("Vazifa", "Kategoriya"), ("Ish", "SMM")])
     check("Import: Kategoriya ustuni o'qiladi", bool(_imp_cat) and _imp_cat[0]["data"].get("category") == "SMM")
+
+    print("\n── Export/import audit tuzatishlari (8 ta) ──")
+    # #6 Takroriylik (recurrence) round-trip: exported label → normalized rule code.
+    _imp_rec = handlers._structured_tasks_from_table([("Vazifa", "Takroriylik"), ("Hafta ishi", "har hafta")])
+    check("#6 Import: Takroriylik o'qiladi (har hafta→weekly)",
+          bool(_imp_rec) and _imp_rec[0]["data"].get("recurrence_rule") == "weekly")
+    check("#6 Export label round-trip (weekly→'har hafta'→weekly)",
+          database.normalize_recurrence_rule(handlers._RECUR_LABEL["weekly"]) == "weekly"
+          and all(database.normalize_recurrence_rule(v) == k for k, v in handlers._RECUR_LABEL.items()))
+    _imp_recb = handlers._structured_tasks_from_table([("Vazifa", "Takroriylik"), ("Ish", "")])
+    check("#6 Import: bo'sh Takroriylik → tozalaydi (None, kalit bor)",
+          bool(_imp_recb) and "recurrence_rule" in _imp_recb[0]["data"]
+          and _imp_recb[0]["data"]["recurrence_rule"] is None)
+    # #2 blank priority/status in a PRESENT column must NOT overwrite with default
+    _imp_blank = handlers._structured_tasks_from_table(
+        [("Vazifa", "Ustuvorlik", "Holat"), ("Ish", "", "")])
+    check("#2 Import: bo'sh Ustuvorlik/Holat default bilan yozilmaydi",
+          bool(_imp_blank) and "priority" not in _imp_blank[0]["data"]
+          and "status" not in _imp_blank[0]["data"])
+    # #1 Cyrillic round-trip: a Cyrillic priority/status label imports back to its code
+    _imp_cyr = handlers._structured_tasks_from_table(
+        [("Vazifa", "Ustuvorlik", "Holat"),
+         ("Ish", translit.to_cyrillic_pro("Shoshilinch"), translit.to_cyrillic_pro("Bajarildi"))])
+    check("#1 Import: krillcha yorliq kodga qaytadi (Шошилинч→P0, Бажарилди→done)",
+          bool(_imp_cyr) and _imp_cyr[0]["data"].get("priority") == "P0"
+          and _imp_cyr[0]["data"].get("status") == "done")
+    # #3 orphan subtask: a dotted child whose parent № is missing is counted/warned
+    _orph_actions = [
+        {"type": "create_task", "data": {"title": "Ota"}, "_num": "1"},
+        {"type": "create_task", "data": {"title": "Bola"}, "_num": "1.1"},     # parent present
+        {"type": "create_task", "data": {"title": "Yetim"}, "_num": "9.2"},    # parent missing
+    ]
+    check("#3 Import: yetim sub-vazifa aniqlanadi (ota-№ yo'q)",
+          handlers._count_orphan_subtasks(_orph_actions) == 1)
+    # #5 Cyrillic export token recognition (voice/command "krillcha")
+    check("#5 Export: krillcha tokenlari tanilади",
+          "krillcha" in handlers._CYR_TOKENS and "кирилл" in handlers._CYR_TOKENS)
+    # #4 "this week" export scope wiring
+    check("#4 Export: 'shu hafta' filtri ulangan",
+          handlers._EXPORT_STATUS_WORDS.get("shu hafta") == "week"
+          and handlers._EXPORT_FILTER_LABEL.get("week") == "Shu haftalik")
 
     print("\n── Kategoriya boshqaruvi (qo'shish/o'chirish) ──")
     _m1 = await database.create_task({"title": "M1", "priority": "P2", "status": "todo", "category": "TestKat"})

@@ -2293,7 +2293,8 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
             _exp_data = _exp.get("data") or {}
             _exp_who = (_exp_data.get("assignee") or "").strip() or None
             _exp_status = _EXPORT_STATUS_WORDS.get((_exp_data.get("status") or "").strip().lower()) or None
-            await _send_tasks_export(message, assignee=_exp_who, status=_exp_status)
+            _exp_script = "cyr" if (_exp_data.get("script") or "").strip().lower() in _CYR_TOKENS else "lat"
+            await _send_tasks_export(message, assignee=_exp_who, status=_exp_status, script=_exp_script)
             return
 
         # ── "Ko'rsat/ro'yxat" intent — render the REAL section from the DB ──
@@ -2607,7 +2608,14 @@ async def _render_stale_delegations(message: Message) -> None:
 
 # Shared column schema for export & import. "№" is a row-number column (ignored
 # on import — matched by name). Headers are lowercased when read back.
-_EXPORT_HEADERS = ["№", "Vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya"]
+_EXPORT_HEADERS = ["№", "Vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Takroriylik", "Izoh", "Kategoriya"]
+
+# rule code → round-trip-safe Uzbek label (normalize_recurrence_rule accepts these back).
+_RECUR_LABEL = {"daily": "har kuni", "weekdays": "ish kunlari", "weekly": "har hafta",
+                "monthly": "har oy", "quarterly": "har chorak", "yearly": "har yil"}
+
+# Tokens that request a Cyrillic export (voice/command), e.g. "krillcha yubor".
+_CYR_TOKENS = {"krill", "krillcha", "kiril", "kirill", "kirilcha", "cyrillic", "cyr", "кирилл", "кириллча"}
 
 
 def _export_date(iso):
@@ -2647,20 +2655,51 @@ def _import_deadline(val):
     return None
 
 
+def _norm_label(s) -> str:
+    """Lowercase + drop apostrophe variants — so a status/priority cell matches
+    regardless of script or apostrophe form (Toʻsilgan / To'silgan / Тўсилган)."""
+    s = str(s or "").strip().lower()
+    for ch in "'ʼ’`ʻ‘":
+        s = s.replace(ch, "")
+    return s
+
+
+# Reverse maps built LAZILY from the Uzbek labels in BOTH Latin and Cyrillic, so a
+# Cyrillic-exported file ("Бажарилди"/"Шошилинч") round-trips back — otherwise every
+# status/priority silently reset to the default on re-import (data corruption).
+_PRIO_REVERSE: dict = {}
+_STATUS_REVERSE: dict = {}
+
+
+def _label_reverse(label_map: dict) -> dict:
+    import translit
+    rev: dict = {}
+    for code, label in label_map.items():
+        for form in (label, translit.to_cyrillic_pro(label)):
+            rev[_norm_label(form)] = code
+    return rev
+
+
 def _import_priority(val) -> str:
-    """Cell → P0-P3. Accepts codes (P0..P3) and Uzbek labels (Shoshilinch..)."""
-    s = str(val or "").strip().lower()
+    """Cell → P0-P3. Accepts codes (P0..P3) and Uzbek labels in Latin OR Cyrillic."""
+    s = _norm_label(val)
     if s in ("p0", "p1", "p2", "p3"):
         return s.upper()
-    return {v.lower(): k for k, v in _PRIORITY_LABEL_UZ.items()}.get(s, "P2")
+    global _PRIO_REVERSE
+    if not _PRIO_REVERSE:
+        _PRIO_REVERSE = _label_reverse(_PRIORITY_LABEL_UZ)
+    return _PRIO_REVERSE.get(s, "P2")
 
 
 def _import_status(val) -> str:
-    """Cell → status code; defaults to 'todo'."""
-    s = str(val or "").strip().lower()
-    if s in ("todo", "in_progress", "blocked", "done"):
+    """Cell → status code (Latin OR Cyrillic label); defaults to 'todo'."""
+    s = _norm_label(val)
+    if s in ("todo", "in_progress", "blocked", "done", "cancelled"):
         return s
-    return {v.lower(): k for k, v in _STATUS_LABEL_UZ.items()}.get(s, "todo")
+    global _STATUS_REVERSE
+    if not _STATUS_REVERSE:
+        _STATUS_REVERSE = _label_reverse(_STATUS_LABEL_UZ)
+    return _STATUS_REVERSE.get(s, "todo")
 
 
 @router.message(Command("export"))
@@ -2670,9 +2709,17 @@ async def cmd_export(message: Message) -> None:
     → that assignee. Voice/text ham ('bajarilgan vazifalarni eksport qil')."""
     parts = (message.text or "").split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+    # Strip a 'krillcha'/'kirill' token first → Cyrillic export (else it'd be mis-read
+    # as an assignee name and return an empty file).
+    script = "lat"
+    if arg:
+        _kept = [t for t in arg.split() if t.lower() not in _CYR_TOKENS]
+        if len(_kept) != len(arg.split()):
+            script = "cyr"
+        arg = " ".join(_kept).strip() or None
     status = _EXPORT_STATUS_WORDS.get(arg.lower()) if arg else None
     assignee = None if status else arg
-    await _send_tasks_export(message, assignee=assignee, status=status)
+    await _send_tasks_export(message, assignee=assignee, status=status, script=script)
 
 
 @router.callback_query(F.data.startswith("exportby:"))
@@ -2735,6 +2782,7 @@ def _export_root_keyboard(has_assignees: bool) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="✅ Bajarilgan", callback_data="exportst:done")],
         [InlineKeyboardButton(text="⌛ O'tgan", callback_data="exportst:overdue"),
          InlineKeyboardButton(text="⭐ Muhim", callback_data="exportst:important")],
+        [InlineKeyboardButton(text="🗓 Shu hafta", callback_data="exportst:week")],
     ]
     bottom = [InlineKeyboardButton(text="📦 Hammasi", callback_data="exportst:all")]
     if has_assignees:
@@ -2815,7 +2863,7 @@ async def cb_export_root(query: CallbackQuery) -> None:
 # Status/filter labels for the export subtitle + filename + buttons. Keys mirror
 # the Tasks-section filters so "export active" == what the "Aktiv" filter shows.
 _EXPORT_FILTER_LABEL = {
-    "active": "Aktiv", "today": "Bugungi", "overdue": "Muddati o'tgan",
+    "active": "Aktiv", "today": "Bugungi", "week": "Shu haftalik", "overdue": "Muddati o'tgan",
     "important": "Muhim", "urgent": "Shoshilinch", "done": "Bajarilgan",
     "recurring": "Takroriy", "all": "Barchasi",
 }
@@ -2846,6 +2894,7 @@ _EXPORT_STATUS_WORDS = {
     "muhim": "important", "important": "important",
     "shoshilinch": "urgent", "urgent": "urgent",
     "bugun": "today", "bugungi": "today", "today": "today",
+    "hafta": "week", "haftalik": "week", "shu hafta": "week", "shu haftalik": "week", "week": "week",
     "takroriy": "recurring", "recurring": "recurring",
     "barchasi": "all", "hammasi": "all", "all": "all",
 }
@@ -2860,6 +2909,22 @@ async def _fetch_tasks_for_export(filt: str, include_subtasks: bool = False) -> 
         return await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000, include_subtasks=inc)
     if filt == "today":
         return await database.list_today_tasks()
+    if filt == "week":
+        # This calendar week (Mon 00:00 → next Mon): active tasks whose deadline falls in range.
+        _now = datetime.now(database.TZ)
+        _ws = (_now - timedelta(days=_now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        _we = _ws + timedelta(days=7)
+        _act = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=10000, include_subtasks=inc)
+
+        def _in_week(t):
+            dl = t.get("deadline")
+            if not dl:
+                return False
+            try:
+                return _ws <= datetime.fromisoformat(dl).astimezone(database.TZ) < _we
+            except (ValueError, TypeError):
+                return False
+        return [t for t in _act if _in_week(t)]
     if filt == "overdue":
         return await database.list_overdue_tasks()
     if filt == "done":
@@ -2965,7 +3030,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     ZEBRA_FILL = PatternFill("solid", fgColor=ZEBRA)
     # Per-assignee export is flat → add an "Asosiy vazifa" column so a subtask shows which
     # project it belongs to. The hierarchical export indents subtasks under the parent.
-    headers = (["№", "Vazifa", "Asosiy vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Izoh", "Kategoriya"]
+    headers = (["№", "Vazifa", "Asosiy vazifa", "Ijrochi", "Muddat", "Ustuvorlik", "Holat", "Takroriylik", "Izoh", "Kategoriya"]
                if flat_mode else _EXPORT_HEADERS)
     n_visible = len(headers)
     id_col = n_visible + 1
@@ -2979,8 +3044,8 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     # of being clipped — no per-column wrap list needed.
     # Column widths (Excel units) — generous so nothing is clipped (matches the
     # principal's print template). Vazifa/Izoh widest; dates/status comfortable.
-    widths = ([7, 50, 34, 32, 17, 18, 22, 46, 24] if flat_mode
-              else [7, 60, 34, 17, 18, 22, 50, 24])
+    widths = ([7, 48, 32, 30, 16, 17, 20, 16, 42, 22] if flat_mode
+              else [7, 56, 32, 16, 17, 20, 16, 46, 22])
 
     def _wrapped_lines(text, col_idx):
         """Estimate display lines for `text` in the column at col_idx (Arial 14),
@@ -3055,6 +3120,7 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
             _export_date(t.get("deadline")),
             _PRIORITY_LABEL_UZ.get(t.get("priority", "P2"), "Rejadagi"),
             _STATUS_LABEL_UZ.get(t.get("status", "todo"), t.get("status", "")),
+            _RECUR_LABEL.get(t.get("recurrence_rule") or "", ""),   # Takroriylik (round-trip-safe)
             (t.get("description") or "").strip(),
             (t.get("category") or "").strip(),
         ]
@@ -3179,10 +3245,19 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
     _dc.font = Font(name=ARIAL, size=10, color="33415C")
     dash.merge_cells("A2:F2")
 
+    # Asosiy/Sub split: hierarchical № has dots ("3.1") → test for "."; flat (per-
+    # assignee) № is dotless ("1","2") so use the "Asosiy vazifa" column (filled only
+    # for subtasks) instead, otherwise Sub always reads 0 on a per-person report.
+    if flat_mode:
+        _sub_f = f'=SUMPRODUCT(--({_rng("Asosiy vazifa")}<>""))'
+        _aso_f = f'=COUNTA({_rng("Vazifa")})-{_sub_f[1:]}'
+    else:
+        _aso_f = f'=SUMPRODUCT(--ISERROR(SEARCH(".",{_rng("№")})))'
+        _sub_f = f'=SUMPRODUCT(--ISNUMBER(SEARCH(".",{_rng("№")})))'
     umumiy = [
         ("Jami vazifalar", f"=COUNTA({_rng('Vazifa')})", NAVY, True),
-        ("Asosiy vazifa", f'=SUMPRODUCT(--ISERROR(SEARCH(".",{_rng("№")})))', "1A1A1A", False),
-        ("Sub-vazifa", f'=SUMPRODUCT(--ISNUMBER(SEARCH(".",{_rng("№")})))', "1A1A1A", False),
+        ("Asosiy vazifa", _aso_f, "1A1A1A", False),
+        ("Sub-vazifa", _sub_f, "1A1A1A", False),
         ("Muddati o'tgan",
          f'=SUMPRODUCT(({_rng("Muddat")}<>"")*({_rng("Muddat")}<TODAY())'
          f'*({_rng("Holat")}<>"{_done_l}")*({_rng("Holat")}<>"{_canc_l}"))', "C00000", True),
@@ -3284,6 +3359,7 @@ _COL_PRIORITY = ("ustuvorlik", "muhimlik", "daraja", "darajasi", "priority")
 _COL_STATUS = ("holat", "holati", "status")
 _COL_DESC = ("izoh", "izohi", "tavsif", "tavsifi", "qoshimcha", "description")
 _COL_CATEGORY = ("kategoriya", "category", "turkum", "bolim")
+_COL_RECURRENCE = ("takroriylik", "takroriy", "takrorlanish", "recurrence", "rrule")
 
 
 def _structured_tasks_from_table(table: list) -> list[dict]:
@@ -3322,10 +3398,14 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         # ABSENT column is left untouched (a partial file never wipes other fields).
         # Previously blank assignee/category/izoh were skipped → clearing didn't apply.
         data = {"title": title, "source": "excel"}  # source: trusted for new assignee/category (A)
-        if has(_COL_PRIORITY):
-            data["priority"] = _import_priority(pick(d, _COL_PRIORITY))
-        if has(_COL_STATUS):
-            data["status"] = _import_status(pick(d, _COL_STATUS))
+        # priority/status have NO null state — a blank cell must NOT overwrite the
+        # stored value with the default (P2/todo). Write only when the cell has a value.
+        _pri = pick(d, _COL_PRIORITY)
+        if _pri not in (None, ""):
+            data["priority"] = _import_priority(_pri)
+        _sta = pick(d, _COL_STATUS)
+        if _sta not in (None, ""):
+            data["status"] = _import_status(_sta)
         if has(_COL_DEADLINE):
             data["deadline"] = _import_deadline(pick(d, _COL_DEADLINE))
         asg = str(pick(d, _COL_ASSIGNEE) or "").strip()
@@ -3338,6 +3418,9 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         if has(_COL_CATEGORY):
             cat = str(pick(d, _COL_CATEGORY) or "").strip()
             data["category"] = "" if cat == "(boshqa)" else cat
+        if has(_COL_RECURRENCE):
+            # Round-trips via normalize_recurrence_rule ("har kuni"→daily); blank → clears.
+            data["recurrence_rule"] = database.normalize_recurrence_rule(pick(d, _COL_RECURRENCE))
         act = {"type": "create_task", "data": data,
                # Carry the optional ID (hidden export column) so the caller can turn this
                # into an UPDATE when the task still exists — instead of a duplicate.
@@ -3349,6 +3432,18 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
             act["_num"] = num
         out.append(act)
     return out
+
+
+def _count_orphan_subtasks(actions: list) -> int:
+    """How many dotted-№ children reference a parent № that is NOT present in this
+    batch. _resolve_parent only re-parents from rows in the same file, so an orphan
+    silently becomes a top-level task — the caller warns about the count."""
+    batch_nums = {(a.get("_num") or "") for a in actions if a.get("_num")}
+    return sum(
+        1 for a in actions
+        if "." in (a.get("_num") or "")
+        and a["_num"].split(".")[0] not in batch_nums
+    )
 
 
 def _apply_title_dedup(actions: list, by_title: dict) -> dict:
@@ -3437,6 +3532,13 @@ async def _smart_tasks_from_table(table: list) -> list[dict]:
         if desc and (desc.lower() in _GENERIC_DESC
                      or (asg and desc.lower() == asg.lower())):
             d.pop("description", None)
+        # Normalize priority/status to the allowed set — a hallucinated label
+        # ("Critical"/"P5") would otherwise fail create_task's CHECK and silently
+        # DROP the row (already-confirmed import). Coerce to the nearest valid code.
+        if "priority" in d:
+            d["priority"] = _import_priority(d.get("priority"))
+        if "status" in d:
+            d["status"] = _import_status(d.get("status"))
         out.append(a)
     return out
 
@@ -3907,6 +4009,7 @@ async def _import_tasks_from_file_bytes(
         if rid and await database.get_task(rid):
             a["type"] = "update_task"
             a["id"] = rid
+    smart_note = ""
     if not actions:
         thinking = await message.answer("🔍 Fayldan vazifalarni topyapman…")
         actions = await _smart_tasks_from_table(table)
@@ -3914,6 +4017,14 @@ async def _import_tasks_from_file_bytes(
             await thinking.delete()
         except TelegramBadRequest:
             pass
+        # The smart extractor only sees the first 120 rows / 6000 chars of the file.
+        # If the input exceeded that, tail rows were never sent to the model — warn so
+        # a partial extraction doesn't read as "everything was imported".
+        _nonblank = sum(1 for r in table
+                        if any(c is not None and str(c).strip() for c in r))
+        if _nonblank > 120 or len(_table_to_text(table, max_rows=10**9, max_chars=10**9)) > 6000:
+            smart_note = ("\n\n⚠️ Fayl katta — faqat boshidagi qism o'qildi. "
+                          "Hammasi kirgan bo'lsa, qolganini alohida fayl bilan yuboring.")
 
     if not actions:
         await message.answer(
@@ -3946,6 +4057,15 @@ async def _import_tasks_from_file_bytes(
         actions = actions[:_MAX_IMPORT_TASKS]
         overflow = (f"\n\n⚠️ Juda katta import — {_MAX_IMPORT_TASKS} tasi olindi. "
                     f"Qolgan {dropped} tasini alohida fayl bilan yuboring.")
+    overflow += smart_note
+
+    # № hierarchy: a dotted child resolves its parent ONLY from a parent row in this
+    # same file (see _resolve_parent). A child whose parent № is missing silently
+    # becomes a top-level task — surface that so it isn't mistaken for a lost row.
+    _orphans = _count_orphan_subtasks(actions)
+    if _orphans:
+        overflow += (f"\n\n⚠️ {_orphans} ta sub-vazifaning ota-№ faylda yo'q — "
+                     "ular asosiy vazifa sifatida qo'shiladi.")
 
     n_upd = sum(1 for a in actions if a.get("type") == "update_task")
     n_new = len(actions) - n_upd

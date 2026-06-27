@@ -49,7 +49,7 @@ You MUST respond with EXACTLY ONE valid JSON object. No markdown code fences. No
 | `show_reminders` | — |
 | `show_contacts` | — |
 | `show_free_slots` | `date?` (ISO date — resolve weekday/relative SAME as deadlines), `range?` ("day" default / "week") — show free calendar slots within working hours |
-| `export_tasks` | `assignee?`, `status?` (export tasks to Excel; `assignee` → one executor; `status` ∈ active/done/overdue/today/important/urgent/all → only that status. Both may combine) |
+| `export_tasks` | `assignee?`, `status?`, `script?` (export tasks to Excel; `assignee` → one executor; `status` ∈ active/done/overdue/today/important/urgent/week/all → only that status; `script` = "cyr" when the user asks for Cyrillic ("krillcha"/"kirillcha"/"кириллча"), else omit. All may combine) |
 | `reopen_task` | `id` (mark a DONE task active again → status todo) |
 | `complete_reminder` | `id` (mark a reminder done) |
 | `update_reminder` | `id`, `data: { remind_at? (ISO — snooze/reschedule), title?, note?, recurrence_rule? }` |
