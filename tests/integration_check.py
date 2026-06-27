@@ -592,6 +592,137 @@ async def main():
           handlers._EXPORT_STATUS_WORDS.get("shu hafta") == "week"
           and handlers._EXPORT_FILTER_LABEL.get("week") == "Shu haftalik")
 
+    print("\n── REAL export→edit→import round-trip (round-trip audit) ──")
+    # Unit-level guards for the round-trip helpers first.
+    # #3 _export_date keeps the clock (date-only DISPLAY, full instant stored)
+    _ed = handlers._export_date("2026-07-15T17:00:00+05:00")
+    check("#3 _export_date vaqtni saqlaydi (17:00, .date() emas)",
+          getattr(_ed, "hour", None) == 17 and getattr(_ed, "minute", None) == 0)
+    # #2 _import_deadline accepts user-natural forms and never raises
+    check("#2 _import_deadline: slash/yil-siz formatlar o'qiladi",
+          handlers._import_deadline("15/07/2026") is not None
+          and handlers._import_deadline("12-10 14:30") is not None)
+    check("#2 _import_deadline: o'qib bo'lmaydigan → None (chaqiruvchi tegmaydi)",
+          handlers._import_deadline("falon-piston") is None)
+    # #8 unquote_names is a clean inverse of quote_names (no drift)
+    check("#8 unquote_names quote_names'ning teskarisi (drift yo'q)",
+          translit.unquote_names(translit.quote_names("Agrobank hisoboti")) == "Agrobank hisoboti"
+          and translit.unquote_names(translit.quote_names("Agrobankning rejasi")) == "Agrobankning rejasi")
+    check("#8 unquote_names idempotent + begona qo'shtirnoqqa tegmaydi",
+          translit.unquote_names("\"Agrobank\" loyiha") == "Agrobank loyiha"
+          and translit.unquote_names("\"oddiy\" so'z") == "\"oddiy\" so'z")
+    # #6 _import_text back-transliterates Cyrillic free text
+    check("#6 _import_text: krill matn lotinga qaytadi",
+          handlers._import_text(translit.to_cyrillic_pro("muhim izoh")) == "muhim izoh")
+
+    import io as _rio
+    from openpyxl import load_workbook as _rlwb
+
+    class _RtMsg:
+        chat = type("C", (), {"id": 1})()
+        text = "/export"
+        cap = {}
+        async def answer_document(self, file, caption=None, parse_mode=None, reply_markup=None):
+            _RtMsg.cap["b"] = file.data
+        async def answer(self, *a, **k):
+            pass
+
+    def _rt_export(**kw):
+        _RtMsg.cap.clear()
+        return _RtMsg(), kw
+
+    async def _rt_bytes(**kw):
+        m = _RtMsg()
+        await handlers._send_tasks_export(m, **kw)
+        return _RtMsg.cap["b"]
+
+    def _rt_read(b):
+        # EXACTLY what the importer does: _read_task_sheet over the loaded workbook.
+        return handlers._read_task_sheet(_rlwb(_rio.BytesIO(b), data_only=True))
+
+    async def _rt_apply(table):
+        """Run the production import pipeline (sheet→parse→ID-dedup→execute)."""
+        acts = handlers._structured_tasks_from_table(table)
+        for a in acts:
+            rid = a.pop("_id", "")
+            if rid and await database.get_task(rid):
+                a["type"] = "update_task"; a["id"] = rid
+        await handlers._execute_actions(acts)
+        return acts
+
+    def _rt_cols(table):
+        hi = next(i for i, row in enumerate(table)
+                  if any(handlers._norm_header(c) in handlers._COL_TITLE for c in row))
+        H = [handlers._norm_header(c) for c in table[hi]]
+        def ci(names):
+            return next((H.index(n) for n in names if n in H), None)
+        return hi, ci
+
+    await handlers._upsert_contacts(["Karimov"])
+    _rt_dl = (datetime.now(TZ) + timedelta(days=3)).replace(hour=14, minute=30, second=0, microsecond=0)
+    _rt_id = await database.create_task({
+        "title": "RoundTrip vazifa", "assignee": "Karimov", "priority": "P1",
+        "status": "todo", "deadline": _rt_dl.isoformat(),
+        "description": "Agrobank hisoboti", "recurrence_rule": "daily"})
+
+    _b = await _rt_bytes(status="all")
+    _tbl = _rt_read(_b)
+    _acts = handlers._structured_tasks_from_table(_tbl)
+    _mine = [a for a in _acts if a.get("_id") == _rt_id]
+    # #1 THE headline fix: importer reads 'Vazifalar', not the dashboard '.active'
+    check("#1 Round-trip: importer 'Vazifalar' varag'ini o'qiydi (dashboard emas)", len(_mine) == 1)
+    check("#3 Round-trip: muddat vaqti saqlanadi (T14:30, 00:00 emas)",
+          bool(_mine) and "T14:30" in (_mine[0]["data"].get("deadline") or ""))
+    check("#8 Round-trip: brend qo'shtirnog'i import'da olib tashlanadi (drift yo'q)",
+          bool(_mine) and _mine[0]["data"].get("description") == "Agrobank hisoboti")
+
+    # Edit the parsed table: status→Bajarildi, assignee case-only → 'karimov'
+    hi, ci = _rt_cols(_tbl)
+    idci, stci, asci = ci(("id",)), ci(handlers._COL_STATUS), ci(handlers._COL_ASSIGNEE)
+    di = next(i for i, row in enumerate(_tbl)
+              if i > hi and idci is not None and idci < len(row) and str(row[idci]) == _rt_id)
+    _erow = list(_tbl[di])
+    _erow[stci] = "Bajarildi"
+    _erow[asci] = "karimov"            # case-only change
+    _etbl = [list(r) for r in _tbl]; _etbl[di] = _erow
+    _eacts = await _rt_apply(_etbl)
+    _td = await database.get_task(_rt_id)
+    check("#1 Round-trip: tahrir UPDATE bo'ladi (dublikat emas)",
+          any(a.get("type") == "update_task" and a.get("id") == _rt_id for a in _eacts))
+    check("#4 Round-trip: holat 'Bajarildi' → done", _td["status"] == "done")
+    check("#7 Round-trip: ijrochi kanonik registr ('Karimov', 'karimov' emas)",
+          _td["assignee"] == "Karimov")
+    _kids = [t for t in await database.list_tasks(limit=5000, include_subtasks=True)
+             if t.get("recurrence_parent_id") == _rt_id]
+    check("#4 Round-trip: takrorlanuvchi keyingi nusxa yaratildi (zanjir uzilmaydi)", len(_kids) >= 1)
+
+    # #2 a non-empty UNPARSEABLE deadline cell must NOT destroy the stored deadline
+    _dl_id = await database.create_task({"title": "Muddatli vazifa", "priority": "P2",
+        "status": "todo", "deadline": (datetime.now(TZ) + timedelta(days=5)).isoformat()})
+    _b2 = await _rt_bytes(status="all")
+    _tbl2 = _rt_read(_b2)
+    hi2, ci2 = _rt_cols(_tbl2)
+    idci2, dlci2 = ci2(("id",)), ci2(handlers._COL_DEADLINE)
+    di2 = next(i for i, row in enumerate(_tbl2)
+               if i > hi2 and idci2 is not None and idci2 < len(row) and str(row[idci2]) == _dl_id)
+    _r2 = list(_tbl2[di2]); _r2[dlci2] = "falon-sana"
+    _t2 = [list(r) for r in _tbl2]; _t2[di2] = _r2
+    await _rt_apply(_t2)
+    check("#2 Round-trip: o'qib bo'lmaydigan muddat katagi mavjud muddatni O'CHIRMAYDI",
+          (await database.get_task(_dl_id)).get("deadline") is not None)
+
+    # #6 a CYRILLIC export must re-import deterministically (no LLM), Latin restored
+    _cy_id = await database.create_task({"title": "Krill vazifa", "priority": "P2",
+        "status": "todo", "description": "muhim hujjat"})
+    _bc = await _rt_bytes(status="all", script="cyr")
+    _tblc = _rt_read(_bc)
+    _actsc = handlers._structured_tasks_from_table(_tblc)
+    _minec = [a for a in _actsc if a.get("_id") == _cy_id]
+    check("#6 Round-trip: krillcha eksport deterministik o'qiladi (LLM'siz)", len(_minec) == 1)
+    check("#6 Round-trip: krill matn lotinga qaytadi (storage krill bo'lmaydi)",
+          bool(_minec) and _minec[0]["data"].get("description") == "muhim hujjat"
+          and _minec[0]["data"].get("title") == "Krill vazifa")
+
     print("\n── Kategoriya boshqaruvi (qo'shish/o'chirish) ──")
     _m1 = await database.create_task({"title": "M1", "priority": "P2", "status": "todo", "category": "TestKat"})
     _m2 = await database.create_task({"title": "M2", "priority": "P2", "status": "todo", "category": "TestKat"})

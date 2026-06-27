@@ -319,6 +319,27 @@ def quote_names(text: str, quote: str = '"') -> str:
     return _LATIN_TOKEN.sub(_repl, text)
 
 
+def unquote_names(text: str, quote: str = '"') -> str:
+    """Inverse of quote_names — strip the `quote` marks it added around recognized
+    brand/phrase names, so an exported→re-imported value never accumulates quotes
+    ('"Agrobank"ning' → 'Agrobankning', '"Pulli Gap"' → 'Pulli Gap'). Only names in
+    _QUOTE_NAMES / _KEEP_PHRASES are unwrapped; a user's quotes around other words
+    stay intact. Idempotent."""
+    if not text or quote not in text:
+        return text
+    q = re.escape(quote)
+
+    def _repl(m: "re.Match") -> str:
+        inner = m.group(1)
+        if inner.strip(_APOS + "-._ ").casefold() in _QUOTE_NAMES:
+            return inner
+        if inner.strip().casefold() in _KEEP_PHRASES:
+            return inner
+        return m.group(0)
+
+    return re.sub(q + r"([^" + q + r"]+)" + q, _repl, text)
+
+
 # Cyrillic → Latin (digraphs/special first). Soft sign is dropped; е→e (lossy).
 _C2L = [
     ("ў", "oʻ"), ("ғ", "gʻ"), ("ш", "sh"), ("ч", "ch"),

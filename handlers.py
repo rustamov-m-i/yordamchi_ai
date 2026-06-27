@@ -1089,6 +1089,15 @@ async def _push_meeting_to_icloud(meeting_id: str, data: dict) -> None:
 _SELF_ASSIGNEE_NAMES = {"men", "o'zim", "ozim", "o'z", "oz", ""}
 
 
+async def _load_contact_map() -> dict:
+    """{casefolded name: canonical name} for the assignee allowlist. The canonical
+    casing is written back on import so a case-only edit ('Aziz'→'aziz') never
+    desyncs the stored assignee from the contact (which would split per-person
+    workload/stats into two buckets)."""
+    return {(c.get("name") or "").casefold(): (c.get("name") or "").strip()
+            for c in await database.list_contacts()}
+
+
 async def _upsert_contacts(names: list[str]) -> int:
     """Avtomatik tarzda kontaktlar jadvaliga ismlarni qo'shadi.
     Mavjud bo'lganlar (case-insensitive) o'tkazib yuboriladi. 'men/o'zim' kabi
@@ -1185,7 +1194,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
         "note": [], "_failed": [], "_refresh": [], "_conflict": [],
     }
     _existing_cats: "set | None" = None       # lazy allowlist — categories (manual/Excel only)
-    _existing_contacts: "set | None" = None   # lazy allowlist — assignees (manual/Excel only)
+    _existing_contacts: "dict | None" = None  # lazy allowlist {casefold: canonical name}
     # Excel hierarchy: "3.1" → subtask of the row numbered "3". Maps each row's №
     # to the task id it created/updated, so a child resolves its parent_id. Parents
     # ("3") precede children ("3.1") in the file, so the map is populated in time.
@@ -1225,14 +1234,15 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                 _asg = (data.get("assignee") or "").strip()
                 if _asg:
                     if _existing_contacts is None:
-                        _existing_contacts = {(c.get("name") or "").casefold()
-                                              for c in await database.list_contacts()}
-                    if _asg.casefold() not in _existing_contacts:
-                        if _from_excel:
-                            await _upsert_contacts([_asg])
-                            _existing_contacts.add(_asg.casefold())
-                        else:
-                            data["assignee"] = None  # unknown executor on an LLM turn → unassigned
+                        _existing_contacts = await _load_contact_map()
+                    _cf = _asg.casefold()
+                    if _cf in _existing_contacts:
+                        data["assignee"] = _existing_contacts[_cf]  # canonical casing (no 'aziz'/'Aziz' desync)
+                    elif _from_excel:
+                        await _upsert_contacts([_asg])
+                        _existing_contacts[_cf] = _asg
+                    else:
+                        data["assignee"] = None  # unknown executor on an LLM turn → unassigned
                 _resolve_parent(action, data)
                 tid = await database.create_task(data)
                 created_ids["task"].append(tid)
@@ -1247,16 +1257,27 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                 if (data.get("assignee") or "").strip():
                     _asg = data["assignee"].strip()
                     if _existing_contacts is None:
-                        _existing_contacts = {(c.get("name") or "").casefold()
-                                              for c in await database.list_contacts()}
-                    if _asg.casefold() not in _existing_contacts:
-                        if (data.get("source") or "") == "excel":
-                            await _upsert_contacts([_asg])
-                            _existing_contacts.add(_asg.casefold())
-                        else:
-                            data.pop("assignee", None)
+                        _existing_contacts = await _load_contact_map()
+                    _cf = _asg.casefold()
+                    if _cf in _existing_contacts:
+                        data["assignee"] = _existing_contacts[_cf]  # canonical casing
+                    elif (data.get("source") or "") == "excel":
+                        await _upsert_contacts([_asg])
+                        _existing_contacts[_cf] = _asg
+                    else:
+                        data.pop("assignee", None)
                 _resolve_parent(action, data)
-                await database.update_task(target_id, data)
+                # A status→"done" flip must go through complete_task so a RECURRING task
+                # spawns its next occurrence (update_task alone never does). Apply the
+                # other field edits first, then let complete_task own the done transition.
+                _mark_done = (data.get("status") == "done")
+                if _mark_done:
+                    _other = {k: v for k, v in data.items() if k != "status"}
+                    if _other:
+                        await database.update_task(target_id, _other)
+                    await database.complete_task(target_id)
+                else:
+                    await database.update_task(target_id, data)
                 created_ids["task"].append(target_id)
                 if action.get("_num"):
                     num_to_id[action["_num"]] = target_id
@@ -2619,13 +2640,15 @@ _CYR_TOKENS = {"krill", "krillcha", "kiril", "kirill", "kirilcha", "cyrillic", "
 
 
 def _export_date(iso):
-    """ISO deadline → a real date object (no time — the principal asked to drop
-    the clock) for the Excel cell, or None. Written with a DD-MM-YYYY number
-    format so Excel shows/sorts it as a date; _import_deadline reads it back."""
+    """ISO deadline → a naive local datetime for the Excel cell, or None. The cell
+    is shown date-only (DD-MM-YYYY number format — the principal asked to drop the
+    clock visually), BUT the stored value keeps the time so an UNTOUCHED cell
+    round-trips the exact instant back on import (no silent 17:00→00:00 drift).
+    tz is dropped because Excel cells are naive; _import_deadline re-localizes."""
     if not iso:
         return None
     try:
-        return datetime.fromisoformat(iso).astimezone(database.TZ).date()
+        return datetime.fromisoformat(iso).astimezone(database.TZ).replace(tzinfo=None)
     except (ValueError, TypeError):
         return None
 
@@ -2647,9 +2670,18 @@ def _import_deadline(val):
         return (dt if dt.tzinfo else database.TZ.localize(dt)).isoformat()
     except ValueError:
         pass
-    for fmt in ("%d-%m-%Y %H:%M", "%d-%m-%Y", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
+    # Full-date forms (dash / dot / slash, with or without a clock).
+    for fmt in ("%d-%m-%Y %H:%M", "%d-%m-%Y", "%d.%m.%Y %H:%M", "%d.%m.%Y",
+                "%d/%m/%Y %H:%M", "%d/%m/%Y", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return database.TZ.localize(datetime.strptime(s, fmt)).isoformat()
+        except ValueError:
+            continue
+    # Year-less forms a user naturally types ("12-10", "12-10 14:30") → current year.
+    _yr = datetime.now(database.TZ).year
+    for fmt in ("%d-%m %H:%M", "%d-%m", "%d.%m %H:%M", "%d.%m", "%d/%m %H:%M", "%d/%m"):
+        try:
+            return database.TZ.localize(datetime.strptime(s, fmt).replace(year=_yr)).isoformat()
         except ValueError:
             continue
     return None
@@ -3342,12 +3374,30 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
 
 
 def _norm_header(c) -> str:
-    """Normalize a header cell for matching: lowercase, drop apostrophe variants and
-    spaces — so 'Mas'ul', 'Mas'ul xodim', 'Tugatish sanasi' map cleanly."""
-    s = str(c or "").strip().lower()
+    """Normalize a header cell for matching: back-transliterate Cyrillic → Latin (so a
+    Cyrillic export's 'Вазифа'/'Изоҳ'/'Ҳолат' headers match the Latin synonym sets),
+    lowercase, drop apostrophe variants and spaces — 'Mas'ul', 'Tugatish sanasi',
+    'Изоҳ' all map cleanly. to_latin is a no-op on already-Latin text."""
+    import translit
+    s = translit.to_latin(str(c or "")).strip().lower()
     for ch in ("'", "ʼ", "’", "`", "ʻ", " "):
         s = s.replace(ch, "")
     return s
+
+
+def _import_text(val) -> str:
+    """Normalize a free-text cell coming back from an export: back-transliterate any
+    Cyrillic (Cyrillic-export round-trip) and strip the display quotes quote_names
+    added around brand names — so a no-op round-trip never drifts the stored value
+    ('"Agrobank"' → 'Agrobank', 'муҳим изоҳ' → 'muhim izoh'). Latin text without
+    brands is returned unchanged."""
+    import translit
+    s = str(val or "").strip()
+    if not s:
+        return s
+    if any("Ѐ" <= ch <= "ӿ" for ch in s):  # contains Cyrillic
+        s = translit.to_latin(s)
+    return translit.unquote_names(s)
 
 
 # Column synonyms (normalized) — keep the importer forgiving about header names.
@@ -3390,7 +3440,9 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         d = {header[i]: r[i] for i in range(min(len(header), len(r)))}
         # Strip the export's subtask indent marker so it doesn't accumulate on
         # re-import ("↳ ↳ Title" → "Title"); hierarchy comes from the № column.
-        title = str(pick(d, _COL_TITLE) or "").strip().lstrip("↳ ").strip()
+        # _import_text also back-transliterates a Cyrillic export and un-quotes
+        # brand names so a round-trip never drifts ('"Agrobank"' → 'Agrobank').
+        title = _import_text(pick(d, _COL_TITLE)).lstrip("↳ ").strip()
         if not title:
             continue
         # Only touch a field whose COLUMN exists in the file: a blank cell in a
@@ -3407,16 +3459,24 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         if _sta not in (None, ""):
             data["status"] = _import_status(_sta)
         if has(_COL_DEADLINE):
-            data["deadline"] = _import_deadline(pick(d, _COL_DEADLINE))
-        asg = str(pick(d, _COL_ASSIGNEE) or "").strip()
+            _dl_cell = pick(d, _COL_DEADLINE)
+            _dl_raw = "" if _dl_cell is None else str(_dl_cell).strip()
+            _dl = _import_deadline(_dl_cell)
+            if _dl is not None:
+                data["deadline"] = _dl            # parsed a real date/time
+            elif not _dl_raw:
+                data["deadline"] = None           # blank cell → intentional clear
+            # else: a NON-empty but unrecognized cell must NOT wipe a good deadline —
+            # leave the stored value untouched (don't write the key at all).
+        asg = _import_text(pick(d, _COL_ASSIGNEE))
         if has(_COL_ASSIGNEE):
             data["assignee"] = asg          # "" → clears the executor on update
         if has(_COL_DESC):
-            desc = str(pick(d, _COL_DESC) or "").strip()
+            desc = _import_text(pick(d, _COL_DESC))
             # Never let the assignee leak into the description (reported field-mix bug).
             data["description"] = "" if (asg and desc.lower() == asg.lower()) else desc
         if has(_COL_CATEGORY):
-            cat = str(pick(d, _COL_CATEGORY) or "").strip()
+            cat = _import_text(pick(d, _COL_CATEGORY))
             data["category"] = "" if cat == "(boshqa)" else cat
         if has(_COL_RECURRENCE):
             # Round-trips via normalize_recurrence_rule ("har kuni"→daily); blank → clears.
@@ -3950,6 +4010,30 @@ async def _run_task_import(message: Message, state: FSMContext) -> None:
                                         switch_uid=doc.file_unique_id)
 
 
+def _read_task_sheet(wb) -> list:
+    """Pick the worksheet holding the task table. Our export inserts a live stats
+    dashboard ('Boshqaruv paneli') at sheet index 0, so wb.active is the DASHBOARD,
+    not the tasks — reading .active yields zero task rows and silently routes every
+    re-imported export through the LLM fallback (edits lost / duplicates). Prefer the
+    named 'Vazifalar' sheet; else the first sheet whose header carries a recognizable
+    title column; else fall back to the active sheet (a foreign, non-exported file).
+    Each sheet is iterated once (read_only workbooks dislike re-iteration)."""
+    def rows(ws):
+        return [r for r in ws.iter_rows(values_only=True)
+                if any(c is not None and str(c).strip() for c in r)]
+    if "Vazifalar" in wb.sheetnames:
+        return rows(wb["Vazifalar"])
+    active_title = wb.active.title if wb.active else None
+    active_rows = None
+    for nm in wb.sheetnames:
+        tbl = rows(wb[nm])
+        if nm == active_title:
+            active_rows = tbl
+        if any(_norm_header(c) in _COL_TITLE for row in tbl[:6] for c in row):
+            return tbl
+    return active_rows if active_rows is not None else []
+
+
 async def _import_tasks_from_file_bytes(
     message: Message, state: FSMContext, data: bytes, name: str, switch_uid: str = ""
 ) -> None:
@@ -3982,9 +4066,8 @@ async def _import_tasks_from_file_bytes(
             table = [(ln.strip(),) for ln in text.splitlines() if ln.strip()]
         else:
             from openpyxl import load_workbook
-            ws = load_workbook(io.BytesIO(data), read_only=True, data_only=True).active
-            table = [r for r in ws.iter_rows(values_only=True)
-                     if any(c is not None and str(c).strip() for c in r)]
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            table = _read_task_sheet(wb)
     except Exception as e:
         await message.answer("📄 Faylni o'qib bo'lmadi.\n"
                              f"🔧 {type(e).__name__}: {str(e)[:100]}")
