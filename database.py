@@ -393,7 +393,11 @@ async def create_task(data: dict) -> str:
     recurrence_rule = normalize_recurrence_rule(data.get("recurrence_rule") or data.get("recurrence"))
     recurrence_next_at = data.get("recurrence_next_at")
     if recurrence_rule and not recurrence_next_at:
-        recurrence_next_at = compute_next_recurrence(data.get("deadline"), recurrence_rule)
+        # Allaqachon 'done' holatda yaratilgan yozuv (masalan arxiv-import) uchun
+        # next_at yozilmaydi: complete_task bunday vazifada hech qachon nusxa
+        # tug'dirmaydi, next_at esa hech kim iste'mol qilmaydigan yolg'on bo'lardi.
+        if (data.get("status") or "todo") != "done":
+            recurrence_next_at = compute_next_recurrence(data.get("deadline"), recurrence_rule)
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO tasks (id, title, description, deadline, priority, status, tags, category, assignee,
@@ -456,6 +460,11 @@ async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
             changes.append(("tags", before["tags"], json.dumps(data["tags"], ensure_ascii=False)))
         if not fields:
             return False
+        # No-op guard: agar hech bir qiymat AMALDA o'zgarmagan bo'lsa (masalan bir xil
+        # fayl qayta import qilinsa), UPDATE bajarilmaydi — updated_at behuda
+        # "yangilangan" bo'lib qolmaydi (statistika/briefing proxy sifatida ishlatadi).
+        if not any(str(old) != str(new) for _, old, new in changes):
+            return True
         # Deadline o'zgarsa, eski reminded_at ni tozalash — yangi muddatga qarab
         # qayta eslatma yuborilishi uchun (_task_reminder_sweep'ga yo'l ochish).
         if "deadline" in data and str(before["deadline"]) != str(data.get("deadline")):
@@ -624,6 +633,20 @@ async def create_next_recurring_task(completed_task: dict) -> Optional[str]:
     next_deadline = compute_next_recurrence(base, rule)
     if not next_deadline:
         return None
+    # Dedup: reopen→re-done (yoki bir faylni qayta import qilish) ikkinchi bir xil
+    # nusxani yaratmasin — shu zanjirda (parent yoki uning ajdodi) xuddi shu
+    # muddatli, bekor qilinmagan nusxa allaqachon bo'lsa, qaytadan tug'dirmaymiz.
+    chain_id = completed_task.get("recurrence_parent_id") or completed_task.get("id")
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            """SELECT id FROM tasks
+               WHERE recurrence_parent_id IN (?, ?) AND deadline = ?
+                 AND status != 'cancelled' LIMIT 1""",
+            (chain_id, completed_task.get("id"), next_deadline),
+        )
+        existing = await cur.fetchone()
+    if existing:
+        return existing[0]
     next_data = {
         "title": completed_task.get("title") or "Vazifa",
         "description": completed_task.get("description"),
@@ -2527,7 +2550,9 @@ async def save_contact(data: dict) -> str:
     statement so two concurrent callers with the same name cannot both pass
     the existence check and race to INSERT — the old SELECT-then-INSERT
     pattern crashed on the second caller with a UNIQUE constraint violation."""
-    name = data.get("name")
+    # Whitespace-decorated names must never enter the DB — a trailing space in a
+    # contact defeats the assignee canonical-casing lookup on Excel import.
+    name = (data.get("name") or "").strip()
     if not name:
         return ""
     candidate_id = new_id("c-")

@@ -611,9 +611,11 @@ async def main():
     check("#8 unquote_names idempotent + begona qo'shtirnoqqa tegmaydi",
           translit.unquote_names("\"Agrobank\" loyiha") == "Agrobank loyiha"
           and translit.unquote_names("\"oddiy\" so'z") == "\"oddiy\" so'z")
-    # #6 _import_text back-transliterates Cyrillic free text
-    check("#6 _import_text: krill matn lotinga qaytadi",
-          handlers._import_text(translit.to_cyrillic_pro("muhim izoh")) == "muhim izoh")
+    # #6 _import_text back-transliterates Cyrillic free text ONLY for cyr-export files
+    check("#6 _import_text: krill matn lotinga qaytadi (cyr fayl)",
+          handlers._import_text(translit.to_cyrillic_pro("muhim izoh"), cyr=True) == "muhim izoh")
+    check("#6 _import_text: lotin faylda saqlangan krill TEGILMAYDI",
+          handlers._import_text("Отчёт по проекту") == "Отчёт по проекту")
 
     import io as _rio
     from openpyxl import load_workbook as _rlwb
@@ -722,6 +724,110 @@ async def main():
     check("#6 Round-trip: krill matn lotinga qaytadi (storage krill bo'lmaydi)",
           bool(_minec) and _minec[0]["data"].get("description") == "muhim hujjat"
           and _minec[0]["data"].get("title") == "Krill vazifa")
+
+    print("\n── Fallout auditi tuzatishlari (c9cd44a yon ta'sirlari) ──")
+    # F1: multi-name assignee no-op round-trip — no bogus combined contact, value lossless
+    await handlers._upsert_contacts(["Aziz"])
+    _mn_id = await database.create_task({"title": "Ikki ijrochili ish", "priority": "P2",
+        "status": "todo", "assignee": "Karimov/Aziz"})
+    _bmn = await _rt_bytes(status="all")
+    await _rt_apply(_rt_read(_bmn))
+    _mn_t = await database.get_task(_mn_id)
+    _contacts_now = [c["name"] for c in await database.list_contacts()]
+    check("F1: 'Karimov/Aziz' round-trip lossless (mutatsiya yo'q)",
+          _mn_t.get("assignee") == "Karimov/Aziz", _mn_t.get("assignee"))
+    check("F1: soxta birlashgan kontakt yaratilmaydi",
+          not any("/" in n for n in _contacts_now), _contacts_now)
+    # F2: self-name apostrophe variants — cleared, no bogus contact
+    _sn_id = await database.create_task({"title": "O'zimniki ish", "priority": "P2",
+        "status": "todo", "assignee": "Karimov"})
+    _bsn = await _rt_bytes(status="all")
+    _tsn = _rt_read(_bsn)
+    hi3, ci3 = _rt_cols(_tsn)
+    idci3, asci3 = ci3(("id",)), ci3(handlers._COL_ASSIGNEE)
+    di3 = next(i for i, row in enumerate(_tsn)
+               if i > hi3 and idci3 is not None and idci3 < len(row) and str(row[idci3]) == _sn_id)
+    _r3 = list(_tsn[di3]); _r3[asci3] = "O’zim"   # U+2019 typographic apostrophe
+    _t3 = [list(r) for r in _tsn]; _t3[di3] = _r3
+    await _rt_apply(_t3)
+    _sn_t = await database.get_task(_sn_id)
+    _contacts_now = [c["name"] for c in await database.list_contacts()]
+    check("F2: 'O’zim' (U+2019) → ijrochi bo'shatiladi, kontakt yaratilmaydi",
+          not (_sn_t.get("assignee") or "")
+          and not any(handlers._norm_asg_key(n) == "o'zim" for n in _contacts_now),
+          f"asg={_sn_t.get('assignee')!r}")
+    # F3: stored Cyrillic survives a LATIN no-op round-trip (no silent Latinization)
+    _ru_id = await database.create_task({"title": "Отчёт по проекту", "priority": "P2", "status": "todo"})
+    _bru = await _rt_bytes(status="all")
+    await _rt_apply(_rt_read(_bru))
+    check("F3: lotin eksportda krill sarlavha lotinlashmaydi",
+          (await database.get_task(_ru_id))["title"] == "Отчёт по проекту")
+    # F4: year-less date rolls forward, seconds format parses
+    _yl = handlers._import_deadline("12-01")
+    _yl_dt = datetime.fromisoformat(_yl)
+    _now_yr = datetime.now(TZ)
+    _exp_yr = _now_yr.year + 1 if _now_yr.month > 1 else _now_yr.year
+    check("F4: yil-siz '12-01' kelajakka buriladi (o'tmishga tushmaydi)",
+          _yl_dt >= _now_yr - timedelta(days=1) and _yl_dt.year == _exp_yr, _yl)
+    check("F4: soniyali '15-07-2026 10:00:30' o'qiladi",
+          handlers._import_deadline("15-07-2026 10:00:30") is not None)
+    # F5: preview labels — unread cell vs blank clear vs untouched
+    _pv_unread = handlers._import_deadline_line(
+        {"type": "update_task", "data": {"title": "x"}, "_dl_unread": "falon"})
+    _pv_clear = handlers._import_deadline_line(
+        {"type": "update_task", "data": {"title": "x", "deadline": None}})
+    check("F5: preview 'o'qilmadi' va 'olib tashlanadi' farqlanadi",
+          "o'zgarmaydi" in _pv_unread and "olib tashlanadi" == _pv_clear,
+          f"{_pv_unread!r} / {_pv_clear!r}")
+    # F6: recurring flip-flop — reopen + re-done spawns only ONE child
+    _ff_id = await database.create_task({"title": "FlipFlop reja", "priority": "P2",
+        "status": "todo", "recurrence_rule": "weekly",
+        "deadline": (datetime.now(TZ) + timedelta(days=2)).isoformat()})
+    await database.complete_task(_ff_id)
+    await database.update_task(_ff_id, {"status": "todo"})
+    await database.complete_task(_ff_id)
+    _ff_kids = [t for t in await database.list_tasks(limit=5000, include_subtasks=True)
+                if t.get("recurrence_parent_id") == _ff_id]
+    check("F6: reopen→re-done bitta nusxa (dublikat emas)", len(_ff_kids) == 1, len(_ff_kids))
+    # F7: no-op update doesn't churn updated_at
+    _nu_id = await database.create_task({"title": "NoOp ish", "priority": "P2", "status": "todo"})
+    _before_ua = (await database.get_task(_nu_id))["updated_at"]
+    await asyncio.sleep(0.02)
+    await database.update_task(_nu_id, {"title": "NoOp ish", "source": (await database.get_task(_nu_id))["source"]})
+    check("F7: no-op update updated_at'ni burmaydi",
+          (await database.get_task(_nu_id))["updated_at"] == _before_ua)
+    # F8: done-created recurring row gets no phantom recurrence_next_at
+    _dn_id = await database.create_task({"title": "Arxiv takroriy", "priority": "P2",
+        "status": "done", "recurrence_rule": "daily",
+        "deadline": (datetime.now(TZ) + timedelta(days=1)).isoformat()})
+    check("F8: done+takroriy yaratishда recurrence_next_at yozilmaydi",
+          not (await database.get_task(_dn_id)).get("recurrence_next_at"))
+    # F9: '(Boshqa)' capitalized sentinel clears category
+    _cb = handlers._structured_tasks_from_table(
+        [("Vazifa", "Kategoriya"), ("Ish", "(Boshqa)")])
+    check("F9: '(Boshqa)' katta harfda ham tozalaydi",
+          bool(_cb) and _cb[0]["data"].get("category") == "")
+    # F10: foreign wb — ACTIVE task sheet beats a leading 'Nomi' reference sheet
+    from openpyxl import Workbook as _WbF
+    _fwb = _WbF()
+    _ref = _fwb.active; _ref.title = "Malumotnoma"
+    _ref.append(("Nomi", "Boshliq")); _ref.append(("Kadrlar bo'limi", "A."))
+    _tsk = _fwb.create_sheet("Vazifalarim")
+    _tsk.append(("Vazifa", "Ijrochi")); _tsk.append(("Haqiqiy vazifa", "Karimov"))
+    _fwb.active = _fwb.sheetnames.index("Vazifalarim")
+    _fbuf = _rio.BytesIO(); _fwb.save(_fbuf)
+    _ftbl = handlers._read_task_sheet(_rlwb(_rio.BytesIO(_fbuf.getvalue()),
+                                            read_only=True, data_only=True))
+    _facts = handlers._structured_tasks_from_table(_ftbl)
+    check("F10: begona faylda AKTIV vazifa varag'i 'Nomi'-varaqdan ustun",
+          len(_facts) == 1 and _facts[0]["data"]["title"] == "Haqiqiy vazifa",
+          [a["data"].get("title") for a in _facts])
+    # F11: unchanged deadline — sub-second xlsx artifact counts as SAME instant
+    check("F11: mikrosekund artefakti bir xil muddat deb tan olinadi",
+          handlers._same_deadline_instant("2026-07-02T19:33:21.123000+05:00",
+                                          "2026-07-02T19:33:21.123456+05:00")
+          and not handlers._same_deadline_instant("2026-07-02T19:33:22.500000+05:00",
+                                                  "2026-07-02T19:33:21.123456+05:00"))
 
     print("\n── Kategoriya boshqaruvi (qo'shish/o'chirish) ──")
     _m1 = await database.create_task({"title": "M1", "priority": "P2", "status": "todo", "category": "TestKat"})

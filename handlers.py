@@ -1089,13 +1089,54 @@ async def _push_meeting_to_icloud(meeting_id: str, data: dict) -> None:
 _SELF_ASSIGNEE_NAMES = {"men", "o'zim", "ozim", "o'z", "oz", ""}
 
 
+def _norm_asg_key(s) -> str:
+    """Allowlist key for an assignee name: strip + casefold + fold EVERY apostrophe
+    variant (ʼ ’ ʻ ` …) to the plain ' — so \"O'zim\"/\"O’zim\"/\"Oʻzim\" (and to_latin's
+    U+02BB output for Cyrillic Ўзим/Ғайрат) all match the same key. Mirrors what
+    _norm_header does for column names."""
+    import translit
+    s = str(s or "").strip().casefold()
+    for ch in translit._APOS:
+        s = s.replace(ch, "'")
+    return s
+
+
 async def _load_contact_map() -> dict:
-    """{casefolded name: canonical name} for the assignee allowlist. The canonical
-    casing is written back on import so a case-only edit ('Aziz'→'aziz') never
-    desyncs the stored assignee from the contact (which would split per-person
-    workload/stats into two buckets)."""
-    return {(c.get("name") or "").casefold(): (c.get("name") or "").strip()
+    """{normalized name key: canonical name} for the assignee allowlist. The
+    canonical casing is written back on import so a case-only edit ('Aziz'→'aziz')
+    never desyncs the stored assignee from the contact (which would split
+    per-person workload/stats into two buckets). Keys are stripped and
+    apostrophe-folded (_norm_asg_key) — a trailing space or a typographic
+    apostrophe in either side must not defeat the match."""
+    return {_norm_asg_key(c.get("name")): (c.get("name") or "").strip()
             for c in await database.list_contacts()}
+
+
+async def _canon_assignee(raw: str, from_excel: bool, contacts: dict):
+    """Canonicalize an assignee cell/value against the contact allowlist.
+    Handles the multi-name form: 'Karimov / Aziz' (export display join) and
+    'Karimov/Aziz' (stored form) are split into parts; each part is resolved to
+    its canonical contact casing. Self-references (men/o'zim, any apostrophe
+    variant or script) are dropped — a task the principal does himself is simply
+    unassigned. Unknown parts: the trusted Excel path registers them as contacts
+    INDIVIDUALLY (never the combined 'A / B' string — that used to create bogus
+    contacts); an LLM turn returns None so the caller keeps its old drop behavior.
+    Returns the canonical 'A/B' string, or '' when nothing assignable remains."""
+    parts = [p.strip() for p in str(raw or "").split("/") if p.strip()]
+    out = []
+    for p in parts:
+        key = _norm_asg_key(p)
+        if key in _SELF_ASSIGNEE_NAMES:
+            continue
+        if key in contacts:
+            out.append(contacts[key])
+        elif from_excel:
+            await _upsert_contacts([p])
+            contacts[key] = p
+            out.append(p)
+        else:
+            return None  # unknown executor on an LLM turn — caller drops the field
+    return "/".join(out)
 
 
 async def _upsert_contacts(names: list[str]) -> int:
@@ -1106,20 +1147,21 @@ async def _upsert_contacts(names: list[str]) -> int:
     clean = []
     for raw in names:
         name = (raw or "").strip()
-        if not name or name.lower() in _SELF_ASSIGNEE_NAMES:
+        # Apostrophe-folded check: "O’zim"/"Oʻzim"/"Ўзим→Oʻzim" are all self-references.
+        if not name or _norm_asg_key(name) in _SELF_ASSIGNEE_NAMES:
             continue
         clean.append(name)
     if not clean:
         return 0
     try:
         existing = await database.list_contacts()
-        existing_names = {c["name"].lower().strip() for c in existing}
+        existing_names = {_norm_asg_key(c["name"]) for c in existing}
     except Exception:
         logger.warning("Auto-contact: failed to load existing contacts")
         return 0
     created = 0
     for name in clean:
-        if name.lower() in existing_names:
+        if _norm_asg_key(name) in existing_names:
             continue
         try:
             await database.save_contact({
@@ -1127,7 +1169,7 @@ async def _upsert_contacts(names: list[str]) -> int:
                 "role": None,
                 "formality_level": 3,
             })
-            existing_names.add(name.lower())
+            existing_names.add(_norm_asg_key(name))
             created += 1
         except Exception:
             logger.warning("Auto-contact upsert failed for %s", name)
@@ -1235,14 +1277,9 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                 if _asg:
                     if _existing_contacts is None:
                         _existing_contacts = await _load_contact_map()
-                    _cf = _asg.casefold()
-                    if _cf in _existing_contacts:
-                        data["assignee"] = _existing_contacts[_cf]  # canonical casing (no 'aziz'/'Aziz' desync)
-                    elif _from_excel:
-                        await _upsert_contacts([_asg])
-                        _existing_contacts[_cf] = _asg
-                    else:
-                        data["assignee"] = None  # unknown executor on an LLM turn → unassigned
+                    _canon = await _canon_assignee(_asg, _from_excel, _existing_contacts)
+                    # None → unknown on an LLM turn; '' → only self-references → unassigned
+                    data["assignee"] = _canon or None
                 _resolve_parent(action, data)
                 tid = await database.create_task(data)
                 created_ids["task"].append(tid)
@@ -1258,14 +1295,12 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                     _asg = data["assignee"].strip()
                     if _existing_contacts is None:
                         _existing_contacts = await _load_contact_map()
-                    _cf = _asg.casefold()
-                    if _cf in _existing_contacts:
-                        data["assignee"] = _existing_contacts[_cf]  # canonical casing
-                    elif (data.get("source") or "") == "excel":
-                        await _upsert_contacts([_asg])
-                        _existing_contacts[_cf] = _asg
+                    _canon = await _canon_assignee(
+                        _asg, (data.get("source") or "") == "excel", _existing_contacts)
+                    if _canon is None:
+                        data.pop("assignee", None)   # unknown on an LLM turn — untouched
                     else:
-                        data.pop("assignee", None)
+                        data["assignee"] = _canon or None  # '' (self-ref only) → unassign
                 _resolve_parent(action, data)
                 # A status→"done" flip must go through complete_task so a RECURRING task
                 # spawns its next occurrence (update_task alone never does). Apply the
@@ -2670,20 +2705,31 @@ def _import_deadline(val):
         return (dt if dt.tzinfo else database.TZ.localize(dt)).isoformat()
     except ValueError:
         pass
-    # Full-date forms (dash / dot / slash, with or without a clock).
-    for fmt in ("%d-%m-%Y %H:%M", "%d-%m-%Y", "%d.%m.%Y %H:%M", "%d.%m.%Y",
-                "%d/%m/%Y %H:%M", "%d/%m/%Y", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+    # Full-date forms (dash / dot / slash, with or without a clock, incl. seconds).
+    for fmt in ("%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%d-%m-%Y",
+                "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y",
+                "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return database.TZ.localize(datetime.strptime(s, fmt)).isoformat()
         except ValueError:
             continue
-    # Year-less forms a user naturally types ("12-10", "12-10 14:30") → current year.
-    _yr = datetime.now(database.TZ).year
+    # Year-less forms a user naturally types ("12-10", "12-10 14:30"). A day-month
+    # almost always means the NEXT occurrence — if the current year puts it more
+    # than a day in the past ("12-01" typed in July), roll to next year instead of
+    # silently storing a long-past deadline.
+    _now = datetime.now(database.TZ)
     for fmt in ("%d-%m %H:%M", "%d-%m", "%d.%m %H:%M", "%d.%m", "%d/%m %H:%M", "%d/%m"):
         try:
-            return database.TZ.localize(datetime.strptime(s, fmt).replace(year=_yr)).isoformat()
+            naive = datetime.strptime(s, fmt).replace(year=_now.year)
         except ValueError:
             continue
+        if database.TZ.localize(naive) < _now - timedelta(days=1):
+            try:
+                naive = naive.replace(year=_now.year + 1)
+            except ValueError:
+                pass  # Feb-29 → keep the current-year date
+        return database.TZ.localize(naive).isoformat()
     return None
 
 
@@ -3081,7 +3127,11 @@ async def _send_tasks_export(message: Message, assignee: str | None = None,
 
     def _wrapped_lines(text, col_idx):
         """Estimate display lines for `text` in the column at col_idx (Arial 14),
-        honouring explicit newlines — used to size the row so nothing is cramped."""
+        honouring explicit newlines — used to size the row so nothing is cramped.
+        Datetimes are measured in their DISPLAY form (DD-MM-YYYY, 10 chars) — the
+        raw str(datetime) is 19 chars and would inflate every deadline row's height."""
+        if isinstance(text, datetime):
+            text = text.strftime("%d-%m-%Y")
         cpl = max(6, int(widths[col_idx - 1] * 0.85))
         return sum(max(1, -(-len(seg) // cpl)) for seg in str(text or "").split("\n")) or 1
 
@@ -3385,17 +3435,19 @@ def _norm_header(c) -> str:
     return s
 
 
-def _import_text(val) -> str:
-    """Normalize a free-text cell coming back from an export: back-transliterate any
-    Cyrillic (Cyrillic-export round-trip) and strip the display quotes quote_names
-    added around brand names — so a no-op round-trip never drifts the stored value
-    ('"Agrobank"' → 'Agrobank', 'муҳим изоҳ' → 'muhim izoh'). Latin text without
-    brands is returned unchanged."""
+def _import_text(val, cyr: bool = False) -> str:
+    """Normalize a free-text cell coming back from an export: strip the display
+    quotes quote_names added around brand names ('"Agrobank"' → 'Agrobank') and —
+    ONLY for a Cyrillic-export file (cyr=True, detected from the header script) —
+    back-transliterate the value ('муҳим изоҳ' → 'muhim izoh') so the cyr round-trip
+    is deterministic. A LATIN export must NOT transliterate: a stored Cyrillic
+    (e.g. Russian) value would otherwise be silently and lossily Latinized on a
+    no-op round-trip. Latin text without brands is returned unchanged."""
     import translit
     s = str(val or "").strip()
     if not s:
         return s
-    if any("Ѐ" <= ch <= "ӿ" for ch in s):  # contains Cyrillic
+    if cyr and any("Ѐ" <= ch <= "ӿ" for ch in s):  # cyr export → restore Latin storage
         s = translit.to_latin(s)
     return translit.unquote_names(s)
 
@@ -3423,6 +3475,11 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
     if header_idx is None:
         return []
     header = [_norm_header(c) for c in table[header_idx]]
+    # Header script decides value handling: Cyrillic headers ("Вазифа", "Изоҳ") mean
+    # this is OUR cyr export — free-text values are back-transliterated to the Latin
+    # storage form. Latin headers → values pass through (stored Cyrillic text must
+    # survive a Latin-export round-trip untouched).
+    _cyr_file = any("Ѐ" <= ch <= "ӿ" for c in table[header_idx] for ch in str(c or ""))
 
     def pick(d, names):
         for n in names:
@@ -3442,7 +3499,7 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         # re-import ("↳ ↳ Title" → "Title"); hierarchy comes from the № column.
         # _import_text also back-transliterates a Cyrillic export and un-quotes
         # brand names so a round-trip never drifts ('"Agrobank"' → 'Agrobank').
-        title = _import_text(pick(d, _COL_TITLE)).lstrip("↳ ").strip()
+        title = _import_text(pick(d, _COL_TITLE), _cyr_file).lstrip("↳ ").strip()
         if not title:
             continue
         # Only touch a field whose COLUMN exists in the file: a blank cell in a
@@ -3458,6 +3515,7 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         _sta = pick(d, _COL_STATUS)
         if _sta not in (None, ""):
             data["status"] = _import_status(_sta)
+        _dl_unread = ""
         if has(_COL_DEADLINE):
             _dl_cell = pick(d, _COL_DEADLINE)
             _dl_raw = "" if _dl_cell is None else str(_dl_cell).strip()
@@ -3466,18 +3524,24 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
                 data["deadline"] = _dl            # parsed a real date/time
             elif not _dl_raw:
                 data["deadline"] = None           # blank cell → intentional clear
-            # else: a NON-empty but unrecognized cell must NOT wipe a good deadline —
-            # leave the stored value untouched (don't write the key at all).
-        asg = _import_text(pick(d, _COL_ASSIGNEE))
+            else:
+                # A NON-empty but unrecognized cell must NOT wipe a good deadline —
+                # leave the stored value untouched, but remember the raw text so the
+                # preview can say "o'zgarmaydi (o'qilmadi)" instead of "Deadline yo'q".
+                _dl_unread = _dl_raw
+        # Export displays multi-name executors as 'A / B' — normalize back to the
+        # stored 'A/B' form so an untouched round-trip is lossless (each part is
+        # canonicalized individually in _execute_actions).
+        asg = "/".join(p.strip() for p in _import_text(pick(d, _COL_ASSIGNEE), _cyr_file).split("/") if p.strip())
         if has(_COL_ASSIGNEE):
             data["assignee"] = asg          # "" → clears the executor on update
         if has(_COL_DESC):
-            desc = _import_text(pick(d, _COL_DESC))
+            desc = _import_text(pick(d, _COL_DESC), _cyr_file)
             # Never let the assignee leak into the description (reported field-mix bug).
             data["description"] = "" if (asg and desc.lower() == asg.lower()) else desc
         if has(_COL_CATEGORY):
-            cat = _import_text(pick(d, _COL_CATEGORY))
-            data["category"] = "" if cat == "(boshqa)" else cat
+            cat = _import_text(pick(d, _COL_CATEGORY), _cyr_file)
+            data["category"] = "" if cat.lower() == "(boshqa)" else cat
         if has(_COL_RECURRENCE):
             # Round-trips via normalize_recurrence_rule ("har kuni"→daily); blank → clears.
             data["recurrence_rule"] = database.normalize_recurrence_rule(pick(d, _COL_RECURRENCE))
@@ -3485,6 +3549,8 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
                # Carry the optional ID (hidden export column) so the caller can turn this
                # into an UPDATE when the task still exists — instead of a duplicate.
                "_id": str(pick(d, ("id",)) or "").strip()}
+        if _dl_unread:
+            act["_dl_unread"] = _dl_unread  # preview-only flag (never written to DB)
         # Hierarchy from the № column: "3.1" → subtask of "3". _execute_actions
         # resolves _num/parent into a real parent_id at create/update time.
         num = str(pick(d, _COL_NUMBER) or "").strip().rstrip(".")
@@ -3492,6 +3558,20 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
             act["_num"] = num
         out.append(act)
     return out
+
+
+def _same_deadline_instant(new_iso, stored_iso) -> bool:
+    """True when two deadline ISO strings mean the same moment (sub-second
+    tolerance): xlsx storage truncates microseconds, so an UNTOUCHED exported cell
+    comes back .123456→.123000 — a string compare would see a 'change' and
+    database.update_task would reset reminded_at (duplicate reminder)."""
+    if not (isinstance(new_iso, str) and isinstance(stored_iso, str)):
+        return False
+    try:
+        return abs(datetime.fromisoformat(new_iso)
+                   - datetime.fromisoformat(stored_iso)) < timedelta(seconds=1)
+    except (ValueError, TypeError):
+        return False
 
 
 def _count_orphan_subtasks(actions: list) -> int:
@@ -3607,13 +3687,32 @@ _IMPORT_PAGE_SIZE = 10
 
 
 def _import_deadline_label(iso) -> str:
-    """Short deadline for the import preview: 'DD-MM, HH:MM' or 'Deadline yo'q'."""
+    """Short deadline for the import preview: 'DD-MM, HH:MM' or 'Deadline yo'q'.
+    The year is shown whenever it differs from the current one — a year-less cell
+    that resolved to another year must be visible in the confirm preview."""
     if not iso:
         return "Deadline yo'q"
     try:
-        return datetime.fromisoformat(iso).astimezone(database.TZ).strftime("%d-%m, %H:%M")
+        dt = datetime.fromisoformat(iso).astimezone(database.TZ)
     except (ValueError, TypeError):
         return str(iso)
+    fmt = "%d-%m-%Y, %H:%M" if dt.year != datetime.now(database.TZ).year else "%d-%m, %H:%M"
+    return dt.strftime(fmt)
+
+
+def _import_deadline_line(a: dict) -> str:
+    """Preview deadline line for one import action — distinguishes the THREE update
+    outcomes that used to render identically as 'Deadline yo'q':
+    value → set; explicit None → cleared; key absent → untouched (unreadable cell)."""
+    d = a.get("data", {}) or {}
+    upd = a.get("type") == "update_task"
+    if "deadline" in d:
+        if d["deadline"] is None:
+            return "olib tashlanadi" if upd else "Deadline yo'q"
+        return _import_deadline_label(d["deadline"])
+    if a.get("_dl_unread"):
+        return f"o'zgarmaydi (katak o'qilmadi: {str(a['_dl_unread'])[:24]})"
+    return "o'zgarmaydi" if upd else "Deadline yo'q"
 
 
 def _format_import_page(actions: list[dict], page: int) -> str:
@@ -3643,7 +3742,7 @@ def _format_import_page(actions: list[dict], page: int) -> str:
         if is_sub:
             lines.append(f"   🌳 sub-vazifa (ota: №{num.split('.')[0]})")
         lines.append(f"   👤 {assignee}")
-        lines.append(f"   ⏳ {_import_deadline_label(d.get('deadline'))}")
+        lines.append(f"   ⏳ {_import_deadline_line(a)}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -4023,13 +4122,19 @@ def _read_task_sheet(wb) -> list:
                 if any(c is not None and str(c).strip() for c in r)]
     if "Vazifalar" in wb.sheetnames:
         return rows(wb["Vazifalar"])
+    # Probe the ACTIVE sheet FIRST — it's the one the user was working on. Otherwise
+    # a leading reference/lookup sheet with a generic header ('Nomi') would hijack
+    # selection from the real task sheet. Header probe scans the top 20 non-blank
+    # rows (some files carry preamble text above the header).
     active_title = wb.active.title if wb.active else None
+    order = ([active_title] if active_title in wb.sheetnames else []) + \
+            [nm for nm in wb.sheetnames if nm != active_title]
     active_rows = None
-    for nm in wb.sheetnames:
+    for nm in order:
         tbl = rows(wb[nm])
         if nm == active_title:
             active_rows = tbl
-        if any(_norm_header(c) in _COL_TITLE for row in tbl[:6] for c in row):
+        if any(_norm_header(c) in _COL_TITLE for row in tbl[:20] for c in row):
             return tbl
     return active_rows if active_rows is not None else []
 
@@ -4089,9 +4194,17 @@ async def _import_tasks_from_file_bytes(
     # instead of creating a duplicate. Unknown/blank ID → a new task.
     for a in actions:
         rid = a.pop("_id", "")
-        if rid and await database.get_task(rid):
-            a["type"] = "update_task"
-            a["id"] = rid
+        if not rid:
+            continue
+        _stored = await database.get_task(rid)
+        if not _stored:
+            continue
+        a["type"] = "update_task"
+        a["id"] = rid
+        # Same instant (sub-second tolerance) → drop the deadline key so an
+        # untouched cell can't fake a "change" and reset reminded_at.
+        if _same_deadline_instant(a.get("data", {}).get("deadline"), _stored.get("deadline")):
+            a["data"].pop("deadline", None)
     smart_note = ""
     if not actions:
         thinking = await message.answer("🔍 Fayldan vazifalarni topyapman…")
@@ -4102,10 +4215,16 @@ async def _import_tasks_from_file_bytes(
             pass
         # The smart extractor only sees the first 120 rows / 6000 chars of the file.
         # If the input exceeded that, tail rows were never sent to the model — warn so
-        # a partial extraction doesn't read as "everything was imported".
-        _nonblank = sum(1 for r in table
-                        if any(c is not None and str(c).strip() for c in r))
-        if _nonblank > 120 or len(_table_to_text(table, max_rows=10**9, max_chars=10**9)) > 6000:
+        # a partial extraction doesn't read as "everything was imported". Size is
+        # summed incrementally (no giant throwaway string for a 10k-row file).
+        _nonblank = 0
+        _chars = 0
+        for r in table:
+            cells = [str(c).strip() for c in r if c is not None and str(c).strip()]
+            if cells:
+                _nonblank += 1
+                _chars += sum(len(c) for c in cells) + 3 * len(cells)
+        if _nonblank > 120 or _chars > 6000:
             smart_note = ("\n\n⚠️ Fayl katta — faqat boshidagi qism o'qildi. "
                           "Hammasi kirgan bo'lsa, qolganini alohida fayl bilan yuboring.")
 
@@ -4149,6 +4268,10 @@ async def _import_tasks_from_file_bytes(
     if _orphans:
         overflow += (f"\n\n⚠️ {_orphans} ta sub-vazifaning ota-№ faylda yo'q — "
                      "ular asosiy vazifa sifatida qo'shiladi.")
+    _dl_unread_n = sum(1 for a in actions if a.get("_dl_unread"))
+    if _dl_unread_n:
+        overflow += (f"\n\n⚠️ {_dl_unread_n} ta muddat katagi o'qilmadi — o'sha "
+                     "vazifalarda muddat O'ZGARTIRILMAYDI (format: 15-07-2026 yoki 15-07).")
 
     n_upd = sum(1 for a in actions if a.get("type") == "update_task")
     n_new = len(actions) - n_upd
@@ -14254,7 +14377,9 @@ async def cb_deadline_preset(query: CallbackQuery) -> None:
     if preset == "today":
         new_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
         if new_dt < now:
-            new_dt = now + timedelta(hours=2)
+            # Round like every sibling preset — sub-second precision doesn't survive
+            # an xlsx round-trip and a mismatch would re-arm the deadline reminder.
+            new_dt = (now + timedelta(hours=2)).replace(second=0, microsecond=0)
     elif preset == "tomorrow":
         new_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
     elif preset == "plus3":
