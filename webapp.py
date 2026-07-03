@@ -36,11 +36,13 @@ _MAX_INITDATA_AGE = 24 * 60 * 60  # reject initData older than 24h (replay guard
 def validate_init_data(init_data: str, bot_token: str,
                        max_age: int = _MAX_INITDATA_AGE) -> dict | None:
     """Verify a Telegram Mini App initData string. Returns the parsed `user` dict
-    on success, else None. Implements the canonical algorithm:
+    on success, else None. Algorithm:
         secret_key   = HMAC_SHA256(key="WebAppData", msg=bot_token)
         expected     = HMAC_SHA256(key=secret_key,  msg=data_check_string)
-    where data_check_string is every field except `hash`, sorted by key, joined
-    "k=v" with newlines. Also enforces auth_date freshness."""
+    where data_check_string is every field EXCEPT `hash`, sorted by key, joined
+    "k=v" with newlines. The newer `signature` field IS part of that string (only
+    `hash` is excluded) — some implementations wrongly drop it; we try WITH it
+    first, then WITHOUT as a fallback for older clients. Also enforces freshness."""
     if not init_data or not bot_token:
         return None
     try:
@@ -50,13 +52,18 @@ def validate_init_data(init_data: str, bot_token: str,
     received_hash = pairs.pop("hash", None)
     if not received_hash:
         return None
-    # Newer clients add a `signature` (Ed25519, for third-party validation) that is
-    # NOT part of the bot-token HMAC data_check_string — exclude it.
-    pairs.pop("signature", None)
-    data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
-    expected = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, received_hash):
+
+    def _match(fields: dict) -> bool:
+        dcs = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+        return hmac.compare_digest(
+            hmac.new(secret_key, dcs.encode(), hashlib.sha256).hexdigest(), received_hash)
+
+    ok = _match(pairs)  # canonical: all fields except hash (signature INCLUDED)
+    if not ok and "signature" in pairs:
+        ok = _match({k: v for k, v in pairs.items() if k != "signature"})
+    if not ok:
+        logger.info("initData HMAC mismatch — fields=%s", sorted(pairs.keys()))
         return None
     # Freshness: reject stale/replayed initData.
     try:
@@ -64,6 +71,7 @@ def validate_init_data(init_data: str, bot_token: str,
     except ValueError:
         return None
     if max_age and (time.time() - auth_date) > max_age:
+        logger.info("initData too old (auth_date=%s)", auth_date)
         return None
     try:
         return json.loads(pairs.get("user", "null"))

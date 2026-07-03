@@ -1610,6 +1610,19 @@ async def main():
     check("MiniApp: eskirgan auth_date → None (replay himoyasi)",
           _wa.validate_init_data(_mk_init(_pid, _tok, auth_date=1), _tok) is None)
     check("MiniApp: hash yo'q → None", _wa.validate_init_data("user=%7B%7D", _tok) is None)
+    # Real Telegram initData carries `signature` + chat_* fields; the `hash` is computed
+    # over ALL fields except `hash` (signature INCLUDED). Regression for the AUTH-FAIL bug.
+    def _mk_init_sig(uid, token):
+        ad = int(_tm.time())
+        user = _js.dumps({"id": uid, "first_name": "Test"}, separators=(",", ":"))
+        pairs = {"auth_date": str(ad), "query_id": "AAA", "chat_type": "private",
+                 "signature": "Ed25519sig_xyz", "user": user}
+        dcs = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+        sk = _hm.new(b"WebAppData", token.encode(), _hl.sha256).digest()
+        pairs["hash"] = _hm.new(sk, dcs.encode(), _hl.sha256).hexdigest()
+        return _ue(pairs)
+    check("MiniApp: signature-li initData (Telegram real) qabul qilinadi",
+          (_wa.validate_init_data(_mk_init_sig(_pid, _tok), _tok) or {}).get("id") == _pid)
 
     # End-to-end via aiohttp test client: auth gate + a real create round-trip.
     from aiohttp.test_utils import TestClient, TestServer
