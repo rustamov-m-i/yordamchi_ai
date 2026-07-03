@@ -78,6 +78,17 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 
 ERROR_NOTIFY_USER_ID: int = _int("ERROR_NOTIFY_USER_ID", required=False, default=PRINCIPAL_USER_ID)
 
+# ── Telegram Mini App (Web App) ──
+# Off by default: the bot behaves exactly as before unless WEBAPP_ENABLED=1.
+# WEBAPP_URL is the PUBLIC https URL (nginx → 127.0.0.1:WEBAPP_PORT) used for the
+# menu button; Telegram only opens https. Auth reuses TELEGRAM_BOT_TOKEN (initData
+# HMAC) and restricts access to PRINCIPAL_USER_ID.
+WEBAPP_ENABLED: bool = _bool("WEBAPP_ENABLED", False)
+WEBAPP_PORT: int = _int("WEBAPP_PORT", required=False, default=8081)
+WEBAPP_URL: str = os.getenv("WEBAPP_URL", "").strip()
+# Bind host — keep 127.0.0.1 so only the local nginx reverse proxy can reach it.
+WEBAPP_HOST: str = os.getenv("WEBAPP_HOST", "127.0.0.1").strip()
+
 # Data retention — banking-compliance friendly defaults. Override per
 # deployment if your jurisdiction requires longer/shorter windows.
 CONVERSATION_TTL_DAYS: int = _int("CONVERSATION_TTL_DAYS", required=False, default=365)

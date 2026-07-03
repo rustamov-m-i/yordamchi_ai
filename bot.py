@@ -21,7 +21,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="caldav")
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, ErrorEvent, MenuButtonDefault
+from aiogram.types import (BotCommand, ErrorEvent, MenuButtonDefault,
+                           MenuButtonWebApp, WebAppInfo)
 
 import config
 import database
@@ -108,11 +109,16 @@ async def _register_bot_commands(bot: Bot) -> None:
 
 
 async def _clear_menu_button(bot: Bot) -> None:
-    """Ensure Telegram chat menu button is the default (commands list)."""
+    """Set the chat menu button: a Mini App launcher when the web app is configured
+    (WEBAPP_ENABLED + https WEBAPP_URL), otherwise the default commands list."""
     try:
-        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        if config.WEBAPP_ENABLED and config.WEBAPP_URL.startswith("https://"):
+            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
+                text="🗂 Ilova", web_app=WebAppInfo(url=config.WEBAPP_URL)))
+        else:
+            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
     except Exception:
-        pass
+        logger.exception("Failed to set chat menu button")
 
 
 async def main() -> None:
@@ -234,6 +240,16 @@ async def main() -> None:
     logger.info("Bot started: @%s (id=%s). Principal user_id=%s", me.username, me.id, config.PRINCIPAL_USER_ID)
     heartbeat.write_heartbeat()  # initial liveness signal for the supervised deployer (Phase 5)
 
+    # Telegram Mini App server (optional) — runs in this same event loop, sharing
+    # the DB. Bound to 127.0.0.1; a public nginx+TLS proxy fronts it (see DEPLOY.md).
+    webapp_runner = None
+    if config.WEBAPP_ENABLED:
+        try:
+            import webapp
+            webapp_runner = await webapp.start_webapp()
+        except Exception:
+            logger.exception("Mini App server failed to start (bot continues without it)")
+
     polling_task = asyncio.create_task(
         dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     )
@@ -259,6 +275,11 @@ async def main() -> None:
         except asyncio.TimeoutError:
             logger.warning("Background tasks unfinished after 5s — proceeding")
     scheduler.stop()
+    if webapp_runner is not None:
+        try:
+            await webapp_runner.cleanup()
+        except Exception:
+            pass
     await bot.session.close()
     logger.info("Stopped cleanly.")
 

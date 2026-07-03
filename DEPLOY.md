@@ -199,6 +199,55 @@ OOM belgisi (`MemoryMax=512M` oshsa systemd o'ldiradi):
 
 ---
 
+## 7.5. Telegram Mini App (Web App) — ixtiyoriy
+
+Bot ichida ochiluvchi web ilova (vazifa/uchrashuv/qayd/eslatma — to'liq boshqaruv).
+`aiohttp` server bot bilan bir jarayonда `127.0.0.1:8081`да ishlaydi; nginx uni
+HTTPS bilan tashqariga chiqaradi. Auth: Telegram `initData` (bot-token HMAC) +
+faqat `PRINCIPAL_USER_ID`. **Domen + HTTPS majburiy** (Telegram https'siz ochmaydi).
+
+**1) Env** (`.env`ga qo'shing, keyin `sudo systemctl restart yordamchi`):
+```
+WEBAPP_ENABLED=1
+WEBAPP_URL=https://app.SIZNING-DOMEN.uz
+WEBAPP_PORT=8081
+```
+
+**2) DNS**: `app.SIZNING-DOMEN.uz` A-yozuvини VM tashqi IP'siga yo'naltiring.
+
+**3) nginx + TLS** (VMда):
+```bash
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+sudo tee /etc/nginx/sites-available/yordamchi-app > /dev/null <<'EOF'
+server {
+    server_name app.SIZNING-DOMEN.uz;
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+sudo ln -sf /etc/nginx/sites-available/yordamchi-app /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d app.SIZNING-DOMEN.uz   # Let's Encrypt sertifikat (avtomatik yangilanadi)
+```
+GCP firewall'да 80/443 portlar ochiq bo'lsin (`gcloud compute firewall-rules ...` yoki konsol).
+
+**4) systemd** `ReadWritePaths` allaqachon loyiha papkasini qamraydi — o'zgarish shart emas.
+Botni qayta ishga tushiring; u startда menyu tugmasini "🗂 Ilova"ga o'zgartiradi.
+
+**5) Tekshirish**: Telegramда botni oching → pastdagi menyu tugmasi (🗂 Ilova) → ilova ochiladi.
+Muammo bo'lsa: `curl -H "Authorization: tma test" https://app.SIZNING-DOMEN.uz/api/health`
+(`{"ok":true}` qaytishi kerak — health authsiz).
+
+> Xavfsizlik: `WEBAPP_HOST=127.0.0.1` — server to'g'ridan-to'g'ri tashqariga
+> chiqmaydi, faqat nginx orqali. Har API so'rovi `initData` imzosi bilan
+> tekshiriladi; imzo faqat sizning Telegram klientingizda hosil bo'ladi.
+
+---
+
 ## 8. iCloud va data zaxira (backup)
 
 ### Avtomatik kunlik backup → Cloud Storage

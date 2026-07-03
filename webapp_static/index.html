@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Yordamchi</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg:var(--tg-theme-bg-color,#fff); --text:var(--tg-theme-text-color,#111);
+    --hint:var(--tg-theme-hint-color,#8a8a8e); --link:var(--tg-theme-link-color,#2E7D32);
+    --btn:var(--tg-theme-button-color,#2E7D32); --btn-text:var(--tg-theme-button-text-color,#fff);
+    --sec:var(--tg-theme-secondary-bg-color,#f2f2f7); --card:var(--tg-theme-bg-color,#fff);
+    --danger:#c0392b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:var(--sec);color:var(--text);font-size:16px;padding-bottom:76px}
+  header{position:sticky;top:0;background:var(--bg);padding:12px 16px;font-weight:700;font-size:18px;
+         border-bottom:1px solid rgba(128,128,128,.15);z-index:5}
+  #list{padding:10px 12px}
+  .card{background:var(--card);border-radius:14px;padding:12px 14px;margin:8px 0;
+        box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  .card h3{margin:0 0 4px;font-size:16px;font-weight:600;word-break:break-word}
+  .card .meta{color:var(--hint);font-size:13px;line-height:1.5}
+  .card.done h3{text-decoration:line-through;color:var(--hint)}
+  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .chip{font-size:12px;padding:2px 8px;border-radius:20px;background:var(--sec);color:var(--hint)}
+  .p0{color:#fff;background:#c0392b}.p1{color:#fff;background:#e67e22}
+  button{font-family:inherit;font-size:14px;border:none;border-radius:10px;padding:8px 12px;
+         background:var(--sec);color:var(--text);cursor:pointer}
+  button.primary{background:var(--btn);color:var(--btn-text)}
+  button.danger{background:transparent;color:var(--danger)}
+  button.small{padding:6px 10px;font-size:13px}
+  .empty{color:var(--hint);text-align:center;padding:40px 20px}
+  .fab{position:fixed;right:18px;bottom:80px;width:56px;height:56px;border-radius:50%;
+       background:var(--btn);color:var(--btn-text);font-size:30px;line-height:56px;text-align:center;
+       box-shadow:0 3px 10px rgba(0,0,0,.25);z-index:6}
+  nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--bg);
+      border-top:1px solid rgba(128,128,128,.15);z-index:7}
+  nav button{flex:1;background:none;border-radius:0;padding:10px 4px;color:var(--hint);font-size:12px}
+  nav button.active{color:var(--link);font-weight:700}
+  nav button .ic{display:block;font-size:20px;margin-bottom:2px}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:20;
+            align-items:flex-end}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--bg);width:100%;border-radius:16px 16px 0 0;padding:16px;max-height:90vh;overflow:auto}
+  .modal h2{margin:2px 0 14px;font-size:18px}
+  label{display:block;font-size:13px;color:var(--hint);margin:10px 0 4px}
+  input,textarea,select{width:100%;padding:10px 12px;font-size:16px;border-radius:10px;
+        border:1px solid rgba(128,128,128,.3);background:var(--bg);color:var(--text)}
+  textarea{min-height:70px;resize:vertical}
+  .modal .actions{display:flex;gap:10px;margin-top:16px}
+  .modal .actions button{flex:1;padding:12px}
+  .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#333;color:#fff;
+         padding:10px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;z-index:30}
+  .toast.show{opacity:.95}
+</style>
+</head>
+<body>
+<header id="title">Vazifalar</header>
+<div id="list"><div class="empty">Yuklanmoqda…</div></div>
+<div class="fab" id="fab">+</div>
+
+<nav>
+  <button data-tab="tasks" class="active"><span class="ic">✓</span>Vazifalar</button>
+  <button data-tab="meetings"><span class="ic">📅</span>Uchrashuv</button>
+  <button data-tab="notes"><span class="ic">📝</span>Qaydlar</button>
+  <button data-tab="reminders"><span class="ic">⏰</span>Eslatma</button>
+</nav>
+
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg){ tg.ready(); tg.expand(); }
+const AUTH = "tma " + (tg?.initData || "");
+let TAB = "tasks", META = {categories:[],contacts:[],priorities:["P0","P1","P2","P3"],
+  statuses:["todo","in_progress","blocked","done","cancelled"]};
+
+const TITLES = {tasks:"Vazifalar",meetings:"Uchrashuvlar",notes:"Qaydlar",reminders:"Eslatmalar"};
+const PRIO = {P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
+const STAT = {todo:"Rejada",in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor"};
+
+async function api(path, opts={}){
+  const r = await fetch("/api"+path, {...opts,
+    headers:{"Authorization":AUTH,"Content-Type":"application/json",...(opts.headers||{})}});
+  if(!r.ok){ let e="Xato "+r.status; try{e=(await r.json()).error||e}catch{}; throw new Error(e); }
+  return r.status===204 ? {} : r.json();
+}
+function toast(m){ const t=document.getElementById("toast"); t.textContent=m; t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"),1800); }
+function esc(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function fmtDate(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return iso;
+  return d.toLocaleString("uz",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}); }
+function forDatetimeLocal(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return "";
+  const p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
+function fromDatetimeLocal(v){ return v ? new Date(v).toISOString() : null; }
+
+// ───── list rendering ─────
+async function load(){
+  const list=document.getElementById("list");
+  list.innerHTML='<div class="empty">Yuklanmoqda…</div>';
+  document.getElementById("title").textContent=TITLES[TAB];
+  try{
+    if(TAB==="tasks") renderTasks((await api("/tasks?status=active")).tasks);
+    if(TAB==="meetings") renderMeetings((await api("/meetings")).meetings);
+    if(TAB==="notes") renderNotes((await api("/notes")).notes);
+    if(TAB==="reminders") renderReminders((await api("/reminders")).reminders);
+  }catch(e){ list.innerHTML=`<div class="empty">⚠️ ${esc(e.message)}</div>`; }
+}
+function wrap(items,html){ const l=document.getElementById("list");
+  l.innerHTML = items.length ? items.map(html).join("") : '<div class="empty">Hozircha bo\'sh</div>'; }
+
+function renderTasks(items){
+  items.sort((a,b)=>(a.priority||"P2").localeCompare(b.priority||"P2"));
+  wrap(items,t=>`<div class="card ${t.status==='done'?'done':''}">
+    <h3>${t.parent_id?'↳ ':''}${esc(t.title)}</h3>
+    <div class="meta">${t.assignee?('👤 '+esc(t.assignee)+' · '):''}${t.deadline?('⏳ '+fmtDate(t.deadline)+' · '):''}
+      <span class="chip ${t.priority==='P0'?'p0':t.priority==='P1'?'p1':''}">${PRIO[t.priority]||t.priority||''}</span>
+      ${t.category?(' <span class="chip">'+esc(t.category)+'</span>'):''}</div>
+    <div class="row">
+      <button class="small primary" onclick="taskDone('${t.id}')">✓ Bajarildi</button>
+      <button class="small" onclick='editTask(${JSON.stringify(t)})'>✏️</button>
+      <button class="small danger" onclick="del('/tasks/${t.id}')">🗑</button>
+    </div></div>`);
+}
+function renderMeetings(items){
+  wrap(items,m=>`<div class="card">
+    <h3>${esc(m.title)}</h3>
+    <div class="meta">📅 ${fmtDate(m.datetime_start)}${m.location_or_link?(' · 📍 '+esc(m.location_or_link)):''}
+      ${(m.participants&&m.participants.length)?('<br>👥 '+esc((m.participants||[]).join(", "))):''}</div>
+    <div class="row">
+      <button class="small primary" onclick="mDone('${m.id}')">✓ Bo'ldi</button>
+      <button class="small" onclick='editMeeting(${JSON.stringify(m)})'>✏️</button>
+      <button class="small danger" onclick="mCancel('${m.id}')">✕ Bekor</button>
+    </div></div>`);
+}
+function renderNotes(items){
+  wrap(items,n=>`<div class="card">
+    <h3>${esc(n.title||"Qayd")}</h3>
+    <div class="meta">${esc((n.content||"").slice(0,200))}</div>
+    <div class="row">
+      <button class="small" onclick='editNote(${JSON.stringify(n)})'>✏️</button>
+      <button class="small danger" onclick="del('/notes/${n.id}')">🗑</button>
+    </div></div>`);
+}
+function renderReminders(items){
+  wrap(items,r=>`<div class="card">
+    <h3>${esc(r.title)}</h3>
+    <div class="meta">⏰ ${fmtDate(r.remind_at)}${r.note?(' · '+esc(r.note)):''}</div>
+    <div class="row">
+      <button class="small primary" onclick="rDone('${r.id}')">✓</button>
+      <button class="small danger" onclick="del('/reminders/${r.id}')">🗑</button>
+    </div></div>`);
+}
+
+// ───── actions ─────
+async function act(fn,msg){ try{ await fn(); toast(msg); load(); }catch(e){ toast("⚠️ "+e.message); } }
+const taskDone=id=>act(()=>api(`/tasks/${id}/complete`,{method:"POST"}),"Bajarildi ✓");
+const mDone  =id=>act(()=>api(`/meetings/${id}/complete`,{method:"POST"}),"Belgilandi ✓");
+const mCancel=id=>act(()=>api(`/meetings/${id}/cancel`,{method:"POST"}),"Bekor qilindi");
+const rDone  =id=>act(()=>api(`/reminders/${id}/complete`,{method:"POST"}),"Bajarildi ✓");
+function del(path){ if(tg?.showConfirm){ tg.showConfirm("O'chirilsinmi?",ok=>{ if(ok) act(()=>api(path,{method:"DELETE"}),"O'chirildi"); }); }
+  else act(()=>api(path,{method:"DELETE"}),"O'chirildi"); }
+
+// ───── modal / forms ─────
+const modalBg=document.getElementById("modalBg");
+function closeModal(){ modalBg.classList.remove("show"); }
+modalBg.addEventListener("click",e=>{ if(e.target===modalBg) closeModal(); });
+function opt(list,sel){ return list.map(v=>`<option ${v===sel?'selected':''}>${esc(v)}</option>`).join(""); }
+function openModal(html){ document.getElementById("modal").innerHTML=html; modalBg.classList.add("show"); }
+
+function taskForm(t={}){ return `<h2>${t.id?'Vazifani tahrirlash':'Yangi vazifa'}</h2>
+  <label>Sarlavha</label><input id="f_title" value="${esc(t.title)}">
+  <label>Izoh</label><textarea id="f_desc">${esc(t.description)}</textarea>
+  <label>Ijrochi</label><input id="f_asg" list="dl_c" value="${esc(t.assignee)}">
+  <datalist id="dl_c">${opt(META.contacts)}</datalist>
+  <label>Muddat</label><input type="datetime-local" id="f_dl" value="${forDatetimeLocal(t.deadline)}">
+  <label>Ustuvorlik</label><select id="f_prio">${opt(META.priorities,t.priority||"P2")}</select>
+  <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}">
+  <datalist id="dl_cat">${opt(META.categories)}</datalist>
+  <div class="actions"><button onclick="closeModal()">Bekor</button>
+    <button class="primary" onclick="saveTask('${t.id||''}')">Saqlash</button></div>`; }
+const newTask=()=>openModal(taskForm());
+const editTask=t=>openModal(taskForm(t));
+async function saveTask(id){
+  const body={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),
+    deadline:fromDatetimeLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
+  if(!body.title){ toast("Sarlavha kerak"); return; }
+  await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
+  closeModal();
+}
+
+function meetingForm(m={}){ return `<h2>${m.id?'Uchrashuvni tahrirlash':'Yangi uchrashuv'}</h2>
+  <label>Sarlavha</label><input id="f_title" value="${esc(m.title)}">
+  <label>Boshlanish</label><input type="datetime-local" id="f_start" value="${forDatetimeLocal(m.datetime_start)}">
+  <label>Joy / havola</label><input id="f_loc" value="${esc(m.location_or_link)}">
+  <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(', '))}">
+  <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
+  <div class="actions"><button onclick="closeModal()">Bekor</button>
+    <button class="primary" onclick="saveMeeting('${m.id||''}')">Saqlash</button></div>`; }
+const newMeeting=()=>openModal(meetingForm());
+const editMeeting=m=>openModal(meetingForm(m));
+async function saveMeeting(id){
+  const parts=val("f_part").split(",").map(s=>s.trim()).filter(Boolean);
+  const body={title:val("f_title"),datetime_start:fromDatetimeLocal(val("f_start")),
+    location_or_link:val("f_loc"),participants:parts,agenda:val("f_ag")};
+  if(!body.title){ toast("Sarlavha kerak"); return; }
+  await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
+  closeModal();
+}
+
+function noteForm(n={}){ return `<h2>${n.id?'Qaydni tahrirlash':'Yangi qayd'}</h2>
+  <label>Sarlavha</label><input id="f_title" value="${esc(n.title)}">
+  <label>Matn</label><textarea id="f_content" style="min-height:120px">${esc(n.content)}</textarea>
+  <div class="actions"><button onclick="closeModal()">Bekor</button>
+    <button class="primary" onclick="saveNote('${n.id||''}')">Saqlash</button></div>`; }
+const newNote=()=>openModal(noteForm());
+const editNote=n=>openModal(noteForm(n));
+async function saveNote(id){
+  const body={title:val("f_title"),content:val("f_content")};
+  if(!body.content){ toast("Matn kerak"); return; }
+  await act(()=>api(id?`/notes/${id}`:"/notes",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
+  closeModal();
+}
+
+function reminderForm(r={}){ return `<h2>${r.id?'Eslatmani tahrirlash':'Yangi eslatma'}</h2>
+  <label>Sarlavha</label><input id="f_title" value="${esc(r.title)}">
+  <label>Vaqt</label><input type="datetime-local" id="f_at" value="${forDatetimeLocal(r.remind_at)}">
+  <label>Izoh</label><input id="f_note" value="${esc(r.note)}">
+  <div class="actions"><button onclick="closeModal()">Bekor</button>
+    <button class="primary" onclick="saveReminder('${r.id||''}')">Saqlash</button></div>`; }
+const newReminder=()=>openModal(reminderForm());
+async function saveReminder(id){
+  const body={title:val("f_title"),remind_at:fromDatetimeLocal(val("f_at")),note:val("f_note")};
+  if(!body.remind_at){ toast("Vaqt kerak"); return; }
+  if(!body.title) body.title="Eslatma";
+  await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
+  closeModal();
+}
+function val(id){ return (document.getElementById(id)?.value||"").trim(); }
+
+document.getElementById("fab").onclick=()=>({tasks:newTask,meetings:newMeeting,notes:newNote,reminders:newReminder}[TAB]());
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  TAB=b.dataset.tab;
+  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x===b));
+  load();
+});
+
+(async()=>{ try{ META=await api("/meta"); }catch(e){} load(); })();
+</script>
+</body>
+</html>

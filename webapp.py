@@ -1,0 +1,318 @@
+"""Telegram Mini App backend — a small aiohttp API that exposes the bot's own
+database (tasks / meetings / notes / reminders) to a web UI opened inside Telegram.
+
+Design:
+  • Reuses database.py verbatim — no duplicated business logic.
+  • Auth = Telegram Mini App `initData`: every /api request must carry a valid,
+    HMAC-signed initData (Authorization: "tma <initData>"); the signing key is the
+    bot token, so only a real Telegram client can produce it, and we additionally
+    restrict access to config.PRINCIPAL_USER_ID (single-user bot).
+  • Binds to 127.0.0.1 only — a public nginx reverse proxy terminates TLS and
+    forwards; the app process is never directly exposed.
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import time
+from pathlib import Path
+from urllib.parse import parse_qsl
+
+from aiohttp import web
+
+import config
+import database
+
+logger = logging.getLogger(__name__)
+
+_STATIC_DIR = Path(__file__).parent / "webapp_static"
+_MAX_INITDATA_AGE = 24 * 60 * 60  # reject initData older than 24h (replay guard)
+
+
+# ───────────────────────── auth ─────────────────────────
+
+def validate_init_data(init_data: str, bot_token: str,
+                       max_age: int = _MAX_INITDATA_AGE) -> dict | None:
+    """Verify a Telegram Mini App initData string. Returns the parsed `user` dict
+    on success, else None. Implements the canonical algorithm:
+        secret_key   = HMAC_SHA256(key="WebAppData", msg=bot_token)
+        expected     = HMAC_SHA256(key=secret_key,  msg=data_check_string)
+    where data_check_string is every field except `hash`, sorted by key, joined
+    "k=v" with newlines. Also enforces auth_date freshness."""
+    if not init_data or not bot_token:
+        return None
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True, strict_parsing=True))
+    except ValueError:
+        return None
+    received_hash = pairs.pop("hash", None)
+    if not received_hash:
+        return None
+    # Newer clients add a `signature` (Ed25519, for third-party validation) that is
+    # NOT part of the bot-token HMAC data_check_string — exclude it.
+    pairs.pop("signature", None)
+    data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+    secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    expected = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, received_hash):
+        return None
+    # Freshness: reject stale/replayed initData.
+    try:
+        auth_date = int(pairs.get("auth_date", "0"))
+    except ValueError:
+        return None
+    if max_age and (time.time() - auth_date) > max_age:
+        return None
+    try:
+        return json.loads(pairs.get("user", "null"))
+    except (ValueError, TypeError):
+        return None
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    """Gate every /api/* route behind a valid initData for the principal. Static
+    files and the health check are public (they carry no data)."""
+    path = request.path
+    if not path.startswith("/api/") or path == "/api/health":
+        return await handler(request)
+    header = request.headers.get("Authorization", "")
+    init_data = header[4:].strip() if header.lower().startswith("tma ") else ""
+    user = validate_init_data(init_data, config.TELEGRAM_BOT_TOKEN)
+    if not user:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    if int(user.get("id", 0)) != int(config.PRINCIPAL_USER_ID):
+        # A validly-signed initData from a DIFFERENT Telegram user — not the owner.
+        return web.json_response({"error": "forbidden"}, status=403)
+    request["user"] = user
+    return await handler(request)
+
+
+# ───────────────────────── helpers ─────────────────────────
+
+async def _json_body(request: web.Request) -> dict:
+    try:
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _pick(data: dict, fields: tuple[str, ...]) -> dict:
+    """Whitelist incoming fields — never pass arbitrary client keys to the DB."""
+    return {k: data[k] for k in fields if k in data}
+
+
+_TASK_FIELDS = ("title", "description", "deadline", "priority", "status",
+                "assignee", "category", "recurrence_rule", "parent_id", "tags")
+_MEETING_FIELDS = ("title", "datetime_start", "datetime_end", "location_or_link",
+                   "participants", "agenda", "prep_notes")
+_NOTE_FIELDS = ("title", "content", "status", "tags")
+_REMINDER_FIELDS = ("title", "note", "remind_at", "recurrence_rule", "task_id")
+
+
+# ───────────────────────── tasks ─────────────────────────
+
+async def tasks_list(request: web.Request) -> web.Response:
+    status = request.query.get("status", "active")
+    if status == "all":
+        rows = await database.list_tasks(limit=1000, include_subtasks=True)
+    elif status == "done":
+        rows = await database.list_tasks(status_in=["done"], limit=1000, include_subtasks=True)
+    else:  # active
+        rows = await database.list_tasks(status_in=["todo", "in_progress", "blocked"],
+                                         limit=1000, include_subtasks=True)
+    return web.json_response({"tasks": rows})
+
+
+async def task_create(request: web.Request) -> web.Response:
+    data = _pick(await _json_body(request), _TASK_FIELDS)
+    if not (data.get("title") or "").strip():
+        return web.json_response({"error": "title required"}, status=400)
+    data["source"] = "webapp"  # trusted origin → may introduce assignee/category
+    tid = await database.create_task(data)
+    return web.json_response({"id": tid, "task": await database.get_task(tid)}, status=201)
+
+
+async def task_update(request: web.Request) -> web.Response:
+    tid = request.match_info["id"]
+    data = _pick(await _json_body(request), _TASK_FIELDS)
+    data["source"] = "webapp"
+    ok = await database.update_task(tid, data)
+    if not ok:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"task": await database.get_task(tid)})
+
+
+async def task_complete(request: web.Request) -> web.Response:
+    ok = await database.complete_task(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def task_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_task(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+# ───────────────────────── meetings ─────────────────────────
+
+async def meetings_list(request: web.Request) -> web.Response:
+    # Recent + upcoming window so the app shows a useful slice, not the whole history.
+    now = database.now_iso()
+    start = database.parse_iso_dt(now)
+    from datetime import timedelta
+    lo = (start - timedelta(days=7)).isoformat()
+    hi = (start + timedelta(days=60)).isoformat()
+    rows = await database.list_meetings_in_window(lo, hi)
+    return web.json_response({"meetings": rows})
+
+
+async def meeting_create(request: web.Request) -> web.Response:
+    data = _pick(await _json_body(request), _MEETING_FIELDS)
+    if not (data.get("title") or "").strip():
+        return web.json_response({"error": "title required"}, status=400)
+    mid = await database.create_meeting(data)
+    return web.json_response({"id": mid, "meeting": await database.get_meeting(mid)}, status=201)
+
+
+async def meeting_update(request: web.Request) -> web.Response:
+    mid = request.match_info["id"]
+    ok = await database.update_meeting(mid, _pick(await _json_body(request), _MEETING_FIELDS))
+    if not ok:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"meeting": await database.get_meeting(mid)})
+
+
+async def meeting_cancel(request: web.Request) -> web.Response:
+    ok = await database.cancel_meeting(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def meeting_complete(request: web.Request) -> web.Response:
+    ok = await database.complete_meeting(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+# ───────────────────────── notes ─────────────────────────
+
+async def notes_list(request: web.Request) -> web.Response:
+    status = request.query.get("status", "inbox")
+    rows = await database.list_notes(status=(None if status == "all" else status), limit=500)
+    return web.json_response({"notes": rows})
+
+
+async def note_create(request: web.Request) -> web.Response:
+    data = _pick(await _json_body(request), _NOTE_FIELDS)
+    if not (data.get("content") or "").strip():
+        return web.json_response({"error": "content required"}, status=400)
+    data["source"] = "manual"
+    nid = await database.create_note(data)
+    if not nid:
+        return web.json_response({"error": "content required"}, status=400)
+    return web.json_response({"id": nid, "note": await database.get_note(nid)}, status=201)
+
+
+async def note_update(request: web.Request) -> web.Response:
+    nid = request.match_info["id"]
+    ok = await database.update_note(nid, _pick(await _json_body(request), _NOTE_FIELDS))
+    if not ok:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"note": await database.get_note(nid)})
+
+
+async def note_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_note(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+# ───────────────────────── reminders ─────────────────────────
+
+async def reminders_list(request: web.Request) -> web.Response:
+    rows = await database.list_reminders(status_in=["scheduled"], limit=500)
+    return web.json_response({"reminders": rows})
+
+
+async def reminder_create(request: web.Request) -> web.Response:
+    data = _pick(await _json_body(request), _REMINDER_FIELDS)
+    if not (data.get("remind_at") or "").strip():
+        return web.json_response({"error": "remind_at required"}, status=400)
+    rid = await database.create_reminder(data)
+    return web.json_response({"id": rid, "reminder": await database.get_reminder(rid)}, status=201)
+
+
+async def reminder_update(request: web.Request) -> web.Response:
+    rid = request.match_info["id"]
+    ok = await database.update_reminder(rid, _pick(await _json_body(request), _REMINDER_FIELDS))
+    if not ok:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"reminder": await database.get_reminder(rid)})
+
+
+async def reminder_complete(request: web.Request) -> web.Response:
+    ok = await database.complete_reminder(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+# ───────────────────────── meta + health ─────────────────────────
+
+async def meta(request: web.Request) -> web.Response:
+    """Dropdown data for forms: categories + contacts."""
+    cats = await database.list_task_categories()
+    contacts = await database.list_contacts()
+    return web.json_response({
+        "categories": [c.get("category") for c in cats if c.get("category")],
+        "contacts": [c.get("name") for c in contacts if c.get("name")],
+        "priorities": ["P0", "P1", "P2", "P3"],
+        "statuses": ["todo", "in_progress", "blocked", "done", "cancelled"],
+    })
+
+
+async def health(request: web.Request) -> web.Response:
+    return web.json_response({"ok": True})
+
+
+# ───────────────────────── app factory / runner ─────────────────────────
+
+def create_app() -> web.Application:
+    app = web.Application(middlewares=[auth_middleware])
+    app.add_routes([
+        web.get("/api/health", health),
+        web.get("/api/meta", meta),
+        web.get("/api/tasks", tasks_list),
+        web.post("/api/tasks", task_create),
+        web.patch("/api/tasks/{id}", task_update),
+        web.post("/api/tasks/{id}/complete", task_complete),
+        web.delete("/api/tasks/{id}", task_delete),
+        web.get("/api/meetings", meetings_list),
+        web.post("/api/meetings", meeting_create),
+        web.patch("/api/meetings/{id}", meeting_update),
+        web.post("/api/meetings/{id}/cancel", meeting_cancel),
+        web.post("/api/meetings/{id}/complete", meeting_complete),
+        web.get("/api/notes", notes_list),
+        web.post("/api/notes", note_create),
+        web.patch("/api/notes/{id}", note_update),
+        web.delete("/api/notes/{id}", note_delete),
+        web.get("/api/reminders", reminders_list),
+        web.post("/api/reminders", reminder_create),
+        web.patch("/api/reminders/{id}", reminder_update),
+        web.post("/api/reminders/{id}/complete", reminder_complete),
+    ])
+    # Static frontend (served last so /api wins). index.html at "/".
+    if _STATIC_DIR.is_dir():
+        app.router.add_get("/", lambda r: web.FileResponse(_STATIC_DIR / "index.html"))
+        app.router.add_static("/", _STATIC_DIR, show_index=False)
+    return app
+
+
+async def start_webapp() -> web.AppRunner:
+    """Start the Mini App server on 127.0.0.1:WEBAPP_PORT. Returns the runner so the
+    caller can clean it up on shutdown."""
+    runner = web.AppRunner(create_app(), access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, config.WEBAPP_HOST, config.WEBAPP_PORT)
+    await site.start()
+    logger.info("Mini App server on http://%s:%s (public: %s)",
+                config.WEBAPP_HOST, config.WEBAPP_PORT, config.WEBAPP_URL or "unset")
+    return runner

@@ -1584,6 +1584,61 @@ async def main():
     check("bulk-delete preview: filtrlangan 'done' soni (jami emas)",
           f"{_done_n} ta" in _bprev and _done_n < _total_n, f"done={_done_n} total={_total_n}")
 
+    print("\n── Mini App (Telegram Web App) backend ──")
+    import webapp as _wa
+    import hashlib as _hl, hmac as _hm, json as _js, time as _tm
+    from urllib.parse import urlencode as _ue
+
+    def _mk_init(uid, token, auth_date=None):
+        ad = auth_date if auth_date is not None else int(_tm.time())
+        user = _js.dumps({"id": uid, "first_name": "Test"}, separators=(",", ":"))
+        pairs = {"auth_date": str(ad), "query_id": "AAA", "user": user}
+        dcs = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+        sk = _hm.new(b"WebAppData", token.encode(), _hl.sha256).digest()
+        pairs["hash"] = _hm.new(sk, dcs.encode(), _hl.sha256).hexdigest()
+        return _ue(pairs)
+
+    _tok = config.TELEGRAM_BOT_TOKEN
+    _pid = config.PRINCIPAL_USER_ID
+    _good = _mk_init(_pid, _tok)
+    check("MiniApp: to'g'ri initData → user qaytadi",
+          (_wa.validate_init_data(_good, _tok) or {}).get("id") == _pid)
+    check("MiniApp: buzilgan hash → None",
+          _wa.validate_init_data(_good[:-4] + "0000", _tok) is None)
+    check("MiniApp: noto'g'ri token → None",
+          _wa.validate_init_data(_good, _tok + "x") is None)
+    check("MiniApp: eskirgan auth_date → None (replay himoyasi)",
+          _wa.validate_init_data(_mk_init(_pid, _tok, auth_date=1), _tok) is None)
+    check("MiniApp: hash yo'q → None", _wa.validate_init_data("user=%7B%7D", _tok) is None)
+
+    # End-to-end via aiohttp test client: auth gate + a real create round-trip.
+    from aiohttp.test_utils import TestClient, TestServer
+    _app = _wa.create_app()
+    _client = TestClient(TestServer(_app))
+    await _client.start_server()
+    try:
+        _H = {"Authorization": "tma " + _good}
+        _r = await _client.get("/api/tasks")
+        check("MiniApp: authsiz /api → 401", _r.status == 401)
+        _r = await _client.get("/api/tasks", headers={"Authorization": "tma " + _mk_init(999999, _tok)})
+        check("MiniApp: begona user (imzo to'g'ri) → 403", _r.status == 403)
+        _r = await _client.get("/api/tasks", headers=_H)
+        check("MiniApp: egasi → 200 + tasks ro'yxati", _r.status == 200 and "tasks" in await _r.json())
+        _r = await _client.post("/api/tasks", headers=_H, json={"title": "MiniApp orqali", "priority": "P1"})
+        _body = await _r.json()
+        check("MiniApp: POST /api/tasks → 201 + DBда yaratildi",
+              _r.status == 201 and bool(_body.get("id"))
+              and (await database.get_task(_body["id"]))["title"] == "MiniApp orqali")
+        _r = await _client.post(f"/api/tasks/{_body['id']}/complete", headers=_H)
+        check("MiniApp: complete → done", _r.status == 200
+              and (await database.get_task(_body["id"]))["status"] == "done")
+        _r = await _client.get("/api/health")
+        check("MiniApp: /api/health authsiz ochiq", _r.status == 200)
+        _r = await _client.post("/api/tasks", headers=_H, json={"title": "   "})
+        check("MiniApp: bo'sh sarlavha → 400", _r.status == 400)
+    finally:
+        await _client.close()
+
     print("\n" + "=" * 48)
     print(f"NATIJA:  ✅ {PASS} o'tdi   ❌ {FAIL} yiqildi")
     if FAILED:
