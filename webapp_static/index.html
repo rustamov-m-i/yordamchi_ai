@@ -118,6 +118,9 @@
 const tg=window.Telegram?.WebApp; if(tg){tg.ready();tg.expand();}
 const AUTH="tma "+(tg?.initData||"");
 let VIEW="dash", META={categories:[],contacts:[]};
+// Row items are cached by id so edit handlers pass only the (safe) id in onclick —
+// embedding JSON in an attribute breaks on the apostrophes that fill Uzbek text (o', g').
+const CACHE={tasks:{},meetings:{},notes:{},reminders:{}};
 const PRIO={P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
 const PCLS={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
 const PCOL={P0:"var(--red)",P1:"var(--amber)",P2:"var(--brand)",P3:"#b7b7c8"};
@@ -162,7 +165,7 @@ async function renderDash(box){
       <div class="pct">${d.progress||0}%</div><div style="font-size:13px;opacity:.9">${(d.progress||0)>=70?"Zo'r ketyapti!":"Davom eting"}</div>
       <div class="stats"><div><b>${c.total||0}</b><span>Jami</span></div><div><b>${c.done||0}</b><span>Bajarildi</span></div><div><b>${c.pending||0}</b><span>Qoldi</span></div></div></div>
     <div class="sec"><h2>Bugungi vazifalar</h2><a onclick="go('tasks')">Barchasi</a></div>`;
-  const t=d.today||[];
+  const t=d.today||[]; t.forEach(x=>CACHE.tasks[x.id]=x);
   h+= t.length? t.map(taskRow).join("") : emptyBox("checklist","Bugunga vazifa yo'q");
   h+=`<div class="sec" style="margin-top:16px"><h2>Tezkor</h2></div>
     <div class="grid2"><div class="qcard" onclick="go('notes')"><i class="ti ti-note"></i><div>Qaydlar</div></div>
@@ -172,7 +175,7 @@ async function renderDash(box){
 function taskRow(t){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
   return `<div class="trow ${done?'done':''}" style="border-left-color:${col}">
     <div class="cbox ${done?'done':''}" onclick="taskDone('${t.id}',event)">${done?'<i class="ti ti-check"></i>':''}</div>
-    <div class="t" onclick='openTask(${JSON.stringify(t)})'>
+    <div class="t" onclick="openTask('${t.id}')">
       <div class="ti-title">${t.parent_id?'↳ ':''}${esc(t.title)}</div>
       <div class="ti-sub">${esc(t.category||PRIO[t.priority]||"")}${t.assignee?" · "+esc(t.assignee):""}</div></div>
     <div class="side">${t.deadline?fmt(t.deadline):""}</div></div>`}
@@ -180,6 +183,7 @@ function taskRow(t){const done=t.status==="done";const col=PCOL[t.priority]||"va
 let TFILTER="active";
 async function renderTasks(box){
   const d=await api("/tasks?status="+TFILTER);let list=d.tasks||[];
+  list.forEach(x=>CACHE.tasks[x.id]=x);
   list.sort((a,b)=>(a.priority||"P2").localeCompare(b.priority||"P2"));
   const chip=(k,l)=>`<button class="btn ${TFILTER===k?'pri':''}" onclick="setTF('${k}')">${l}</button>`;
   box.innerHTML=head("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
@@ -189,29 +193,32 @@ function setTF(k){TFILTER=k;render("tasks")}
 
 async function renderMeetings(box){
   const d=await api("/meetings");const list=d.meetings||[];
+  list.forEach(x=>CACHE.meetings[x.id]=x);
   box.innerHTML=head("Uchrashuvlar","")+(list.length?list.map(m=>`<div class="card">
     <div style="font-size:15px;font-weight:500">${esc(m.title)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
     ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}
     <div class="rowbtns"><button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>
-      <button class="btn" onclick='openMeeting(${JSON.stringify(m)})'><i class="ti ti-edit"></i></button>
+      <button class="btn" onclick="openMeeting('${m.id}')"><i class="ti ti-edit"></i></button>
       <button class="btn dang" onclick="mCancel('${m.id}')">Bekor</button></div></div>`).join(""):emptyBox("calendar-off","Uchrashuv yo'q"));
 }
 async function renderNotes(box){
   const d=await api("/notes");const list=d.notes||[];
+  list.forEach(x=>CACHE.notes[x.id]=x);
   box.innerHTML=head("Qaydlar","")+(list.length?list.map(n=>`<div class="card">
     <div style="font-size:15px;font-weight:500">${esc(n.title||"Qayd")}</div>
     <div style="font-size:13px;color:var(--muted);margin-top:5px;line-height:1.5">${esc((n.content||"").slice(0,180))}</div>
-    <div class="rowbtns"><button class="btn" onclick='openNote(${JSON.stringify(n)})'><i class="ti ti-edit"></i> Tahrir</button>
+    <div class="rowbtns"><button class="btn" onclick="openNote('${n.id}')"><i class="ti ti-edit"></i> Tahrir</button>
       <button class="btn dang" onclick="del('/notes/${n.id}','notes')"><i class="ti ti-trash"></i></button></div></div>`).join(""):emptyBox("note","Qayd yo'q"));
 }
 async function renderReminders(box){
   const d=await api("/reminders");const list=d.reminders||[];
+  list.forEach(x=>CACHE.reminders[x.id]=x);
   box.innerHTML=head("Eslatmalar","")+(list.length?list.map(r=>`<div class="card">
     <div style="font-size:15px;font-weight:500">${esc(r.title)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(r.remind_at)}${r.note?" · "+esc(r.note):""}</div>
     <div class="rowbtns"><button class="btn pri" onclick="rDone('${r.id}')"><i class="ti ti-check"></i></button>
-      <button class="btn" onclick='openReminder(${JSON.stringify(r)})'><i class="ti ti-edit"></i></button>
+      <button class="btn" onclick="openReminder('${r.id}')"><i class="ti ti-edit"></i></button>
       <button class="btn dang" onclick="del('/reminders/${r.id}','reminders')"><i class="ti ti-trash"></i></button></div></div>`).join(""):emptyBox("bell-off","Eslatma yo'q"));
 }
 
@@ -269,7 +276,7 @@ function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":"Yangi vazifa"}
   <label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select>
   <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}"><datalist id="dl_cat">${opts(META.categories)}</datalist>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button>${t.id?`<button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
-const openTask=t=>openM(taskForm(t));
+const openTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));
 function delTask(id){const run=()=>{closeM();act(()=>api(`/tasks/${id}`,{method:"DELETE"}),"O'chirildi")};
   if(tg?.showConfirm)tg.showConfirm("Vazifa o'chirilsinmi?",ok=>{if(ok)run()});else run()}
 async function saveTask(id){const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
@@ -282,7 +289,7 @@ function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uc
   <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(", "))}">
   <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
-const openMeeting=m=>openM(meetingForm(m));
+const openMeeting=x=>openM(meetingForm(typeof x==="object"?(x||{}):(CACHE.meetings[x]||{})));
 async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
   if(!b.title)return toast("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
@@ -290,7 +297,7 @@ function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3
   <label>Sarlavha</label><input id="f_title" value="${esc(n.title)}">
   <label>Matn</label><textarea id="f_content" style="min-height:120px">${esc(n.content)}</textarea>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveNote('${n.id||""}')">Saqlash</button></div>`}
-const openNote=n=>openM(noteForm(n));
+const openNote=x=>openM(noteForm(typeof x==="object"?(x||{}):(CACHE.notes[x]||{})));
 async function saveNote(id){const b={title:val("f_title"),content:val("f_content")};
   if(!b.content)return toast("Matn kerak");await act(()=>api(id?`/notes/${id}`:"/notes",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
@@ -299,7 +306,7 @@ function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi esl
   <label>Vaqt</label><input type="datetime-local" id="f_at" value="${toLocal(r.remind_at)}">
   <label>Izoh</label><input id="f_note" value="${esc(r.note)}">
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveReminder('${r.id||""}')">Saqlash</button></div>`}
-const openReminder=r=>openM(reminderForm(r));
+const openReminder=x=>openM(reminderForm(typeof x==="object"?(x||{}):(CACHE.reminders[x]||{})));
 async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note")};
   if(!b.remind_at)return toast("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
