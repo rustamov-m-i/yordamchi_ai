@@ -211,6 +211,7 @@ async function renderReminders(box){
     <div style="font-size:15px;font-weight:500">${esc(r.title)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(r.remind_at)}${r.note?" · "+esc(r.note):""}</div>
     <div class="rowbtns"><button class="btn pri" onclick="rDone('${r.id}')"><i class="ti ti-check"></i></button>
+      <button class="btn" onclick='openReminder(${JSON.stringify(r)})'><i class="ti ti-edit"></i></button>
       <button class="btn dang" onclick="del('/reminders/${r.id}','reminders')"><i class="ti ti-trash"></i></button></div></div>`).join(""):emptyBox("bell-off","Eslatma yo'q"));
 }
 
@@ -267,8 +268,10 @@ function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":"Yangi vazifa"}
   <label>Muddat</label><input type="datetime-local" id="f_dl" value="${toLocal(t.deadline)}">
   <label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select>
   <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}"><datalist id="dl_cat">${opts(META.categories)}</datalist>
-  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
+  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button>${t.id?`<button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
 const openTask=t=>openM(taskForm(t));
+function delTask(id){const run=()=>{closeM();act(()=>api(`/tasks/${id}`,{method:"DELETE"}),"O'chirildi")};
+  if(tg?.showConfirm)tg.showConfirm("Vazifa o'chirilsinmi?",ok=>{if(ok)run()});else run()}
 async function saveTask(id){const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
   if(!b.title)return toast("Sarlavha kerak");await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
@@ -296,6 +299,7 @@ function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi esl
   <label>Vaqt</label><input type="datetime-local" id="f_at" value="${toLocal(r.remind_at)}">
   <label>Izoh</label><input id="f_note" value="${esc(r.note)}">
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveReminder('${r.id||""}')">Saqlash</button></div>`}
+const openReminder=r=>openM(reminderForm(r));
 async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note")};
   if(!b.remind_at)return toast("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 

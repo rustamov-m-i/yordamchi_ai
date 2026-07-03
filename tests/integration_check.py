@@ -1674,6 +1674,50 @@ async def main():
         # valid parent still works
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "OK sub", "parent_id": _pt})
         check("S2: to'g'ri parent_id → 201", _r.status == 201)
+        # task delete (UI: task-form 'O'chirish') — DELETE endpoint reachable end-to-end
+        _delid = (await (await _client.post("/api/tasks", headers=_H, json={"title": "O'chiraman"})).json())["id"]
+        _r = await _client.delete(f"/api/tasks/{_delid}", headers=_H)
+        check("Full CRUD: vazifa DELETE → o'chadi",
+              _r.status == 200 and (await database.get_task(_delid)) is None)
+
+        # ── Full-platform CRUD smoke: har bir bo'lim uchun create→list→update→yakun/o'chir ──
+        # Meetings
+        _mid = (await (await _client.post("/api/meetings", headers=_H, json={
+            "title": "Web uchrashuv", "datetime_start": (datetime.now(TZ)+timedelta(days=1)).isoformat(),
+            "participants": ["Karimov", "Aziz"], "location_or_link": "Zoom"})).json())["id"]
+        _ml = (await (await _client.get("/api/meetings", headers=_H)).json())["meetings"]
+        check("Full CRUD: uchrashuv create+list", any(m["id"] == _mid for m in _ml))
+        _r = await _client.patch(f"/api/meetings/{_mid}", headers=_H, json={"location_or_link": "Ofis 3-qavat"})
+        check("Full CRUD: uchrashuv PATCH", _r.status == 200
+              and (await database.get_meeting(_mid))["location_or_link"] == "Ofis 3-qavat")
+        check("Full CRUD: uchrashuv complete + cancel",
+              (await _client.post(f"/api/meetings/{_mid}/complete", headers=_H)).status == 200
+              and (await _client.post(f"/api/meetings/{_mid}/cancel", headers=_H)).status == 200)
+        # Notes
+        _nid = (await (await _client.post("/api/notes", headers=_H, json={
+            "title": "Web qayd", "content": "Mini app orqali qayd"})).json())["id"]
+        _nl = (await (await _client.get("/api/notes", headers=_H)).json())["notes"]
+        check("Full CRUD: qayd create+list", any(n["id"] == _nid for n in _nl))
+        _r = await _client.patch(f"/api/notes/{_nid}", headers=_H, json={"content": "Yangilangan matn"})
+        check("Full CRUD: qayd PATCH", _r.status == 200
+              and (await database.get_note(_nid))["content"] == "Yangilangan matn")
+        check("Full CRUD: qayd DELETE",
+              (await _client.delete(f"/api/notes/{_nid}", headers=_H)).status == 200
+              and (await database.get_note(_nid)) is None)
+        # Reminders
+        _rid = (await (await _client.post("/api/reminders", headers=_H, json={
+            "title": "Web eslatma", "remind_at": (datetime.now(TZ)+timedelta(hours=3)).isoformat()})).json())["id"]
+        _rl = (await (await _client.get("/api/reminders", headers=_H)).json())["reminders"]
+        check("Full CRUD: eslatma create+list", any(r["id"] == _rid for r in _rl))
+        _r = await _client.patch(f"/api/reminders/{_rid}", headers=_H, json={"note": "yangi izoh"})
+        check("Full CRUD: eslatma PATCH (UI tahrir tugmasi)", _r.status == 200
+              and (await database.get_reminder(_rid))["note"] == "yangi izoh")
+        check("Full CRUD: eslatma complete",
+              (await _client.post(f"/api/reminders/{_rid}/complete", headers=_H)).status == 200)
+        # /api/meta dropdown data
+        _mt = await (await _client.get("/api/meta", headers=_H)).json()
+        check("Full CRUD: /api/meta (kategoriya+kontakt+ustuvorlik)",
+              "categories" in _mt and "contacts" in _mt and "priorities" in _mt)
     finally:
         await _client.close()
 
