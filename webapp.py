@@ -72,6 +72,20 @@ def validate_init_data(init_data: str, bot_token: str,
 
 
 @web.middleware
+async def error_middleware(request: web.Request, handler):
+    """Outermost safety net: an unexpected exception in any handler becomes a clean
+    JSON 500 (logged server-side) instead of a raw aiohttp crash page. HTTP responses
+    raised deliberately (400/401/403/404) pass through unchanged."""
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unhandled error in %s %s", request.method, request.path)
+        return web.json_response({"error": "server error"}, status=500)
+
+
+@web.middleware
 async def auth_middleware(request: web.Request, handler):
     """Gate every /api/* route behind a valid initData for the principal. Static
     files and the health check are public (they carry no data)."""
@@ -100,9 +114,60 @@ async def _json_body(request: web.Request) -> dict:
         return {}
 
 
+def _bad(msg: str) -> web.HTTPBadRequest:
+    return web.HTTPBadRequest(text=json.dumps({"error": msg}), content_type="application/json")
+
+
+# List-shaped columns the DB layer coerces itself (via _as_list / json.dumps).
+_LIST_FIELDS = frozenset({"tags", "participants"})
+# Per-field length caps — reject over-long strings so one request can't write a
+# multi-MB row (no rate limit; a buggy/compromised client could otherwise bloat the DB).
+_MAX_LEN = {"title": 512, "description": 8000, "content": 20000, "note": 4000,
+            "agenda": 16000, "prep_notes": 8000, "location_or_link": 1024,
+            "assignee": 256, "category": 128, "priority": 8, "status": 20,
+            "recurrence_rule": 32, "deadline": 64, "datetime_start": 64,
+            "datetime_end": 64, "remind_at": 64, "task_id": 64, "parent_id": 64}
+
+
 def _pick(data: dict, fields: tuple[str, ...]) -> dict:
-    """Whitelist incoming fields — never pass arbitrary client keys to the DB."""
-    return {k: data[k] for k in fields if k in data}
+    """Whitelist incoming fields (never pass arbitrary client keys to the DB) AND
+    validate value shape: a non-scalar value for a scalar column, or an over-long
+    string, is rejected with 400 instead of blowing up as a raw sqlite 500."""
+    out = {}
+    for k in fields:
+        if k not in data:
+            continue
+        v = data[k]
+        if k in _LIST_FIELDS:
+            out[k] = v            # DB coerces list/str → JSON list
+            continue
+        if isinstance(v, (dict, list)):
+            raise _bad(f"'{k}' noto'g'ri turdagi qiymat")
+        if isinstance(v, str) and len(v) > _MAX_LEN.get(k, 100000):
+            raise _bad(f"'{k}' juda uzun (max {_MAX_LEN.get(k)})")
+        out[k] = v
+    return out
+
+
+async def _reject_bad_parent(pid: str, self_id: str | None) -> None:
+    """Guard parent_id on tasks: must exist, not be itself, and not create a cycle
+    (a cycle makes delete_task cascade over the loop and silently drop an unrelated
+    task). Raises 400 on any violation. No-op for a blank parent_id."""
+    pid = (pid or "").strip()
+    if not pid:
+        return
+    if pid == self_id:
+        raise _bad("vazifa o'ziga ota bo'la olmaydi")
+    hops = 0
+    cur = pid
+    while cur and hops < 64:
+        node = await database.get_task(cur)
+        if not node:
+            raise _bad("ota vazifa topilmadi")
+        if self_id and node.get("parent_id") == self_id:
+            raise _bad("halqa (cycle) hosil bo'ladi")
+        cur = node.get("parent_id")
+        hops += 1
 
 
 _TASK_FIELDS = ("title", "description", "deadline", "priority", "status",
@@ -131,6 +196,7 @@ async def task_create(request: web.Request) -> web.Response:
     data = _pick(await _json_body(request), _TASK_FIELDS)
     if not (data.get("title") or "").strip():
         return web.json_response({"error": "title required"}, status=400)
+    await _reject_bad_parent(data.get("parent_id"), None)
     data["source"] = "webapp"  # trusted origin → may introduce assignee/category
     tid = await database.create_task(data)
     return web.json_response({"id": tid, "task": await database.get_task(tid)}, status=201)
@@ -139,6 +205,7 @@ async def task_create(request: web.Request) -> web.Response:
 async def task_update(request: web.Request) -> web.Response:
     tid = request.match_info["id"]
     data = _pick(await _json_body(request), _TASK_FIELDS)
+    await _reject_bad_parent(data.get("parent_id"), tid)
     data["source"] = "webapp"
     ok = await database.update_task(tid, data)
     if not ok:
@@ -276,7 +343,7 @@ async def health(request: web.Request) -> web.Response:
 # ───────────────────────── app factory / runner ─────────────────────────
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application(middlewares=[error_middleware, auth_middleware])
     app.add_routes([
         web.get("/api/health", health),
         web.get("/api/meta", meta),

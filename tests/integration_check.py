@@ -1636,6 +1636,33 @@ async def main():
         check("MiniApp: /api/health authsiz ochiq", _r.status == 200)
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "   "})
         check("MiniApp: bo'sh sarlavha → 400", _r.status == 400)
+        # ── Security-hardening regressions (audit: 4 LOW) ──
+        # S1: non-scalar value for a scalar field → clean 400, NOT a raw 500
+        _r = await _client.post("/api/tasks", headers=_H, json={"title": "x", "priority": {"a": 1}})
+        check("S1: dict qiymatli maydon → 400 (500 emas)", _r.status == 400)
+        # S1b: server survived the bad request (next request still works)
+        _r = await _client.get("/api/tasks", headers=_H)
+        check("S1: buzuq so'rovdan keyin server tirik", _r.status == 200)
+        # S4: over-long text field → 400 (no multi-MB rows)
+        _r = await _client.post("/api/tasks", headers=_H, json={"title": "T" * 5000})
+        check("S4: juda uzun sarlavha → 400", _r.status == 400)
+        # S2: parent_id guards — dangling / self / cycle all rejected
+        _pt = (await (await _client.post("/api/tasks", headers=_H,
+               json={"title": "Ota"})).json())["id"]
+        _r = await _client.post("/api/tasks", headers=_H,
+               json={"title": "Bola", "parent_id": "t-YOQ"})
+        check("S2: mavjud bo'lmagan parent_id → 400", _r.status == 400)
+        _r = await _client.patch(f"/api/tasks/{_pt}", headers=_H, json={"parent_id": _pt})
+        check("S2: o'ziga ota (self-parent) → 400", _r.status == 400)
+        _c1 = (await (await _client.post("/api/tasks", headers=_H,
+               json={"title": "C1"})).json())["id"]
+        _c2 = (await (await _client.post("/api/tasks", headers=_H,
+               json={"title": "C2", "parent_id": _c1})).json())["id"]
+        _r = await _client.patch(f"/api/tasks/{_c1}", headers=_H, json={"parent_id": _c2})
+        check("S2: halqa (cycle) → 400", _r.status == 400)
+        # valid parent still works
+        _r = await _client.post("/api/tasks", headers=_H, json={"title": "OK sub", "parent_id": _pt})
+        check("S2: to'g'ri parent_id → 201", _r.status == 201)
     finally:
         await _client.close()
 
