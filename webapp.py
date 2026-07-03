@@ -96,10 +96,15 @@ async def auth_middleware(request: web.Request, handler):
     init_data = header[4:].strip() if header.lower().startswith("tma ") else ""
     user = validate_init_data(init_data, config.TELEGRAM_BOT_TOKEN)
     if not user:
+        logger.info("webapp AUTH-FAIL %s (Authorization len=%d, initData len=%d)",
+                    path, len(header), len(init_data))
         return web.json_response({"error": "unauthorized"}, status=401)
     if int(user.get("id", 0)) != int(config.PRINCIPAL_USER_ID):
         # A validly-signed initData from a DIFFERENT Telegram user — not the owner.
+        logger.info("webapp FORBIDDEN %s uid=%s (principal=%s)",
+                    path, user.get("id"), config.PRINCIPAL_USER_ID)
         return web.json_response({"error": "forbidden"}, status=403)
+    logger.info("webapp OK %s uid=%s", path, user.get("id"))
     request["user"] = user
     return await handler(request)
 
@@ -394,9 +399,13 @@ def create_app() -> web.Application:
         web.patch("/api/reminders/{id}", reminder_update),
         web.post("/api/reminders/{id}/complete", reminder_complete),
     ])
-    # Static frontend (served last so /api wins). index.html at "/".
+    # Static frontend (served last so /api wins). index.html at "/", with no-store so
+    # Telegram never serves a stale cached build after a redeploy.
     if _STATIC_DIR.is_dir():
-        app.router.add_get("/", lambda r: web.FileResponse(_STATIC_DIR / "index.html"))
+        async def _index(request):
+            return web.FileResponse(_STATIC_DIR / "index.html",
+                                    headers={"Cache-Control": "no-store, must-revalidate"})
+        app.router.add_get("/", _index)
         app.router.add_static("/", _STATIC_DIR, show_index=False)
     return app
 
