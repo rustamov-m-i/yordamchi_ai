@@ -336,6 +336,11 @@ async def meeting_complete(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok}, status=(200 if ok else 404))
 
 
+async def meeting_uncomplete(request: web.Request) -> web.Response:
+    ok = await database.uncomplete_meeting(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
 # ───────────────────────── notes ─────────────────────────
 
 async def notes_list(request: web.Request) -> web.Response:
@@ -500,6 +505,7 @@ def create_app() -> web.Application:
         web.patch("/api/meetings/{id}", meeting_update),
         web.post("/api/meetings/{id}/cancel", meeting_cancel),
         web.post("/api/meetings/{id}/complete", meeting_complete),
+        web.post("/api/meetings/{id}/uncomplete", meeting_uncomplete),
         web.get("/api/notes", notes_list),
         web.post("/api/notes", note_create),
         web.patch("/api/notes/{id}", note_update),

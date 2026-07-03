@@ -1740,9 +1740,15 @@ async def main():
         _r = await _client.patch(f"/api/meetings/{_mid}", headers=_H, json={"location_or_link": "Ofis 3-qavat"})
         check("Full CRUD: uchrashuv PATCH", _r.status == 200
               and (await database.get_meeting(_mid))["location_or_link"] == "Ofis 3-qavat")
-        check("Full CRUD: uchrashuv complete + cancel",
+        check("Full CRUD: uchrashuv complete → completed_at",
               (await _client.post(f"/api/meetings/{_mid}/complete", headers=_H)).status == 200
-              and (await _client.post(f"/api/meetings/{_mid}/cancel", headers=_H)).status == 200)
+              and (await database.get_meeting(_mid)).get("completed_at"))
+        check("Full CRUD: uchrashuv uncomplete (qayta ochish) → completed_at tozalanadi",
+              (await _client.post(f"/api/meetings/{_mid}/uncomplete", headers=_H)).status == 200
+              and not (await database.get_meeting(_mid)).get("completed_at"))
+        check("Full CRUD: uchrashuv cancel → o'chadi",
+              (await _client.post(f"/api/meetings/{_mid}/cancel", headers=_H)).status == 200
+              and (await database.get_meeting(_mid)) is None)
         # Notes
         _nid = (await (await _client.post("/api/notes", headers=_H, json={
             "title": "Web qayd", "content": "Mini app orqali qayd"})).json())["id"]

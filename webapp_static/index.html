@@ -224,10 +224,11 @@ function _mcard(m,dim){const t=new Date(m.datetime_start).getTime(),now=Date.now
   const badge=m.completed_at?'<span class="chip" style="background:#e7f6ee;color:#1e7d4f">Bo\'ldi</span> '
              :(t<now?'<span class="chip gray">O\'tgan</span> ':(_isToday(t)?'<span class="chip prog">Bugun</span> ':''));
   return `<div class="card" style="${dim?'opacity:.62':''}">
-    <div style="font-size:15px;font-weight:500">${badge}${esc(m.title)}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
-    ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}
-    <div class="rowbtns">${m.completed_at?'':`<button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>`}
+    <div onclick="openMeeting('${m.id}')" style="cursor:pointer">
+      <div style="font-size:15px;font-weight:500">${badge}${esc(m.title)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
+      ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}</div>
+    <div class="rowbtns">${m.completed_at?`<button class="btn" onclick="mReopen('${m.id}')">↩︎ Qayta ochish</button>`:`<button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>`}
       <button class="btn" onclick="openMeeting('${m.id}')"><i class="ti ti-edit"></i></button>
       <button class="btn dang" onclick="mCancel('${m.id}')">Bekor</button></div></div>`;}
 async function renderMeetings(box){
@@ -296,6 +297,7 @@ function go(v){switchView(v)}
 async function act(fn,msg){try{await fn();flash(msg);render(VIEW)}catch(e){flash("⚠️ "+e.message)}}
 const taskDone=(id,e)=>{if(e)e.stopPropagation();act(()=>api(`/tasks/${id}/complete`,{method:"POST"}),"Bajarildi")};
 const mDone=id=>act(()=>api(`/meetings/${id}/complete`,{method:"POST"}),"Belgilandi");
+const mReopen=id=>act(()=>api(`/meetings/${id}/uncomplete`,{method:"POST"}),"Qayta ochildi");
 const mCancel=id=>act(()=>api(`/meetings/${id}/cancel`,{method:"POST"}),"Bekor qilindi");
 const rDone=id=>act(()=>api(`/reminders/${id}/complete`,{method:"POST"}),"Bajarildi");
 function del(path,v){const run=()=>act(()=>api(path,{method:"DELETE"}),"O'chirildi");
