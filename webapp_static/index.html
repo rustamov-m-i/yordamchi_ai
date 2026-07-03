@@ -125,6 +125,13 @@ const PRIO={P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
 const PCLS={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
 const PCOL={P0:"var(--red)",P1:"var(--amber)",P2:"var(--brand)",P3:"#b7b7c8"};
 
+// Surface ANY uncaught error/rejection on-screen (Telegram has no visible console).
+function _fatal(m){let b=document.getElementById("fatal");if(!b){b=document.createElement("div");
+  b.id="fatal";b.style.cssText="position:fixed;left:8px;right:8px;top:8px;z-index:999;background:#d64545;color:#fff;padding:10px 12px;border-radius:10px;font-size:12px;white-space:pre-wrap;box-shadow:0 3px 12px rgba(0,0,0,.3)";
+  b.onclick=()=>b.remove();document.body.appendChild(b)}b.textContent="⚠️ "+m}
+window.addEventListener("error",e=>_fatal((e.message||"error")+" @ "+(e.filename||"").split("/").pop()+":"+e.lineno));
+window.addEventListener("unhandledrejection",e=>_fatal("promise: "+((e.reason&&e.reason.message)||String(e.reason))));
+
 async function api(p,o={}){const r=await fetch("/api"+p,{...o,headers:{"Authorization":AUTH,"Content-Type":"application/json",...(o.headers||{})}});
   if(!r.ok){let e="Xato "+r.status;try{e=(await r.json()).error||e}catch{}throw new Error(e)}return r.status===204?{}:r.json()}
 function esc(s){return(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
@@ -145,7 +152,7 @@ function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.
 
 async function render(v){
   const box=el({dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile"}[v]);
-  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda…</div>';
+  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda… ·v2</div>';
   try{
     if(v==="dash")await renderDash(box);
     else if(v==="tasks")await renderTasks(box);
