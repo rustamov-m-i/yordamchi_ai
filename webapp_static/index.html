@@ -48,9 +48,10 @@
   .chip.red{background:#fbe6e6;color:var(--red)}.chip.amber{background:#fdf1dd;color:#9a6800}
   .chip.gray{background:#f0f0f5;color:var(--muted)}
   .chip.prog{background:#e7f0ff;color:#1e5aa8}.chip.block{background:#fdeceb;color:#c0392b}
-  .trow.sub{margin-left:24px;position:relative}
-  .trow.sub::before{content:"";position:absolute;left:-14px;top:-6px;height:calc(50% + 6px);width:10px;
-    border-left:1.5px solid #d5d5e2;border-bottom:1.5px solid #d5d5e2;border-radius:0 0 0 6px}
+  .trow.sub{margin-bottom:6px}
+  .subgrp{margin:3px 0 9px 10px;border-left:2px solid #cfcbe8;padding-left:8px}
+  .subgrp .trow:last-child{margin-bottom:0}
+  .cnt{font-size:10px;color:#8a8a9e;background:#f0eff7;padding:1px 7px;border-radius:20px;margin-left:6px}
   .rowbtns{display:flex;gap:7px;margin-top:10px}
   .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:#f2f1f8;color:var(--text)}
   .btn.pri{background:var(--brand);color:#fff}
@@ -184,15 +185,16 @@ async function renderDash(box){
     <div class="qcard" onclick="go('insights')"><i class="ti ti-chart-bar"></i><div>Tahlil</div></div></div>`;
   box.innerHTML=h;
 }
-function taskRow(t,sub){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
+function taskRow(t,sub,nsub){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
   const sc=t.status==="in_progress"?'<span class="chip prog">Jarayonda</span> '
           :t.status==="blocked"?'<span class="chip block">Bloklangan</span> '
           :t.status==="cancelled"?'<span class="chip gray">Bekor</span> ':'';
   const meta=(t.category||"")+(t.assignee?(t.category?" · ":"")+t.assignee:"");
+  const cnt=nsub?`<span class="cnt"><i class="ti ti-subtask" style="font-size:11px;vertical-align:-1px"></i> ${nsub}</span>`:'';
   return `<div class="trow ${done?'done':''} ${sub?'sub':''}" style="border-left-color:${col}">
     <div class="cbox ${done?'done':''}" onclick="taskDone('${t.id}',event)">${done?'<i class="ti ti-check"></i>':''}</div>
     <div class="t" onclick="openTask('${t.id}')">
-      <div class="ti-title">${esc(t.title)}</div>
+      <div class="ti-title">${esc(t.title)}${cnt}</div>
       <div class="ti-sub">${sc}${esc(meta)}</div></div>
     <div class="side">${t.deadline?fmt(t.deadline):""}</div></div>`}
 
@@ -210,9 +212,14 @@ async function renderTasks(box){
   list.filter(t=>t.parent_id).forEach(s=>{(subs[s.parent_id]=subs[s.parent_id]||[]).push(s);});
   Object.values(subs).forEach(a=>a.sort(_byPrioDl));
   let rows="";
-  parents.forEach(p=>{rows+=taskRow(p);(subs[p.id]||[]).forEach(s=>{rows+=taskRow(s,true);});delete subs[p.id];});
+  parents.forEach(p=>{
+    const kids=subs[p.id]||[];
+    rows+=taskRow(p,false,kids.length);
+    if(kids.length)rows+='<div class="subgrp">'+kids.map(s=>taskRow(s,true)).join("")+'</div>';
+    delete subs[p.id];
+  });
   const orphans=Object.values(subs).flat().sort(_byPrioDl);
-  if(orphans.length){rows+='<div class="sec" style="margin-top:12px"><h2 style="font-size:13px;color:var(--faint)">Sub-vazifalar (ota boshqa ro\'yxatда)</h2></div>'+orphans.map(s=>taskRow(s,true)).join("");}
+  if(orphans.length){rows+='<div class="sec" style="margin-top:12px"><h2 style="font-size:13px;color:var(--faint)">Sub-vazifalar (ota boshqa ro\'yxatда)</h2></div><div class="subgrp">'+orphans.map(s=>taskRow(s,true)).join("")+'</div>';}
   const chip=(k,l)=>`<button class="btn ${TFILTER===k?'pri':''}" onclick="setTF('${k}')">${l}</button>`;
   box.innerHTML=hdr("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
     (list.length?rows:emptyBox("checklist","Vazifa yo'q"));
