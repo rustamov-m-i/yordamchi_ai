@@ -79,6 +79,65 @@ def validate_init_data(init_data: str, bot_token: str,
         return None
 
 
+def validate_login_widget(data: dict, bot_token: str, max_age: int = _MAX_INITDATA_AGE) -> dict | None:
+    """Verify Telegram Login Widget auth data (browser 'Log in with Telegram'). NOTE:
+    the secret differs from Mini App initData — here it's SHA256(bot_token) (a plain
+    digest), and the data-check-string is all fields except `hash`. Returns the data
+    dict on success, else None."""
+    if not isinstance(data, dict):
+        return None
+    received = data.get("hash")
+    if not received:
+        return None
+    pairs = {k: v for k, v in data.items() if k != "hash"}
+    dcs = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+    secret = hashlib.sha256(bot_token.encode()).digest()
+    expected = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, str(received)):
+        return None
+    try:
+        if max_age and time.time() - int(data.get("auth_date", 0)) > max_age:
+            return None
+    except (ValueError, TypeError):
+        return None
+    return data
+
+
+# ── Browser session (issued after a valid Login-Widget auth) ──
+SESSION_COOKIE = "ya_session"
+_SESSION_TTL = 30 * 24 * 60 * 60  # 30 days
+
+
+def _session_secret() -> bytes:
+    return hashlib.sha256(("ya-session:" + config.TELEGRAM_BOT_TOKEN).encode()).digest()
+
+
+def make_session(uid: int, ttl: int = _SESSION_TTL) -> str:
+    body = f"{uid}.{int(time.time()) + ttl}"
+    sig = hmac.new(_session_secret(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def check_session(token: str | None) -> int | None:
+    """Return the uid from a valid, unexpired session token, else None."""
+    if not token:
+        return None
+    try:
+        uid_s, exp_s, sig = token.rsplit(".", 2)
+        body = f"{uid_s}.{exp_s}"
+    except ValueError:
+        return None
+    if not hmac.compare_digest(
+            hmac.new(_session_secret(), body.encode(), hashlib.sha256).hexdigest(), sig):
+        return None
+    try:
+        if time.time() > int(exp_s):
+            return None
+        return int(uid_s)
+    except ValueError:
+        return None
+
+
 @web.middleware
 async def error_middleware(request: web.Request, handler):
     """Outermost safety net: an unexpected exception in any handler becomes a clean
@@ -98,22 +157,24 @@ async def auth_middleware(request: web.Request, handler):
     """Gate every /api/* route behind a valid initData for the principal. Static
     files and the health check are public (they carry no data)."""
     path = request.path
-    if not path.startswith("/api/") or path == "/api/health":
+    # Public: health, the login endpoint itself, and the bot-username config (widget needs it).
+    if not path.startswith("/api/") or path in ("/api/health", "/api/auth/telegram", "/api/config"):
         return await handler(request)
+    # 1) Telegram Mini App initData (opened INSIDE Telegram).
     header = request.headers.get("Authorization", "")
     init_data = header[4:].strip() if header.lower().startswith("tma ") else ""
     user = validate_init_data(init_data, config.TELEGRAM_BOT_TOKEN)
-    if not user:
-        logger.info("webapp AUTH-FAIL %s (Authorization len=%d, initData len=%d)",
-                    path, len(header), len(init_data))
+    uid = int(user["id"]) if (user and user.get("id") is not None) else None
+    # 2) Browser session cookie (issued after a Login-Widget sign-in).
+    if uid is None:
+        uid = check_session(request.cookies.get(SESSION_COOKIE))
+    if uid is None:
+        logger.info("webapp AUTH-FAIL %s", path)
         return web.json_response({"error": "unauthorized"}, status=401)
-    if int(user.get("id", 0)) != int(config.PRINCIPAL_USER_ID):
-        # A validly-signed initData from a DIFFERENT Telegram user — not the owner.
-        logger.info("webapp FORBIDDEN %s uid=%s (principal=%s)",
-                    path, user.get("id"), config.PRINCIPAL_USER_ID)
+    if uid != int(config.PRINCIPAL_USER_ID):
+        logger.info("webapp FORBIDDEN %s uid=%s (principal=%s)", path, uid, config.PRINCIPAL_USER_ID)
         return web.json_response({"error": "forbidden"}, status=403)
-    logger.debug("webapp OK %s uid=%s", path, user.get("id"))  # debug: don't flood logs/disk
-    request["user"] = user
+    request["uid"] = uid
     return await handler(request)
 
 
@@ -384,12 +445,48 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def app_config(request: web.Request) -> web.Response:
+    """Public: the bot username the Login Widget needs. Nothing sensitive."""
+    return web.json_response({"bot": getattr(config, "BOT_USERNAME", "")})
+
+
+async def auth_telegram(request: web.Request) -> web.Response:
+    """Browser 'Log in with Telegram': validate the widget payload, ensure it's the
+    principal, then set a signed HttpOnly session cookie."""
+    data = await _json_body(request)
+    u = validate_login_widget(data, config.TELEGRAM_BOT_TOKEN)
+    if not u:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    if int(u.get("id", 0)) != int(config.PRINCIPAL_USER_ID):
+        return web.json_response({"error": "forbidden"}, status=403)
+    resp = web.json_response({"ok": True, "name": u.get("first_name")})
+    resp.set_cookie(SESSION_COOKIE, make_session(int(u["id"])), max_age=_SESSION_TTL,
+                    httponly=True, secure=True, samesite="Strict", path="/")
+    return resp
+
+
+async def auth_logout(request: web.Request) -> web.Response:
+    resp = web.json_response({"ok": True})
+    resp.del_cookie(SESSION_COOKIE, path="/")
+    return resp
+
+
+async def me(request: web.Request) -> web.Response:
+    """Reached only when authed (via initData or session) — the browser uses a 401
+    here as the 'show login page' signal."""
+    return web.json_response({"ok": True, "uid": request.get("uid")})
+
+
 # ───────────────────────── app factory / runner ─────────────────────────
 
 def create_app() -> web.Application:
     app = web.Application(middlewares=[error_middleware, auth_middleware])
     app.add_routes([
         web.get("/api/health", health),
+        web.get("/api/config", app_config),
+        web.post("/api/auth/telegram", auth_telegram),
+        web.post("/api/auth/logout", auth_logout),
+        web.get("/api/me", me),
         web.get("/api/meta", meta),
         web.get("/api/dashboard", dashboard),
         web.get("/api/insights", insights),

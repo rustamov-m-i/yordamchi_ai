@@ -237,6 +237,7 @@ async def main() -> None:
             pass
 
     me = await bot.get_me()
+    config.BOT_USERNAME = me.username  # exposed to the Mini App for the Login Widget
     logger.info("Bot started: @%s (id=%s). Principal user_id=%s", me.username, me.id, config.PRINCIPAL_USER_ID)
     heartbeat.write_heartbeat()  # initial liveness signal for the supervised deployer (Phase 5)
 

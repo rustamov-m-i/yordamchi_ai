@@ -132,7 +132,7 @@ function _fatal(m){let b=document.getElementById("fatal");if(!b){b=document.crea
 window.addEventListener("error",e=>_fatal((e.message||"error")+" @ "+(e.filename||"").split("/").pop()+":"+e.lineno));
 window.addEventListener("unhandledrejection",e=>_fatal("promise: "+((e.reason&&e.reason.message)||String(e.reason))));
 
-async function api(p,o={}){const r=await fetch("/api"+p,{...o,headers:{"Authorization":AUTH,"Content-Type":"application/json",...(o.headers||{})}});
+async function api(p,o={}){const r=await fetch("/api"+p,{credentials:"same-origin",...o,headers:{"Authorization":AUTH,"Content-Type":"application/json",...(o.headers||{})}});
   if(!r.ok){let e="Xato "+r.status;try{e=(await r.json()).error||e}catch{}throw new Error(e)}return r.status===204?{}:r.json()}
 function esc(s){return(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
 function flash(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1700)}
@@ -320,7 +320,35 @@ async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
-(async()=>{try{META=await api("/meta")}catch(e){}render("dash")})();
+// ── Browser login (Telegram Login Widget). In-app (Telegram) skips this. ──
+window.onTGAuth=async(user)=>{
+  try{await api("/auth/telegram",{method:"POST",body:JSON.stringify(user)});location.reload();}
+  catch(e){_fatal("Kirish rad etildi: "+e.message);}
+};
+async function showLogin(){
+  let bot="";try{bot=(await (await fetch("/api/config")).json()).bot;}catch(e){}
+  document.querySelector("nav").style.display="none";$("fab").style.display="none";
+  const w=document.createElement("div");
+  w.style.cssText="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;background:var(--bg);z-index:50";
+  w.innerHTML='<div style="width:64px;height:64px;border-radius:20px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:30px"><i class="ti ti-checkbox"></i></div><div style="font-size:22px;font-weight:600;color:#15152b">Yordamchi Pro</div><div style="font-size:14px;color:#6b6b85;max-width:260px">Davom etish uchun Telegram akkauntingiz bilan kiring</div><div id="tgwidget" style="min-height:48px"></div>';
+  document.body.appendChild(w);
+  if(!bot){document.getElementById("tgwidget").innerHTML='<div style="color:var(--red);font-size:13px">Bot sozlanmagan (BOT_USERNAME)</div>';return;}
+  const s=document.createElement("script");s.async=true;s.src="https://telegram.org/js/telegram-widget.js?22";
+  s.setAttribute("data-telegram-login",bot);s.setAttribute("data-size","large");
+  s.setAttribute("data-userpic","false");s.setAttribute("data-request-access","write");
+  s.setAttribute("data-onauth","onTGAuth(user)");
+  document.getElementById("tgwidget").appendChild(s);
+}
+(async()=>{
+  // Not inside Telegram (no initData) → require a browser session; 401 → login page.
+  if(!(tg&&tg.initData)){
+    try{await api("/me");}catch(e){return showLogin();}
+  }
+  try{META=await api("/meta")}catch(e){}
+  render("dash");
+})();
+</script>
+</body>
 </script>
 </body>
 </html>

@@ -1623,6 +1623,21 @@ async def main():
         return _ue(pairs)
     check("MiniApp: signature-li initData (Telegram real) qabul qilinadi",
           (_wa.validate_init_data(_mk_init_sig(_pid, _tok), _tok) or {}).get("id") == _pid)
+    # ── Browser Login Widget + session (secret = SHA256(token), farqли algoritm) ──
+    def _widget(uid, token, age=None):
+        d = {"id": uid, "first_name": "QA", "auth_date": age if age is not None else int(_tm.time())}
+        dcs = "\n".join(f"{k}={d[k]}" for k in sorted(d))
+        d["hash"] = _hm.new(_hl.sha256(token.encode()).digest(), dcs.encode(), _hl.sha256).hexdigest()
+        return d
+    check("Login Widget: to'g'ri → user",
+          (_wa.validate_login_widget(_widget(_pid, _tok), _tok) or {}).get("id") == _pid)
+    _wbad = _widget(_pid, _tok); _wbad["hash"] = "00" + _wbad["hash"][2:]
+    check("Login Widget: buzilgan hash → None", _wa.validate_login_widget(_wbad, _tok) is None)
+    check("Login Widget: eskirgan → None", _wa.validate_login_widget(_widget(_pid, _tok, age=1), _tok) is None)
+    _sess = _wa.make_session(_pid)
+    check("Sessiya: round-trip", _wa.check_session(_sess) == _pid)
+    check("Sessiya: buzilgan → None", _wa.check_session(_sess[:-4] + "0000") is None)
+    check("Sessiya: eskirgan → None", _wa.check_session(_wa.make_session(_pid, ttl=-10)) is None)
 
     # End-to-end via aiohttp test client: auth gate + a real create round-trip.
     from aiohttp.test_utils import TestClient, TestServer
@@ -1647,6 +1662,21 @@ async def main():
               and (await database.get_task(_body["id"]))["status"] == "done")
         _r = await _client.get("/api/health")
         check("MiniApp: /api/health authsiz ochiq", _r.status == 200)
+        # Browser login flow: /api/config public, login sets session, cookie grants access
+        check("MiniApp: /api/config authsiz ochiq", (await _client.get("/api/config")).status == 200)
+        _lr = await _client.post("/api/auth/telegram", json=_widget(_pid, _tok))
+        check("Login Widget: POST → 200 + sessiya cookie",
+              _lr.status == 200 and "ya_session=" in _lr.headers.get("Set-Cookie", ""))
+        check("Login Widget: begona user → 403",
+              (await _client.post("/api/auth/telegram", json=_widget(999999, _tok))).status == 403)
+        check("Login Widget: buzuq → 401",
+              (await _client.post("/api/auth/telegram", json=_wbad)).status == 401)
+        _ck = {"Cookie": f"ya_session={_wa.make_session(_pid)}"}
+        check("Sessiya cookie → /api/tasks 200", (await _client.get("/api/tasks", headers=_ck)).status == 200)
+        check("Sessiya cookie → /api/me 200", (await _client.get("/api/me", headers=_ck)).status == 200)
+        check("/api/me authsiz → 401", (await _client.get("/api/me")).status == 401)
+        check("Begona sessiya → 403",
+              (await _client.get("/api/tasks", headers={"Cookie": f"ya_session={_wa.make_session(999999)}"})).status == 403)
         _r = await _client.get("/api/dashboard", headers=_H)
         _dj = await _r.json()
         check("MiniApp: /api/dashboard → progress+counts+today",

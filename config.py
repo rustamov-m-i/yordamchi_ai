@@ -88,6 +88,9 @@ WEBAPP_PORT: int = _int("WEBAPP_PORT", required=False, default=8081)
 WEBAPP_URL: str = os.getenv("WEBAPP_URL", "").strip()
 # Bind host — keep 127.0.0.1 so only the local nginx reverse proxy can reach it.
 WEBAPP_HOST: str = os.getenv("WEBAPP_HOST", "127.0.0.1").strip()
+# Bot @username — set at startup from get_me(); the browser Login Widget needs it.
+# Overridable via env for the web layer when the bot process isn't the one serving.
+BOT_USERNAME: str = os.getenv("WEBAPP_BOT_USERNAME", "").strip()
 
 # Data retention — banking-compliance friendly defaults. Override per
 # deployment if your jurisdiction requires longer/shorter windows.
