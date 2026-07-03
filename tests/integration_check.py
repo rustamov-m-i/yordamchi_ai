@@ -1727,6 +1727,11 @@ async def main():
               and (await database.get_reminder(_rid))["note"] == "yangi izoh")
         check("Full CRUD: eslatma complete",
               (await _client.post(f"/api/reminders/{_rid}/complete", headers=_H)).status == 200)
+        _rid_d = (await (await _client.post("/api/reminders", headers=_H, json={
+            "title": "O'chiriladi", "remind_at": (datetime.now(TZ)+timedelta(hours=1)).isoformat()})).json())["id"]
+        check("Full CRUD: eslatma DELETE (UI 🗑 tugmasi)",
+              (await _client.delete(f"/api/reminders/{_rid_d}", headers=_H)).status == 200
+              and (await database.get_reminder(_rid_d)) is None)
         # /api/meta dropdown data
         _mt = await (await _client.get("/api/meta", headers=_H)).json()
         check("Full CRUD: /api/meta (kategoriya+kontakt+ustuvorlik)",

@@ -335,6 +335,11 @@ async def reminder_complete(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok}, status=(200 if ok else 404))
 
 
+async def reminder_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_reminder(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
 # ───────────────────────── meta + health ─────────────────────────
 
 async def dashboard(request: web.Request) -> web.Response:
@@ -406,6 +411,7 @@ def create_app() -> web.Application:
         web.post("/api/reminders", reminder_create),
         web.patch("/api/reminders/{id}", reminder_update),
         web.post("/api/reminders/{id}/complete", reminder_complete),
+        web.delete("/api/reminders/{id}", reminder_delete),
     ])
     # Static frontend (served last so /api wins). index.html at "/", with no-store so
     # Telegram never serves a stale cached build after a redeploy.

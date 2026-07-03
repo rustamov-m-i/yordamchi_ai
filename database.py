@@ -1634,6 +1634,14 @@ async def cancel_reminder(reminder_id: str) -> bool:
     return await update_reminder(reminder_id, {"status": "cancelled"})
 
 
+async def delete_reminder(reminder_id: str) -> bool:
+    """Hard-delete a reminder (Mini App 🗑). Returns False if it didn't exist."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def complete_reminder(reminder_id: str) -> bool:
     return await update_reminder(reminder_id, {"status": "done"})
 
