@@ -926,6 +926,29 @@ async def main():
     check("L15: complete+delete poygasida o'lik otaga bog'liq zombi yo'q",
           (await database.get_task(_z2)) is None or not _z2kids or len(_z2kids) <= 1)
 
+    print("\n── Disk I/O incident: backup rotatsiyasi + xato xabari ──")
+    # D1: backup rotation caps local snapshots (undo backups can't fill the disk)
+    import pathlib as _pl, tempfile as _tf
+    _bdir = _pl.Path(_tf.mkdtemp()) / "backups"
+    _bdir.mkdir(parents=True)
+    _names = [_bdir / f"yordamchi-pre-delete-{_i:02d}.db" for _i in range(25)]
+    for _i, f in enumerate(_names):
+        f.write_text("x")
+        os.utime(f, (_i, _i))   # deterministic mtime ordering (newest = highest i)
+    handlers._rotate_backups(_bdir, keep=20)
+    _left = sorted(_bdir.glob("yordamchi-*.db"))
+    check("D1: backup rotatsiyasi eng so'nggi 20 tani saqlaydi", len(_left) == 20)
+    check("D1: eng eski backuplar o'chiriladi (yangilari qoladi)",
+          _names[24].exists() and _names[20].exists() and not _names[0].exists()
+          and not _names[4].exists())
+    # D2: a disk I/O error gets an actionable Uzbek message (not a raw SQLite string)
+    _e = handlers._humanize_error(Exception("disk I/O error"))
+    check("D2: 'disk I/O error' → disk to'lgani haqida amaliy xabar",
+          "disk" in _e.lower() and ("df -h" in _e or "to'lgan" in _e))
+    _e2 = handlers._humanize_error(Exception("database disk image is malformed"))
+    check("D2: 'malformed' → korruptsiya + integrity_check maslahati",
+          "integrity_check" in _e2 or "buzilgan" in _e2)
+
     print("\n── Kategoriya boshqaruvi (qo'shish/o'chirish) ──")
     _m1 = await database.create_task({"title": "M1", "priority": "P2", "status": "todo", "category": "TestKat"})
     _m2 = await database.create_task({"title": "M2", "priority": "P2", "status": "todo", "category": "TestKat"})

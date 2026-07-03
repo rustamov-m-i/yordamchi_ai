@@ -161,6 +161,42 @@ sudo systemctl status yordamchi
 sudo journalctl -u yordamchi -f  # real-time log
 ```
 
+### ⚠️ Log rotatsiyasi (MAJBURIY — aks holda disk to'ladi)
+
+`bot.log`/`bot.err.log` `append:` bilan CHEKSIZ o'sadi. Rotatsiyasiz ular
+30GB diskni to'ldirib, SQLite'да **"disk I/O error"** keltirib chiqaradi.
+
+```bash
+sudo tee /etc/logrotate.d/yordamchi > /dev/null <<'EOF'
+/home/yordamchi/yordamchi/bot.log /home/yordamchi/yordamchi/bot.err.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+```
+
+### Diskни kuzatish / "disk I/O error" tez tuzatish
+
+```bash
+df -h /                     # disk to'ldimi?
+df -i /                     # inode tugadimi?
+du -sh ~/yordamchi/bot.log ~/yordamchi/bot.err.log ~/yordamchi/data/backups
+# Joy bo'shatish:
+truncate -s 0 ~/yordamchi/bot.log ~/yordamchi/bot.err.log   # loglarni tozalash
+ls -t ~/yordamchi/data/backups/*.db | tail -n +21 | xargs -r rm   # eski backuplar
+# DB butunligi + stuck WAL:
+sudo systemctl stop yordamchi
+sqlite3 ~/yordamchi/data/yordamchi.db "PRAGMA integrity_check; PRAGMA wal_checkpoint(TRUNCATE);"
+sudo systemctl start yordamchi     # bot startда WALни o'zi tozalaydi (init self-heal)
+```
+
+OOM belgisi (`MemoryMax=512M` oshsa systemd o'ldiradi):
+`journalctl -u yordamchi | grep -i -E "oom|killed|memory"`.
+
 ---
 
 ## 8. iCloud va data zaxira (backup)

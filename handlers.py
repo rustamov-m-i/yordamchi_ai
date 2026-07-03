@@ -1620,6 +1620,17 @@ def _humanize_error(exc: BaseException | None) -> str:
                 "Qisqaroq so'rov bilan qayta urinib ko'ring.")
 
     # ── Database ──
+    # Disk I/O / "database or disk is full" almost always means the server disk (or
+    # inodes) filled up — give the principal an actionable hint, not a raw SQLite msg.
+    if ("disk i/o" in low or "disk is full" in low or "database or disk" in low
+            or "no space" in low or "ioerr" in low):
+        return ("🗄 Sabab: Serverда disk to'lgan ko'rinadi (disk I/O error). "
+                "Log/backup fayllarni tozalash yoki diskni kengaytirish kerak. "
+                "Server: `df -h` va `df -i` bilan tekshiring.")
+    if "malformed" in low or "not a database" in low or "corrupt" in low:
+        return ("🗄 Sabab: Ma'lumotlar bazasi fayli buzilgan bo'lishi mumkin "
+                "(odatda to'satdan to'xtashdan). Serverда: botni to'xtatib "
+                "`PRAGMA integrity_check;` bilan tekshiring, kerak bo'lsa backupdan tiklang.")
     if (name in ("OperationalError", "IntegrityError", "ProgrammingError", "DatabaseError")
             or "sqlite" in low or "database" in low):
         return f"🗄 Sabab: Ma'lumotlar bazasi xatosi — {msg[:120]}"
@@ -2586,6 +2597,7 @@ async def cmd_backup(message: Message) -> None:
         return
     finally:
         typing_task.cancel()
+    _rotate_backups(backup_dir)   # cap local snapshots so the disk can't fill
 
     kb_size = size / 1024
     ok_mark = "✅" if integrity == "ok" else f"⚠️ {integrity}"
@@ -11896,6 +11908,25 @@ async def cb_voice_cancel(query: CallbackQuery, state: FSMContext) -> None:
 _UNDO_BACKUPS: dict[str, str] = {}
 
 
+_BACKUP_KEEP = 20   # cap local snapshots so undo backups can't fill the disk over time
+
+
+def _rotate_backups(backup_dir: Path, keep: int = _BACKUP_KEEP) -> None:
+    """Keep only the newest `keep` snapshot files — auto undo-backups accumulate on
+    every bulk/category delete and, unrotated, silently fill a small VPS disk (a
+    'disk I/O error' cause). Never raises (best-effort cleanup)."""
+    try:
+        files = sorted(backup_dir.glob("yordamchi-*.db"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in files[keep:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except Exception:
+        logger.debug("Backup rotation skipped", exc_info=True)
+
+
 async def _create_db_backup(tag: str) -> str:
     """Consistent SQLite snapshot via the .backup API (safe while writing).
     Returns the backup file path under data/backups/."""
@@ -11910,6 +11941,7 @@ async def _create_db_backup(tag: str) -> str:
             src.backup(dst)
 
     await asyncio.to_thread(_do)
+    _rotate_backups(backup_dir)
     return path
 
 

@@ -318,6 +318,18 @@ async def init() -> None:
         # unbounded between manual checkpoints; without this it can balloon
         # to >1GB after weeks of writes.
         await db.execute("PRAGMA wal_autocheckpoint=1000")
+        # Startup self-heal: systemd restarts the bot after a crash/OOM-kill, which
+        # can leave a bloated or half-written WAL. Fully checkpoint + TRUNCATE it so a
+        # stuck WAL (a known "disk I/O error" trigger) is cleared on every boot, and
+        # log a fast integrity signal so corruption is visible in the logs early.
+        try:
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            cur = await db.execute("PRAGMA quick_check")
+            qc = (await cur.fetchone() or ["?"])[0]
+            if qc != "ok":
+                logger.error("DB quick_check on startup: %s", qc)
+        except Exception:
+            logger.exception("DB startup self-heal (wal_checkpoint/quick_check) failed")
         await db.executescript(SCHEMA)
 
         # Idempotent migrations for existing DBs (CREATE TABLE IF NOT EXISTS doesn't add columns)
