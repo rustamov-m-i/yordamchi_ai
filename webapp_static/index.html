@@ -135,13 +135,13 @@ window.addEventListener("unhandledrejection",e=>_fatal("promise: "+((e.reason&&e
 async function api(p,o={}){const r=await fetch("/api"+p,{...o,headers:{"Authorization":AUTH,"Content-Type":"application/json",...(o.headers||{})}});
   if(!r.ok){let e="Xato "+r.status;try{e=(await r.json()).error||e}catch{}throw new Error(e)}return r.status===204?{}:r.json()}
 function esc(s){return(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
-function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1700)}
+function flash(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1700)}
 function fmt(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return iso;return d.toLocaleString("uz",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
 function toLocal(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return"";const p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
 function fromLocal(v){return v?new Date(v).toISOString():null}
 const $=id=>document.getElementById(id);
 const el=id=>$("v-"+id);
-function head(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div>${icon?`<button class="icobtn"><i class="ti ti-${icon}"></i></button>`:""}</div>`}
+function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div>${icon?`<button class="icobtn"><i class="ti ti-${icon}"></i></button>`:""}</div>`}
 function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
 function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on"));
@@ -152,7 +152,7 @@ function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.
 
 async function render(v){
   const box=el({dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile"}[v]);
-  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda… ·v2</div>';
+  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda… ·v3</div>';
   try{
     if(v==="dash")await renderDash(box);
     else if(v==="tasks")await renderTasks(box);
@@ -161,7 +161,7 @@ async function render(v){
     else if(v==="reminders")await renderReminders(box);
     else if(v==="insights")await renderInsights(box);
     else if(v==="profile")await renderProfile(box);
-  }catch(e){box.innerHTML=head("Xatolik","")+emptyBox("alert-triangle",e.message)}
+  }catch(e){box.innerHTML=hdr("Xatolik","")+emptyBox("alert-triangle",e.message)}
 }
 
 async function renderDash(box){
@@ -193,7 +193,7 @@ async function renderTasks(box){
   list.forEach(x=>CACHE.tasks[x.id]=x);
   list.sort((a,b)=>(a.priority||"P2").localeCompare(b.priority||"P2"));
   const chip=(k,l)=>`<button class="btn ${TFILTER===k?'pri':''}" onclick="setTF('${k}')">${l}</button>`;
-  box.innerHTML=head("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
+  box.innerHTML=hdr("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
     (list.length?list.map(taskRow).join(""):emptyBox("checklist","Vazifa yo'q"));
 }
 function setTF(k){TFILTER=k;render("tasks")}
@@ -201,7 +201,7 @@ function setTF(k){TFILTER=k;render("tasks")}
 async function renderMeetings(box){
   const d=await api("/meetings");const list=d.meetings||[];
   list.forEach(x=>CACHE.meetings[x.id]=x);
-  box.innerHTML=head("Uchrashuvlar","")+(list.length?list.map(m=>`<div class="card">
+  box.innerHTML=hdr("Uchrashuvlar","")+(list.length?list.map(m=>`<div class="card">
     <div style="font-size:15px;font-weight:500">${esc(m.title)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
     ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}
@@ -212,7 +212,7 @@ async function renderMeetings(box){
 async function renderNotes(box){
   const d=await api("/notes");const list=d.notes||[];
   list.forEach(x=>CACHE.notes[x.id]=x);
-  box.innerHTML=head("Qaydlar","")+(list.length?list.map(n=>`<div class="card">
+  box.innerHTML=hdr("Qaydlar","")+(list.length?list.map(n=>`<div class="card">
     <div style="font-size:15px;font-weight:500">${esc(n.title||"Qayd")}</div>
     <div style="font-size:13px;color:var(--muted);margin-top:5px;line-height:1.5">${esc((n.content||"").slice(0,180))}</div>
     <div class="rowbtns"><button class="btn" onclick="openNote('${n.id}')"><i class="ti ti-edit"></i> Tahrir</button>
@@ -221,7 +221,7 @@ async function renderNotes(box){
 async function renderReminders(box){
   const d=await api("/reminders");const list=d.reminders||[];
   list.forEach(x=>CACHE.reminders[x.id]=x);
-  box.innerHTML=head("Eslatmalar","")+(list.length?list.map(r=>`<div class="card">
+  box.innerHTML=hdr("Eslatmalar","")+(list.length?list.map(r=>`<div class="card">
     <div style="font-size:15px;font-weight:500">${esc(r.title)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(r.remind_at)}${r.note?" · "+esc(r.note):""}</div>
     <div class="rowbtns"><button class="btn pri" onclick="rDone('${r.id}')"><i class="ti ti-check"></i></button>
@@ -238,7 +238,7 @@ async function renderInsights(box){
   let acc=0;const segs=cats.map((c,i)=>{const frac=c.count/total;const dash=`${(frac*100).toFixed(2)} ${100-frac*100}`;
     const off=25-acc*100;acc+=frac;return `<circle r="15.915" cx="18" cy="18" fill="none" stroke="${cols[i%cols.length]}" stroke-width="6" stroke-dasharray="${dash}" stroke-dashoffset="${off}"></circle>`}).join("");
   const legend=cats.map((c,i)=>`<div class="li"><span class="dot" style="background:${cols[i%cols.length]}"></span>${esc(c.name)} <span style="margin-left:auto;color:var(--faint)">${Math.round(c.count/total*100)}%</span></div>`).join("");
-  box.innerHTML=head("Tahlil","So'nggi 7 kun")+
+  box.innerHTML=hdr("Tahlil","So'nggi 7 kun")+
     `<div class="card"><div style="font-size:13px;color:var(--muted);margin-bottom:2px">Bajarilgan vazifalar</div>
       <div style="font-size:26px;font-weight:600;margin-bottom:12px">${days.reduce((s,x)=>s+x.count,0)}</div>
       <div class="bar">${bars}</div></div>
@@ -248,7 +248,7 @@ async function renderInsights(box){
 
 async function renderProfile(box){
   const d=await api("/dashboard").catch(()=>({counts:{}}));const c=d.counts||{};
-  box.innerHTML=head("Profil","")+
+  box.innerHTML=hdr("Profil","")+
     `<div class="hero" style="margin-bottom:16px"><div style="font-size:15px;opacity:.9;margin-bottom:8px">Umumiy ko'rinish</div>
       <div style="display:flex"><div style="flex:1"><div style="font-size:26px;font-weight:600">${c.total||0}</div><div style="font-size:12px;opacity:.85">Jami vazifa</div></div>
       <div style="flex:1"><div style="font-size:26px;font-weight:600">${c.done||0}</div><div style="font-size:12px;opacity:.85">Bajarilgan</div></div></div></div>
@@ -261,7 +261,7 @@ async function renderProfile(box){
 
 function go(v){switchView(v)}
 
-async function act(fn,msg){try{await fn();toast(msg);render(VIEW)}catch(e){toast("⚠️ "+e.message)}}
+async function act(fn,msg){try{await fn();flash(msg);render(VIEW)}catch(e){flash("⚠️ "+e.message)}}
 const taskDone=(id,e)=>{if(e)e.stopPropagation();act(()=>api(`/tasks/${id}/complete`,{method:"POST"}),"Bajarildi")};
 const mDone=id=>act(()=>api(`/meetings/${id}/complete`,{method:"POST"}),"Belgilandi");
 const mCancel=id=>act(()=>api(`/meetings/${id}/cancel`,{method:"POST"}),"Bekor qilindi");
@@ -287,7 +287,7 @@ const openTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{}
 function delTask(id){const run=()=>{closeM();act(()=>api(`/tasks/${id}`,{method:"DELETE"}),"O'chirildi")};
   if(tg?.showConfirm)tg.showConfirm("Vazifa o'chirilsinmi?",ok=>{if(ok)run()});else run()}
 async function saveTask(id){const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
-  if(!b.title)return toast("Sarlavha kerak");await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
+  if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uchrashuv"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(m.title)}">
@@ -298,7 +298,7 @@ function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uc
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
 const openMeeting=x=>openM(meetingForm(typeof x==="object"?(x||{}):(CACHE.meetings[x]||{})));
 async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
-  if(!b.title)return toast("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
+  if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(n.title)}">
@@ -306,7 +306,7 @@ function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveNote('${n.id||""}')">Saqlash</button></div>`}
 const openNote=x=>openM(noteForm(typeof x==="object"?(x||{}):(CACHE.notes[x]||{})));
 async function saveNote(id){const b={title:val("f_title"),content:val("f_content")};
-  if(!b.content)return toast("Matn kerak");await act(()=>api(id?`/notes/${id}`:"/notes",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
+  if(!b.content)return flash("Matn kerak");await act(()=>api(id?`/notes/${id}`:"/notes",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi eslatma"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(r.title)}">
@@ -315,7 +315,7 @@ function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi esl
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveReminder('${r.id||""}')">Saqlash</button></div>`}
 const openReminder=x=>openM(reminderForm(typeof x==="object"?(x||{}):(CACHE.reminders[x]||{})));
 async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note")};
-  if(!b.remind_at)return toast("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
+  if(!b.remind_at)return flash("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
