@@ -324,6 +324,32 @@ async def reminder_complete(request: web.Request) -> web.Response:
 
 # ───────────────────────── meta + health ─────────────────────────
 
+async def dashboard(request: web.Request) -> web.Response:
+    """Home-screen summary: this-week progress, headline counts, today's tasks."""
+    active = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=1000)
+    today = await database.list_today_tasks()
+    week = await database.completed_counts_by_day(7)
+    done_week = sum(d["count"] for d in week)
+    active_n = len(active)
+    total = active_n + done_week
+    progress = round(done_week / total * 100) if total else 0
+    return web.json_response({
+        "progress": progress,
+        "counts": {"total": total, "done": done_week, "pending": active_n},
+        "today": today,
+    })
+
+
+async def insights(request: web.Request) -> web.Response:
+    """Charts: completed-per-day (bar) + active tasks per category (donut)."""
+    by_day = await database.completed_counts_by_day(7)
+    cats = await database.list_task_categories()
+    return web.json_response({
+        "by_day": by_day,
+        "categories": [{"name": c["category"], "count": c["count"]} for c in cats],
+    })
+
+
 async def meta(request: web.Request) -> web.Response:
     """Dropdown data for forms: categories + contacts."""
     cats = await database.list_task_categories()
@@ -347,6 +373,8 @@ def create_app() -> web.Application:
     app.add_routes([
         web.get("/api/health", health),
         web.get("/api/meta", meta),
+        web.get("/api/dashboard", dashboard),
+        web.get("/api/insights", insights),
         web.get("/api/tasks", tasks_list),
         web.post("/api/tasks", task_create),
         web.patch("/api/tasks/{id}", task_update),

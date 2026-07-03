@@ -7,250 +7,302 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root{
-    --bg:var(--tg-theme-bg-color,#fff); --text:var(--tg-theme-text-color,#111);
-    --hint:var(--tg-theme-hint-color,#8a8a8e); --link:var(--tg-theme-link-color,#2E7D32);
-    --btn:var(--tg-theme-button-color,#2E7D32); --btn-text:var(--tg-theme-button-text-color,#fff);
-    --sec:var(--tg-theme-secondary-bg-color,#f2f2f7); --card:var(--tg-theme-bg-color,#fff);
-    --danger:#c0392b;
+    --brand:#6C5CE7; --brand-d:#5a4fd0; --brand-soft:#ECE9FB;
+    --bg:#F5F4FB; --card:#fff; --text:#15152b; --muted:#6b6b85; --faint:#9a9ab0;
+    --line:#eceaf5; --green:#1E9E75; --amber:#E8A317; --red:#d64545; --blue:#2f7ae5;
   }
-  *{box-sizing:border-box}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       background:var(--sec);color:var(--text);font-size:16px;padding-bottom:76px}
-  header{position:sticky;top:0;background:var(--bg);padding:12px 16px;font-weight:700;font-size:18px;
-         border-bottom:1px solid rgba(128,128,128,.15);z-index:5}
-  #list{padding:10px 12px}
-  .card{background:var(--card);border-radius:14px;padding:12px 14px;margin:8px 0;
-        box-shadow:0 1px 3px rgba(0,0,0,.06)}
-  .card h3{margin:0 0 4px;font-size:16px;font-weight:600;word-break:break-word}
-  .card .meta{color:var(--hint);font-size:13px;line-height:1.5}
-  .card.done h3{text-decoration:line-through;color:var(--hint)}
-  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-  .chip{font-size:12px;padding:2px 8px;border-radius:20px;background:var(--sec);color:var(--hint)}
-  .p0{color:#fff;background:#c0392b}.p1{color:#fff;background:#e67e22}
-  button{font-family:inherit;font-size:14px;border:none;border-radius:10px;padding:8px 12px;
-         background:var(--sec);color:var(--text);cursor:pointer}
-  button.primary{background:var(--btn);color:var(--btn-text)}
-  button.danger{background:transparent;color:var(--danger)}
-  button.small{padding:6px 10px;font-size:13px}
-  .empty{color:var(--hint);text-align:center;padding:40px 20px}
-  .fab{position:fixed;right:18px;bottom:80px;width:56px;height:56px;border-radius:50%;
-       background:var(--btn);color:var(--btn-text);font-size:30px;line-height:56px;text-align:center;
-       box-shadow:0 3px 10px rgba(0,0,0,.25);z-index:6}
-  nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--bg);
-      border-top:1px solid rgba(128,128,128,.15);z-index:7}
-  nav button{flex:1;background:none;border-radius:0;padding:10px 4px;color:var(--hint);font-size:12px}
-  nav button.active{color:var(--link);font-weight:700}
-  nav button .ic{display:block;font-size:20px;margin-bottom:2px}
-  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:20;
-            align-items:flex-end}
-  .modal-bg.show{display:flex}
-  .modal{background:var(--bg);width:100%;border-radius:16px 16px 0 0;padding:16px;max-height:90vh;overflow:auto}
-  .modal h2{margin:2px 0 14px;font-size:18px}
-  label{display:block;font-size:13px;color:var(--hint);margin:10px 0 4px}
-  input,textarea,select{width:100%;padding:10px 12px;font-size:16px;border-radius:10px;
-        border:1px solid rgba(128,128,128,.3);background:var(--bg);color:var(--text)}
+       background:var(--bg);color:var(--text);font-size:16px;padding-bottom:92px}
+  .screen{padding:14px 16px 0;display:none}
+  .screen.on{display:block}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+  .head h1{margin:0;font-size:20px;font-weight:600}
+  .head .sub{font-size:13px;color:var(--muted)}
+  .icobtn{width:38px;height:38px;border-radius:12px;background:var(--card);display:flex;
+          align-items:center;justify-content:center;color:var(--brand);font-size:19px;border:none}
+  .hero{background:var(--brand);border-radius:20px;padding:16px 18px;color:#fff;margin-bottom:16px}
+  .hero .top{display:flex;justify-content:space-between;align-items:center;font-size:13px;opacity:.9}
+  .hero .pct{font-size:38px;font-weight:600;margin:6px 0 2px}
+  .hero .stats{display:flex;margin-top:14px;background:rgba(255,255,255,.14);border-radius:14px;padding:10px 0}
+  .hero .stats div{flex:1;text-align:center}
+  .hero .stats div+div{border-left:1px solid rgba(255,255,255,.22)}
+  .hero .stats b{font-size:18px;font-weight:600;display:block}
+  .hero .stats span{font-size:11px;opacity:.85}
+  .sec{display:flex;justify-content:space-between;align-items:center;margin:6px 2px 10px}
+  .sec h2{margin:0;font-size:16px;font-weight:600}
+  .sec a{font-size:13px;color:var(--brand)}
+  .trow{display:flex;align-items:center;gap:11px;background:var(--card);border-left:3px solid var(--brand);
+        border-radius:13px;padding:12px 13px;margin-bottom:9px}
+  .cbox{width:22px;height:22px;border-radius:7px;border:2px solid #d9d9e6;flex:none;display:flex;
+        align-items:center;justify-content:center;color:#fff;font-size:14px;background:transparent}
+  .cbox.done{background:var(--green);border-color:var(--green)}
+  .trow .t{flex:1;min-width:0}
+  .trow .t .ti-title{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .trow .t .ti-sub{font-size:11px;color:var(--faint);margin-top:1px}
+  .trow.done .ti-title{text-decoration:line-through;color:var(--faint)}
+  .trow .side{font-size:11px;color:var(--muted);text-align:right;flex:none}
+  .card{background:var(--card);border-radius:16px;padding:14px 15px;margin-bottom:10px}
+  .chip{font-size:11px;padding:2px 9px;border-radius:20px;display:inline-block}
+  .chip.violet{background:var(--brand-soft);color:var(--brand-d)}
+  .chip.red{background:#fbe6e6;color:var(--red)}.chip.amber{background:#fdf1dd;color:#9a6800}
+  .chip.gray{background:#f0f0f5;color:var(--muted)}
+  .rowbtns{display:flex;gap:7px;margin-top:10px}
+  .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:#f2f1f8;color:var(--text)}
+  .btn.pri{background:var(--brand);color:#fff}
+  .btn.dang{background:transparent;color:var(--red)}
+  .empty{text-align:center;color:var(--faint);padding:48px 20px}
+  .empty i{font-size:40px;display:block;margin-bottom:10px;color:#d5d5e5}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .qcard{background:var(--card);border-radius:16px;padding:14px;text-align:center}
+  .qcard i{font-size:24px;color:var(--brand)}
+  .qcard div{font-size:13px;margin-top:6px;font-weight:500}
+  .fab{position:fixed;left:50%;transform:translateX(-50%);bottom:30px;width:52px;height:52px;
+       border-radius:50%;background:var(--brand);color:#fff;font-size:26px;display:flex;
+       align-items:center;justify-content:center;border:none;box-shadow:0 6px 16px rgba(108,92,231,.45);z-index:8}
+  nav{position:fixed;left:14px;right:14px;bottom:16px;height:58px;background:var(--card);
+      border-radius:20px;display:flex;align-items:center;box-shadow:0 6px 20px rgba(60,50,120,.13);z-index:7}
+  nav button{flex:1;background:none;border:none;color:#b7b7c8;font-size:21px;padding:0}
+  nav button.on{color:var(--brand)}
+  nav .gap{flex:1}
+  .mbg{position:fixed;inset:0;background:rgba(20,18,45,.5);display:none;z-index:20;align-items:flex-end}
+  .mbg.show{display:flex}
+  .modal{background:var(--card);width:100%;border-radius:20px 20px 0 0;padding:18px;max-height:92vh;overflow:auto}
+  .modal h3{margin:2px 0 14px;font-size:17px;font-weight:600}
+  label{display:block;font-size:12px;color:var(--faint);margin:11px 0 4px}
+  input,textarea,select{width:100%;padding:11px 13px;font-size:16px;border-radius:12px;
+    border:1.5px solid var(--line);background:var(--card);color:var(--text);font-family:inherit}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--brand)}
   textarea{min-height:70px;resize:vertical}
-  .modal .actions{display:flex;gap:10px;margin-top:16px}
-  .modal .actions button{flex:1;padding:12px}
-  .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#333;color:#fff;
-         padding:10px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;z-index:30}
-  .toast.show{opacity:.95}
+  .macts{display:flex;gap:10px;margin-top:18px}
+  .macts .btn{flex:1;padding:13px;font-size:15px;border-radius:13px}
+  .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#2a2740;color:#fff;
+    padding:10px 18px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none}
+  .toast.show{opacity:.96}
+  .bar{display:flex;align-items:flex-end;gap:8px;height:130px;padding:0 4px}
+  .bar .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;justify-content:flex-end}
+  .bar .col .b{width:70%;background:var(--brand);border-radius:6px 6px 0 0;min-height:3px}
+  .bar .col small{font-size:10px;color:var(--faint)}
+  .legend{display:flex;flex-direction:column;gap:8px;font-size:13px}
+  .legend .li{display:flex;align-items:center;gap:8px}
+  .legend .dot{width:10px;height:10px;border-radius:3px;flex:none}
+  .menu .mi{display:flex;align-items:center;gap:12px;padding:14px 2px;border-bottom:1px solid var(--line);font-size:15px}
+  .menu .mi i{color:var(--brand);font-size:20px}
+  .menu .mi .ch{margin-left:auto;color:var(--faint)}
 </style>
 </head>
 <body>
-<header id="title">Vazifalar</header>
-<div id="list"><div class="empty">Yuklanmoqda…</div></div>
-<div class="fab" id="fab">+</div>
 
+<div class="screen on" id="v-dash"></div>
+<div class="screen" id="v-tasks"></div>
+<div class="screen" id="v-meetings"></div>
+<div class="screen" id="v-notes"></div>
+<div class="screen" id="v-reminders"></div>
+<div class="screen" id="v-insights"></div>
+<div class="screen" id="v-profile"></div>
+
+<button class="fab" id="fab"><i class="ti ti-plus"></i></button>
 <nav>
-  <button data-tab="tasks" class="active"><span class="ic">✓</span>Vazifalar</button>
-  <button data-tab="meetings"><span class="ic">📅</span>Uchrashuv</button>
-  <button data-tab="notes"><span class="ic">📝</span>Qaydlar</button>
-  <button data-tab="reminders"><span class="ic">⏰</span>Eslatma</button>
+  <button data-v="dash" class="on"><i class="ti ti-home-2"></i></button>
+  <button data-v="tasks"><i class="ti ti-checkbox"></i></button>
+  <span class="gap"></span>
+  <button data-v="meetings"><i class="ti ti-calendar"></i></button>
+  <button data-v="profile"><i class="ti ti-user"></i></button>
 </nav>
 
-<div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+<div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
 
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
 <script>
-const tg = window.Telegram?.WebApp;
-if (tg){ tg.ready(); tg.expand(); }
-const AUTH = "tma " + (tg?.initData || "");
-let TAB = "tasks", META = {categories:[],contacts:[],priorities:["P0","P1","P2","P3"],
-  statuses:["todo","in_progress","blocked","done","cancelled"]};
+const tg=window.Telegram?.WebApp; if(tg){tg.ready();tg.expand();}
+const AUTH="tma "+(tg?.initData||"");
+let VIEW="dash", META={categories:[],contacts:[]};
+const PRIO={P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
+const PCLS={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
+const PCOL={P0:"var(--red)",P1:"var(--amber)",P2:"var(--brand)",P3:"#b7b7c8"};
 
-const TITLES = {tasks:"Vazifalar",meetings:"Uchrashuvlar",notes:"Qaydlar",reminders:"Eslatmalar"};
-const PRIO = {P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
-const STAT = {todo:"Rejada",in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor"};
+async function api(p,o={}){const r=await fetch("/api"+p,{...o,headers:{"Authorization":AUTH,"Content-Type":"application/json",...(o.headers||{})}});
+  if(!r.ok){let e="Xato "+r.status;try{e=(await r.json()).error||e}catch{}throw new Error(e)}return r.status===204?{}:r.json()}
+function esc(s){return(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1700)}
+function fmt(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return iso;return d.toLocaleString("uz",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
+function toLocal(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return"";const p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
+function fromLocal(v){return v?new Date(v).toISOString():null}
+const $=id=>document.getElementById(id);
+const el=id=>$("v-"+id);
+function head(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div>${icon?`<button class="icobtn"><i class="ti ti-${icon}"></i></button>`:""}</div>`}
+function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
-async function api(path, opts={}){
-  const r = await fetch("/api"+path, {...opts,
-    headers:{"Authorization":AUTH,"Content-Type":"application/json",...(opts.headers||{})}});
-  if(!r.ok){ let e="Xato "+r.status; try{e=(await r.json()).error||e}catch{}; throw new Error(e); }
-  return r.status===204 ? {} : r.json();
-}
-function toast(m){ const t=document.getElementById("toast"); t.textContent=m; t.classList.add("show");
-  setTimeout(()=>t.classList.remove("show"),1800); }
-function esc(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
-function fmtDate(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return iso;
-  return d.toLocaleString("uz",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}); }
-function forDatetimeLocal(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return "";
-  const p=n=>String(n).padStart(2,"0");
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
-function fromDatetimeLocal(v){ return v ? new Date(v).toISOString() : null; }
+function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on"));
+  const map={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile"};
+  el(map[v]).classList.add("on");
+  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v||(v==="notes"&&false)));
+  render(v);window.scrollTo(0,0);}
 
-// ───── list rendering ─────
-async function load(){
-  const list=document.getElementById("list");
-  list.innerHTML='<div class="empty">Yuklanmoqda…</div>';
-  document.getElementById("title").textContent=TITLES[TAB];
+async function render(v){
+  const box=el({dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile"}[v]);
+  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda…</div>';
   try{
-    if(TAB==="tasks") renderTasks((await api("/tasks?status=active")).tasks);
-    if(TAB==="meetings") renderMeetings((await api("/meetings")).meetings);
-    if(TAB==="notes") renderNotes((await api("/notes")).notes);
-    if(TAB==="reminders") renderReminders((await api("/reminders")).reminders);
-  }catch(e){ list.innerHTML=`<div class="empty">⚠️ ${esc(e.message)}</div>`; }
-}
-function wrap(items,html){ const l=document.getElementById("list");
-  l.innerHTML = items.length ? items.map(html).join("") : '<div class="empty">Hozircha bo\'sh</div>'; }
-
-function renderTasks(items){
-  items.sort((a,b)=>(a.priority||"P2").localeCompare(b.priority||"P2"));
-  wrap(items,t=>`<div class="card ${t.status==='done'?'done':''}">
-    <h3>${t.parent_id?'↳ ':''}${esc(t.title)}</h3>
-    <div class="meta">${t.assignee?('👤 '+esc(t.assignee)+' · '):''}${t.deadline?('⏳ '+fmtDate(t.deadline)+' · '):''}
-      <span class="chip ${t.priority==='P0'?'p0':t.priority==='P1'?'p1':''}">${PRIO[t.priority]||t.priority||''}</span>
-      ${t.category?(' <span class="chip">'+esc(t.category)+'</span>'):''}</div>
-    <div class="row">
-      <button class="small primary" onclick="taskDone('${t.id}')">✓ Bajarildi</button>
-      <button class="small" onclick='editTask(${JSON.stringify(t)})'>✏️</button>
-      <button class="small danger" onclick="del('/tasks/${t.id}')">🗑</button>
-    </div></div>`);
-}
-function renderMeetings(items){
-  wrap(items,m=>`<div class="card">
-    <h3>${esc(m.title)}</h3>
-    <div class="meta">📅 ${fmtDate(m.datetime_start)}${m.location_or_link?(' · 📍 '+esc(m.location_or_link)):''}
-      ${(m.participants&&m.participants.length)?('<br>👥 '+esc((m.participants||[]).join(", "))):''}</div>
-    <div class="row">
-      <button class="small primary" onclick="mDone('${m.id}')">✓ Bo'ldi</button>
-      <button class="small" onclick='editMeeting(${JSON.stringify(m)})'>✏️</button>
-      <button class="small danger" onclick="mCancel('${m.id}')">✕ Bekor</button>
-    </div></div>`);
-}
-function renderNotes(items){
-  wrap(items,n=>`<div class="card">
-    <h3>${esc(n.title||"Qayd")}</h3>
-    <div class="meta">${esc((n.content||"").slice(0,200))}</div>
-    <div class="row">
-      <button class="small" onclick='editNote(${JSON.stringify(n)})'>✏️</button>
-      <button class="small danger" onclick="del('/notes/${n.id}')">🗑</button>
-    </div></div>`);
-}
-function renderReminders(items){
-  wrap(items,r=>`<div class="card">
-    <h3>${esc(r.title)}</h3>
-    <div class="meta">⏰ ${fmtDate(r.remind_at)}${r.note?(' · '+esc(r.note)):''}</div>
-    <div class="row">
-      <button class="small primary" onclick="rDone('${r.id}')">✓</button>
-      <button class="small danger" onclick="del('/reminders/${r.id}')">🗑</button>
-    </div></div>`);
+    if(v==="dash")await renderDash(box);
+    else if(v==="tasks")await renderTasks(box);
+    else if(v==="meetings")await renderMeetings(box);
+    else if(v==="notes")await renderNotes(box);
+    else if(v==="reminders")await renderReminders(box);
+    else if(v==="insights")await renderInsights(box);
+    else if(v==="profile")await renderProfile(box);
+  }catch(e){box.innerHTML=head("Xatolik","")+emptyBox("alert-triangle",e.message)}
 }
 
-// ───── actions ─────
-async function act(fn,msg){ try{ await fn(); toast(msg); load(); }catch(e){ toast("⚠️ "+e.message); } }
-const taskDone=id=>act(()=>api(`/tasks/${id}/complete`,{method:"POST"}),"Bajarildi ✓");
-const mDone  =id=>act(()=>api(`/meetings/${id}/complete`,{method:"POST"}),"Belgilandi ✓");
+async function renderDash(box){
+  const d=await api("/dashboard");const c=d.counts||{};
+  let h=`<div class="head"><div><h1>Salom, Maqsud</h1><div class="sub">Bugungi rejangiz</div></div>
+    <button class="icobtn" onclick="go('reminders')"><i class="ti ti-bell"></i></button></div>
+    <div class="hero"><div class="top"><span>Bu haftalik progress</span><span class="chip" style="background:rgba(255,255,255,.2);color:#fff">7 kun</span></div>
+      <div class="pct">${d.progress||0}%</div><div style="font-size:13px;opacity:.9">${(d.progress||0)>=70?"Zo'r ketyapti!":"Davom eting"}</div>
+      <div class="stats"><div><b>${c.total||0}</b><span>Jami</span></div><div><b>${c.done||0}</b><span>Bajarildi</span></div><div><b>${c.pending||0}</b><span>Qoldi</span></div></div></div>
+    <div class="sec"><h2>Bugungi vazifalar</h2><a onclick="go('tasks')">Barchasi</a></div>`;
+  const t=d.today||[];
+  h+= t.length? t.map(taskRow).join("") : emptyBox("checklist","Bugunga vazifa yo'q");
+  h+=`<div class="sec" style="margin-top:16px"><h2>Tezkor</h2></div>
+    <div class="grid2"><div class="qcard" onclick="go('notes')"><i class="ti ti-note"></i><div>Qaydlar</div></div>
+    <div class="qcard" onclick="go('insights')"><i class="ti ti-chart-bar"></i><div>Tahlil</div></div></div>`;
+  box.innerHTML=h;
+}
+function taskRow(t){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
+  return `<div class="trow ${done?'done':''}" style="border-left-color:${col}">
+    <div class="cbox ${done?'done':''}" onclick="taskDone('${t.id}',event)">${done?'<i class="ti ti-check"></i>':''}</div>
+    <div class="t" onclick='openTask(${JSON.stringify(t)})'>
+      <div class="ti-title">${t.parent_id?'↳ ':''}${esc(t.title)}</div>
+      <div class="ti-sub">${esc(t.category||PRIO[t.priority]||"")}${t.assignee?" · "+esc(t.assignee):""}</div></div>
+    <div class="side">${t.deadline?fmt(t.deadline):""}</div></div>`}
+
+let TFILTER="active";
+async function renderTasks(box){
+  const d=await api("/tasks?status="+TFILTER);let list=d.tasks||[];
+  list.sort((a,b)=>(a.priority||"P2").localeCompare(b.priority||"P2"));
+  const chip=(k,l)=>`<button class="btn ${TFILTER===k?'pri':''}" onclick="setTF('${k}')">${l}</button>`;
+  box.innerHTML=head("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
+    (list.length?list.map(taskRow).join(""):emptyBox("checklist","Vazifa yo'q"));
+}
+function setTF(k){TFILTER=k;render("tasks")}
+
+async function renderMeetings(box){
+  const d=await api("/meetings");const list=d.meetings||[];
+  box.innerHTML=head("Uchrashuvlar","")+(list.length?list.map(m=>`<div class="card">
+    <div style="font-size:15px;font-weight:500">${esc(m.title)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
+    ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}
+    <div class="rowbtns"><button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>
+      <button class="btn" onclick='openMeeting(${JSON.stringify(m)})'><i class="ti ti-edit"></i></button>
+      <button class="btn dang" onclick="mCancel('${m.id}')">Bekor</button></div></div>`).join(""):emptyBox("calendar-off","Uchrashuv yo'q"));
+}
+async function renderNotes(box){
+  const d=await api("/notes");const list=d.notes||[];
+  box.innerHTML=head("Qaydlar","")+(list.length?list.map(n=>`<div class="card">
+    <div style="font-size:15px;font-weight:500">${esc(n.title||"Qayd")}</div>
+    <div style="font-size:13px;color:var(--muted);margin-top:5px;line-height:1.5">${esc((n.content||"").slice(0,180))}</div>
+    <div class="rowbtns"><button class="btn" onclick='openNote(${JSON.stringify(n)})'><i class="ti ti-edit"></i> Tahrir</button>
+      <button class="btn dang" onclick="del('/notes/${n.id}','notes')"><i class="ti ti-trash"></i></button></div></div>`).join(""):emptyBox("note","Qayd yo'q"));
+}
+async function renderReminders(box){
+  const d=await api("/reminders");const list=d.reminders||[];
+  box.innerHTML=head("Eslatmalar","")+(list.length?list.map(r=>`<div class="card">
+    <div style="font-size:15px;font-weight:500">${esc(r.title)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(r.remind_at)}${r.note?" · "+esc(r.note):""}</div>
+    <div class="rowbtns"><button class="btn pri" onclick="rDone('${r.id}')"><i class="ti ti-check"></i></button>
+      <button class="btn dang" onclick="del('/reminders/${r.id}','reminders')"><i class="ti ti-trash"></i></button></div></div>`).join(""):emptyBox("bell-off","Eslatma yo'q"));
+}
+
+async function renderInsights(box){
+  const d=await api("/insights");const days=d.by_day||[];const cats=(d.categories||[]).slice(0,6);
+  const max=Math.max(1,...days.map(x=>x.count));const wd=["Yak","Du","Se","Ch","Pa","Ju","Sh"];
+  const bars=days.map(x=>{const dt=new Date(x.day+"T00:00");const lbl=isNaN(dt)?"":wd[dt.getDay()];
+    return `<div class="col"><div class="b" style="height:${Math.round(x.count/max*110)}px"></div><small>${lbl}</small></div>`}).join("");
+  const total=cats.reduce((s,c)=>s+c.count,0)||1;const cols=["#6C5CE7","#2f7ae5","#1E9E75","#E8A317","#d64545","#b060d0"];
+  let acc=0;const segs=cats.map((c,i)=>{const frac=c.count/total;const dash=`${(frac*100).toFixed(2)} ${100-frac*100}`;
+    const off=25-acc*100;acc+=frac;return `<circle r="15.915" cx="18" cy="18" fill="none" stroke="${cols[i%cols.length]}" stroke-width="6" stroke-dasharray="${dash}" stroke-dashoffset="${off}"></circle>`}).join("");
+  const legend=cats.map((c,i)=>`<div class="li"><span class="dot" style="background:${cols[i%cols.length]}"></span>${esc(c.name)} <span style="margin-left:auto;color:var(--faint)">${Math.round(c.count/total*100)}%</span></div>`).join("");
+  box.innerHTML=head("Tahlil","So'nggi 7 kun")+
+    `<div class="card"><div style="font-size:13px;color:var(--muted);margin-bottom:2px">Bajarilgan vazifalar</div>
+      <div style="font-size:26px;font-weight:600;margin-bottom:12px">${days.reduce((s,x)=>s+x.count,0)}</div>
+      <div class="bar">${bars}</div></div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar</div>
+      ${cats.length?`<div style="display:flex;align-items:center;gap:18px"><svg viewBox="0 0 36 36" style="width:110px;height:110px;flex:none">${segs}</svg><div class="legend" style="flex:1">${legend}</div></div>`:emptyBox("chart-donut","Ma'lumot yo'q")}</div>`;
+}
+
+async function renderProfile(box){
+  const d=await api("/dashboard").catch(()=>({counts:{}}));const c=d.counts||{};
+  box.innerHTML=head("Profil","")+
+    `<div class="hero" style="margin-bottom:16px"><div style="font-size:15px;opacity:.9;margin-bottom:8px">Umumiy ko'rinish</div>
+      <div style="display:flex"><div style="flex:1"><div style="font-size:26px;font-weight:600">${c.total||0}</div><div style="font-size:12px;opacity:.85">Jami vazifa</div></div>
+      <div style="flex:1"><div style="font-size:26px;font-weight:600">${c.done||0}</div><div style="font-size:12px;opacity:.85">Bajarilgan</div></div></div></div>
+    <div class="card menu">
+      <div class="mi" onclick="go('insights')"><i class="ti ti-chart-bar"></i>Statistika<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('notes')"><i class="ti ti-note"></i>Qaydlar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('reminders')"><i class="ti ti-bell"></i>Eslatmalar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" style="border-bottom:none" onclick="go('meetings')"><i class="ti ti-calendar"></i>Uchrashuvlar<i class="ti ti-chevron-right ch"></i></div></div>`;
+}
+
+function go(v){switchView(v)}
+
+async function act(fn,msg){try{await fn();toast(msg);render(VIEW)}catch(e){toast("⚠️ "+e.message)}}
+const taskDone=(id,e)=>{if(e)e.stopPropagation();act(()=>api(`/tasks/${id}/complete`,{method:"POST"}),"Bajarildi")};
+const mDone=id=>act(()=>api(`/meetings/${id}/complete`,{method:"POST"}),"Belgilandi");
 const mCancel=id=>act(()=>api(`/meetings/${id}/cancel`,{method:"POST"}),"Bekor qilindi");
-const rDone  =id=>act(()=>api(`/reminders/${id}/complete`,{method:"POST"}),"Bajarildi ✓");
-function del(path){ if(tg?.showConfirm){ tg.showConfirm("O'chirilsinmi?",ok=>{ if(ok) act(()=>api(path,{method:"DELETE"}),"O'chirildi"); }); }
-  else act(()=>api(path,{method:"DELETE"}),"O'chirildi"); }
+const rDone=id=>act(()=>api(`/reminders/${id}/complete`,{method:"POST"}),"Bajarildi");
+function del(path,v){const run=()=>act(()=>api(path,{method:"DELETE"}),"O'chirildi");
+  if(tg?.showConfirm)tg.showConfirm("O'chirilsinmi?",ok=>{if(ok)run()});else run()}
 
-// ───── modal / forms ─────
-const modalBg=document.getElementById("modalBg");
-function closeModal(){ modalBg.classList.remove("show"); }
-modalBg.addEventListener("click",e=>{ if(e.target===modalBg) closeModal(); });
-function opt(list,sel){ return list.map(v=>`<option ${v===sel?'selected':''}>${esc(v)}</option>`).join(""); }
-function openModal(html){ document.getElementById("modal").innerHTML=html; modalBg.classList.add("show"); }
+const mbg=$("mbg");function closeM(){mbg.classList.remove("show")}
+mbg.addEventListener("click",e=>{if(e.target===mbg)closeM()});
+function openM(html){$("modal").innerHTML=html;mbg.classList.add("show")}
+function opts(list,sel){return list.map(v=>`<option ${v===sel?"selected":""}>${esc(v)}</option>`).join("")}
+function val(id){return ($(id)?.value||"").trim()}
 
-function taskForm(t={}){ return `<h2>${t.id?'Vazifani tahrirlash':'Yangi vazifa'}</h2>
-  <label>Sarlavha</label><input id="f_title" value="${esc(t.title)}">
+function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":"Yangi vazifa"}</h3>
+  <label>Sarlavha</label><input id="f_title" value="${esc(t.title)}" placeholder="Nima qilinsin?">
   <label>Izoh</label><textarea id="f_desc">${esc(t.description)}</textarea>
-  <label>Ijrochi</label><input id="f_asg" list="dl_c" value="${esc(t.assignee)}">
-  <datalist id="dl_c">${opt(META.contacts)}</datalist>
-  <label>Muddat</label><input type="datetime-local" id="f_dl" value="${forDatetimeLocal(t.deadline)}">
-  <label>Ustuvorlik</label><select id="f_prio">${opt(META.priorities,t.priority||"P2")}</select>
-  <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}">
-  <datalist id="dl_cat">${opt(META.categories)}</datalist>
-  <div class="actions"><button onclick="closeModal()">Bekor</button>
-    <button class="primary" onclick="saveTask('${t.id||''}')">Saqlash</button></div>`; }
-const newTask=()=>openModal(taskForm());
-const editTask=t=>openModal(taskForm(t));
-async function saveTask(id){
-  const body={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),
-    deadline:fromDatetimeLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
-  if(!body.title){ toast("Sarlavha kerak"); return; }
-  await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
-  closeModal();
-}
+  <label>Ijrochi</label><input id="f_asg" list="dl_c" value="${esc(t.assignee)}"><datalist id="dl_c">${opts(META.contacts)}</datalist>
+  <label>Muddat</label><input type="datetime-local" id="f_dl" value="${toLocal(t.deadline)}">
+  <label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select>
+  <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}"><datalist id="dl_cat">${opts(META.categories)}</datalist>
+  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
+const openTask=t=>openM(taskForm(t));
+async function saveTask(id){const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
+  if(!b.title)return toast("Sarlavha kerak");await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
-function meetingForm(m={}){ return `<h2>${m.id?'Uchrashuvni tahrirlash':'Yangi uchrashuv'}</h2>
+function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uchrashuv"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(m.title)}">
-  <label>Boshlanish</label><input type="datetime-local" id="f_start" value="${forDatetimeLocal(m.datetime_start)}">
+  <label>Boshlanish</label><input type="datetime-local" id="f_start" value="${toLocal(m.datetime_start)}">
   <label>Joy / havola</label><input id="f_loc" value="${esc(m.location_or_link)}">
-  <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(', '))}">
+  <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(", "))}">
   <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
-  <div class="actions"><button onclick="closeModal()">Bekor</button>
-    <button class="primary" onclick="saveMeeting('${m.id||''}')">Saqlash</button></div>`; }
-const newMeeting=()=>openModal(meetingForm());
-const editMeeting=m=>openModal(meetingForm(m));
-async function saveMeeting(id){
-  const parts=val("f_part").split(",").map(s=>s.trim()).filter(Boolean);
-  const body={title:val("f_title"),datetime_start:fromDatetimeLocal(val("f_start")),
-    location_or_link:val("f_loc"),participants:parts,agenda:val("f_ag")};
-  if(!body.title){ toast("Sarlavha kerak"); return; }
-  await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
-  closeModal();
-}
+  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
+const openMeeting=m=>openM(meetingForm(m));
+async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
+  if(!b.title)return toast("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
-function noteForm(n={}){ return `<h2>${n.id?'Qaydni tahrirlash':'Yangi qayd'}</h2>
+function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(n.title)}">
   <label>Matn</label><textarea id="f_content" style="min-height:120px">${esc(n.content)}</textarea>
-  <div class="actions"><button onclick="closeModal()">Bekor</button>
-    <button class="primary" onclick="saveNote('${n.id||''}')">Saqlash</button></div>`; }
-const newNote=()=>openModal(noteForm());
-const editNote=n=>openModal(noteForm(n));
-async function saveNote(id){
-  const body={title:val("f_title"),content:val("f_content")};
-  if(!body.content){ toast("Matn kerak"); return; }
-  await act(()=>api(id?`/notes/${id}`:"/notes",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
-  closeModal();
-}
+  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveNote('${n.id||""}')">Saqlash</button></div>`}
+const openNote=n=>openM(noteForm(n));
+async function saveNote(id){const b={title:val("f_title"),content:val("f_content")};
+  if(!b.content)return toast("Matn kerak");await act(()=>api(id?`/notes/${id}`:"/notes",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
-function reminderForm(r={}){ return `<h2>${r.id?'Eslatmani tahrirlash':'Yangi eslatma'}</h2>
+function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi eslatma"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(r.title)}">
-  <label>Vaqt</label><input type="datetime-local" id="f_at" value="${forDatetimeLocal(r.remind_at)}">
+  <label>Vaqt</label><input type="datetime-local" id="f_at" value="${toLocal(r.remind_at)}">
   <label>Izoh</label><input id="f_note" value="${esc(r.note)}">
-  <div class="actions"><button onclick="closeModal()">Bekor</button>
-    <button class="primary" onclick="saveReminder('${r.id||''}')">Saqlash</button></div>`; }
-const newReminder=()=>openModal(reminderForm());
-async function saveReminder(id){
-  const body={title:val("f_title"),remind_at:fromDatetimeLocal(val("f_at")),note:val("f_note")};
-  if(!body.remind_at){ toast("Vaqt kerak"); return; }
-  if(!body.title) body.title="Eslatma";
-  await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(body)}),"Saqlandi ✓");
-  closeModal();
-}
-function val(id){ return (document.getElementById(id)?.value||"").trim(); }
+  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveReminder('${r.id||""}')">Saqlash</button></div>`}
+async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note")};
+  if(!b.remind_at)return toast("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
-document.getElementById("fab").onclick=()=>({tasks:newTask,meetings:newMeeting,notes:newNote,reminders:newReminder}[TAB]());
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
-  TAB=b.dataset.tab;
-  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x===b));
-  load();
-});
+$("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
-(async()=>{ try{ META=await api("/meta"); }catch(e){} load(); })();
+(async()=>{try{META=await api("/meta")}catch(e){}render("dash")})();
 </script>
 </body>
 </html>

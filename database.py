@@ -1267,6 +1267,25 @@ async def list_tasks_done_today() -> list[dict]:
         return [_row_to_task(r) for r in rows]
 
 
+async def completed_counts_by_day(days: int = 7) -> list[dict]:
+    """[{day: 'YYYY-MM-DD', count: n}] of tasks completed per day over the last
+    `days` (oldest→newest, every day present). Uses updated_at as the completion
+    proxy (a done task's last write ≈ its completion) — see the completed_at
+    follow-up. Powers the Mini App insights bar chart."""
+    since = (datetime.now(TZ) - timedelta(days=days - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "SELECT substr(updated_at,1,10) AS d, COUNT(*) AS n FROM tasks "
+            "WHERE status='done' AND updated_at >= ? GROUP BY d", (since,))
+        seen = {r[0]: r[1] for r in await cur.fetchall()}
+    out = []
+    for i in range(days):
+        d = (datetime.now(TZ) - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        out.append({"day": d, "count": seen.get(d, 0)})
+    return out
+
+
 async def list_due_in_window(start_iso: str, end_iso: str) -> list[dict]:
     """Returns P0/P1 tasks due within [start_iso, end_iso] that have NOT been
     reminded yet. Once `mark_task_reminded` writes reminded_at, the task is

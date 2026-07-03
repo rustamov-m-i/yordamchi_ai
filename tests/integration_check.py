@@ -1634,6 +1634,17 @@ async def main():
               and (await database.get_task(_body["id"]))["status"] == "done")
         _r = await _client.get("/api/health")
         check("MiniApp: /api/health authsiz ochiq", _r.status == 200)
+        _r = await _client.get("/api/dashboard", headers=_H)
+        _dj = await _r.json()
+        check("MiniApp: /api/dashboard → progress+counts+today",
+              _r.status == 200 and "progress" in _dj and "counts" in _dj and "today" in _dj)
+        _r = await _client.get("/api/insights", headers=_H)
+        _ij = await _r.json()
+        check("MiniApp: /api/insights → 7 kunlik bar + kategoriyalar",
+              _r.status == 200 and len(_ij.get("by_day", [])) == 7 and "categories" in _ij)
+        check("MiniApp: dashboard/insights authsiz → 401",
+              (await _client.get("/api/dashboard")).status == 401
+              and (await _client.get("/api/insights")).status == 401)
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "   "})
         check("MiniApp: bo'sh sarlavha → 400", _r.status == 400)
         # ── Security-hardening regressions (audit: 4 LOW) ──
