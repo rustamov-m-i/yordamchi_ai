@@ -390,6 +390,15 @@ async def create_task(data: dict) -> str:
     task_id = new_id("t-")
     now = now_iso()
     source = data.get("source", "telegram_text")
+    # Blank/whitespace title → safe default (the "Vazifa" fallback only fired on a
+    # MISSING key, so "" / "   " slipped through and rendered as an empty card).
+    title = (data.get("title") or "").strip() or "Vazifa"
+    # Deadline must be a parseable ISO instant. A raw non-ISO string ("ertaga")
+    # would be compared LEXICOGRAPHICALLY everywhere ('e' > '2') → treated as a
+    # far-future date and silently dropped from every reminder/overdue/load surface.
+    deadline = data.get("deadline")
+    if deadline is not None and parse_iso_dt(deadline) is None:
+        deadline = None
     recurrence_rule = normalize_recurrence_rule(data.get("recurrence_rule") or data.get("recurrence"))
     recurrence_next_at = data.get("recurrence_next_at")
     if recurrence_rule and not recurrence_next_at:
@@ -397,7 +406,7 @@ async def create_task(data: dict) -> str:
         # next_at yozilmaydi: complete_task bunday vazifada hech qachon nusxa
         # tug'dirmaydi, next_at esa hech kim iste'mol qilmaydigan yolg'on bo'lardi.
         if (data.get("status") or "todo") != "done":
-            recurrence_next_at = compute_next_recurrence(data.get("deadline"), recurrence_rule)
+            recurrence_next_at = compute_next_recurrence(deadline, recurrence_rule)
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO tasks (id, title, description, deadline, priority, status, tags, category, assignee,
@@ -406,9 +415,9 @@ async def create_task(data: dict) -> str:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
-                data.get("title", "Vazifa"),
+                title,
                 data.get("description"),
-                data.get("deadline"),
+                deadline,
                 data.get("priority", "P2"),
                 data.get("status", "todo"),
                 json.dumps(data.get("tags", []), ensure_ascii=False),
@@ -424,7 +433,7 @@ async def create_task(data: dict) -> str:
             ),
         )
         await _log_history(db, task_id, "create", field=None,
-                            new_value=data.get("title", "Vazifa"), source=source)
+                            new_value=title, source=source)
         await db.commit()
     return task_id
 
@@ -439,6 +448,12 @@ async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
         before = await cur.fetchone()
         if before is None:
             return False
+
+        # A non-ISO deadline edit ("ertaga") must not be stored raw — it would sort
+        # lexicographically as a far-future date and vanish from reminders/overdue.
+        # Drop the key (leave the stored deadline untouched) rather than clear it.
+        if data.get("deadline") is not None and parse_iso_dt(data["deadline"]) is None:
+            data = {k: v for k, v in data.items() if k != "deadline"}
 
         fields = []
         values = []
@@ -514,7 +529,11 @@ async def complete_task(task_id: str) -> bool:
         return True
     completed = _row_to_task(before)
     if completed.get("recurrence_rule"):
-        await create_next_recurring_task(completed)
+        # Re-verify the task still exists before spawning: a delete can interleave
+        # between our commit above and this spawn (concurrent complete+delete), which
+        # would otherwise leave a zombie next-occurrence pointing at a deleted parent.
+        if await get_task(task_id) is not None:
+            await create_next_recurring_task(completed)
     return True
 
 
@@ -638,11 +657,15 @@ async def create_next_recurring_task(completed_task: dict) -> Optional[str]:
     # muddatli, bekor qilinmagan nusxa allaqachon bo'lsa, qaytadan tug'dirmaymiz.
     chain_id = completed_task.get("recurrence_parent_id") or completed_task.get("id")
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        # Match ANY still-open occurrence in this chain (not the exact next_deadline):
+        # editing a spawned child's deadline used to break an exact match and let a
+        # reopen→re-complete cycle create a duplicate. A chain should have at most one
+        # live "next" occurrence, so any open one means "already spawned".
         cur = await db.execute(
             """SELECT id FROM tasks
-               WHERE recurrence_parent_id IN (?, ?) AND deadline = ?
-                 AND status != 'cancelled' LIMIT 1""",
-            (chain_id, completed_task.get("id"), next_deadline),
+               WHERE recurrence_parent_id IN (?, ?)
+                 AND status IN ('todo','in_progress','blocked') LIMIT 1""",
+            (chain_id, completed_task.get("id")),
         )
         existing = await cur.fetchone()
     if existing:
@@ -665,23 +688,38 @@ async def create_next_recurring_task(completed_task: dict) -> Optional[str]:
     return new_task_id
 
 
+async def _subtree_ids(db, root_id: str) -> list[str]:
+    """All task ids in the subtree rooted at root_id (root + children + grandchildren
+    …) via the parent_id closure — so a delete/snapshot reaches the WHOLE tree, not
+    just direct children."""
+    cur = await db.execute(
+        """WITH RECURSIVE tree(id) AS (
+               SELECT id FROM tasks WHERE id = ?
+               UNION
+               SELECT t.id FROM tasks t JOIN tree ON t.parent_id = tree.id
+           )
+           SELECT id FROM tree""",
+        (root_id,),
+    )
+    return [r[0] for r in await cur.fetchall()]
+
+
 async def delete_task(task_id: str, source: str = "manual") -> bool:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT title FROM tasks WHERE id = ?", (task_id,))
         row = await cur.fetchone()
-        title = row["title"] if row else None
-        # Cascade to subtasks first (real child tasks) — drop their reminders + rows
-        # so deleting a parent removes its whole tree, no orphans left behind.
-        child_cur = await db.execute("SELECT id FROM tasks WHERE parent_id = ?", (task_id,))
-        for cr in await child_cur.fetchall():
-            await db.execute("DELETE FROM reminders WHERE task_id = ?", (cr["id"],))
-        await db.execute("DELETE FROM tasks WHERE parent_id = ?", (task_id,))
-        cur = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        if row is None:
+            return False
+        title = row["title"]
+        # Cascade over the FULL subtree (children, grandchildren, …) — there is no FK
+        # ON DELETE, so drop every descendant's linked reminders + rows here, else a
+        # grandchild (and its reminder that still fires) would be orphaned.
+        ids = await _subtree_ids(db, task_id)
+        qmarks = ",".join("?" * len(ids))
+        await db.execute(f"DELETE FROM reminders WHERE task_id IN ({qmarks})", ids)
+        cur = await db.execute(f"DELETE FROM tasks WHERE id IN ({qmarks})", ids)
         if cur.rowcount > 0:
-            # Cascade — there is no FK ON DELETE, so drop linked reminders here to
-            # avoid orphans that would otherwise fire / clutter FTS forever.
-            await db.execute("DELETE FROM reminders WHERE task_id = ?", (task_id,))
             await _log_history(db, task_id, "delete", field=None,
                                 old_value=title, source=source)
         await db.commit()
@@ -728,6 +766,58 @@ async def restore_task(task: dict) -> bool:
                            new_value=task.get("title"), source="undo_delete")
         await db.commit()
         return True
+
+
+async def snapshot_task_tree(task_id: str) -> dict:
+    """Capture the FULL subtree (root + all descendants) and every linked reminder
+    before a delete, so the undo button can restore ALL of it (restore_task_tree) —
+    not just the parent row. Returns {} if the task is already gone."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        ids = await _subtree_ids(db, task_id)
+        if not ids:
+            return {}
+        qm = ",".join("?" * len(ids))
+        t_cur = await db.execute(f"SELECT * FROM tasks WHERE id IN ({qm})", ids)
+        tasks = [dict(r) for r in await t_cur.fetchall()]
+        r_cur = await db.execute(f"SELECT * FROM reminders WHERE task_id IN ({qm})", ids)
+        reminders = [dict(r) for r in await r_cur.fetchall()]
+    return {"tasks": tasks, "reminders": reminders}
+
+
+async def restore_task_tree(snapshot: dict) -> int:
+    """Re-insert a snapshot_task_tree() capture — all tasks (parent_id preserved) and
+    their linked reminders — with ORIGINAL ids. Skips rows whose id already exists
+    (double-tap undo guard). Returns the number of tasks restored."""
+    tasks = (snapshot or {}).get("tasks") or []
+    reminders = (snapshot or {}).get("reminders") or []
+    if not tasks:
+        return 0
+    restored = 0
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        async def _reinsert(table: str, row: dict) -> bool:
+            cur = await db.execute(f"SELECT 1 FROM {table} WHERE id = ?", (row.get("id"),))
+            if await cur.fetchone():
+                return False
+            cols = list(row.keys())
+            await db.execute(
+                f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                [row[c] for c in cols],
+            )
+            return True
+
+        for t in tasks:
+            if await _reinsert("tasks", t):
+                restored += 1
+        for rem in reminders:
+            await _reinsert("reminders", rem)
+        if restored:
+            await _log_history(db, tasks[0].get("id"), "restore", field=None,
+                               new_value=tasks[0].get("title"), source="undo_delete")
+        await db.commit()
+    return restored
 
 
 # ─────────────── BULK DELETE (voice/text "barchasini o'chir" — always confirmed in handler) ───────────────
@@ -803,6 +893,18 @@ async def get_task(task_id: str) -> Optional[dict]:
         return _row_to_task(row) if row else None
 
 
+async def filter_existing_task_ids(ids: list[str]) -> set[str]:
+    """Subset of `ids` that still exist (one IN query) — used to drop a deleted task
+    from the LLM's 'last shown' context so it isn't told to act on a dead id."""
+    ids = [i for i in (ids or []) if i]
+    if not ids:
+        return set()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            f"SELECT id FROM tasks WHERE id IN ({','.join('?' * len(ids))})", ids)
+        return {r[0] for r in await cur.fetchall()}
+
+
 async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50,
                      include_subtasks: bool = False) -> list[dict]:
     # By default the flat list shows only top-level tasks (subtasks live under their
@@ -873,7 +975,7 @@ async def list_tasks_by_category(category: str, limit: int = 100) -> list[dict]:
             where, params = "category = ?", (category,)
         cur = await db.execute(
             f"""SELECT * FROM tasks
-                WHERE status IN ('todo','in_progress','blocked') AND {where}
+                WHERE status IN ('todo','in_progress','blocked') AND parent_id IS NULL AND {where}
                 ORDER BY
                   CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
                   CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC
@@ -922,17 +1024,31 @@ async def clear_category(category: str) -> int:
 
 
 async def delete_tasks_by_category(category: str) -> int:
-    """Hard-delete ACTIVE tasks in a category ('(boshqa)' = uncategorized).
-    Returns rows deleted. Caller MUST gate this behind a confirmation."""
+    """Hard-delete ACTIVE tasks in a category ('(boshqa)' = uncategorized), cascading
+    to their subtrees + linked reminders (else subtasks orphan and their reminders
+    keep firing). Returns rows deleted. Caller MUST gate this behind a confirmation."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
         if category == "(boshqa)":
-            cur = await db.execute(
-                "DELETE FROM tasks WHERE status IN ('todo','in_progress','blocked') "
+            sel = await db.execute(
+                "SELECT id FROM tasks WHERE status IN ('todo','in_progress','blocked') "
                 "AND (category IS NULL OR TRIM(category) = '')")
         else:
-            cur = await db.execute(
-                "DELETE FROM tasks WHERE status IN ('todo','in_progress','blocked') AND category = ?",
+            sel = await db.execute(
+                "SELECT id FROM tasks WHERE status IN ('todo','in_progress','blocked') AND category = ?",
                 (category,))
+        roots = [r[0] for r in await sel.fetchall()]
+        if not roots:
+            return 0
+        # Expand to the full subtree of every matched task (subtasks may sit in a
+        # different/blank category, so a category-scoped DELETE would miss them).
+        all_ids: set[str] = set()
+        for rid in roots:
+            all_ids.update(await _subtree_ids(db, rid))
+        ids = list(all_ids)
+        qm = ",".join("?" * len(ids))
+        await db.execute(f"DELETE FROM reminders WHERE task_id IN ({qm})", ids)
+        cur = await db.execute(f"DELETE FROM tasks WHERE id IN ({qm})", ids)
         await db.commit()
         return cur.rowcount
 
@@ -1095,6 +1211,7 @@ async def list_today_tasks() -> list[dict]:
         cur = await db.execute(
             """SELECT * FROM tasks
                WHERE status IN ('todo','in_progress','blocked')
+                 AND parent_id IS NULL
                  AND deadline IS NOT NULL
                  AND deadline >= ?
                  AND deadline <= ?
@@ -1114,6 +1231,7 @@ async def list_overdue_tasks() -> list[dict]:
         cur = await db.execute(
             """SELECT * FROM tasks
                WHERE status IN ('todo','in_progress','blocked')
+                 AND parent_id IS NULL
                  AND deadline IS NOT NULL
                  AND deadline < ?
                ORDER BY deadline ASC""",
@@ -1151,7 +1269,7 @@ async def list_due_in_window(start_iso: str, end_iso: str) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND deadline IS NOT NULL
                  AND deadline >= ? AND deadline <= ?
                  AND reminded_at IS NULL
@@ -1185,7 +1303,7 @@ async def risk_score_counts() -> dict:
                   SUM(CASE WHEN (assignee IS NULL OR TRIM(assignee) = '' OR LOWER(assignee) = 'belgilanmagan')
                            AND deadline IS NOT NULL AND deadline <= ? THEN 1 ELSE 0 END) AS unassigned_due_48h
                FROM tasks
-               WHERE status IN ('todo', 'in_progress')""",
+               WHERE status IN ('todo','in_progress','blocked')""",
             (now_iso_val, now_iso_val, h24, now_iso_val, h48, h48),
         )
         row = await cur.fetchone()
@@ -1203,7 +1321,7 @@ async def list_unassigned_tasks(limit: int = 50) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND (assignee IS NULL OR TRIM(assignee) = '' OR LOWER(assignee) = 'belgilanmagan')
                ORDER BY
                  CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
@@ -1220,7 +1338,7 @@ async def list_tasks_without_deadline(limit: int = 50) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline IS NULL
+               WHERE status IN ('todo','in_progress','blocked') AND deadline IS NULL
                ORDER BY created_at DESC LIMIT ?""",
             (limit,),
         )
@@ -1235,7 +1353,7 @@ async def list_tasks_due_within(hours: int) -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND deadline IS NOT NULL
                  AND deadline >= ? AND deadline <= ?
                ORDER BY deadline ASC""",
@@ -1253,7 +1371,7 @@ async def assignee_load_map() -> dict[str, dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT id, title, priority, status, assignee, deadline
-               FROM tasks WHERE status IN ('todo','in_progress')""",
+               FROM tasks WHERE status IN ('todo','in_progress','blocked')""",
         )
         rows = await cur.fetchall()
 
@@ -1361,7 +1479,7 @@ async def list_stale_delegations(min_age_days: int = 3, limit: int = 20) -> list
         cur = await db.execute(
             """SELECT *, julianday('now') - julianday(created_at) AS age_days
                FROM tasks
-               WHERE status IN ('todo', 'in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND assignee IS NOT NULL
                  AND LOWER(TRIM(assignee)) NOT IN (
                      '', 'men', 'siz', 'belgilanmagan', '—',
@@ -1381,7 +1499,7 @@ async def list_recurring_tasks(limit: int = 30) -> list[dict]:
         cur = await db.execute(
             """SELECT * FROM tasks
                WHERE recurrence_rule IS NOT NULL
-                 AND status IN ('todo','in_progress')
+                 AND status IN ('todo','in_progress','blocked')
                ORDER BY
                  CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
                  deadline ASC
@@ -2307,7 +2425,7 @@ async def weekly_stats(week_start_iso: str) -> dict:
         meetings = (await cur.fetchone())["n"]
 
         cur = await db.execute(
-            "SELECT priority, COUNT(*) AS n FROM tasks WHERE status IN ('todo','in_progress') GROUP BY priority"
+            "SELECT priority, COUNT(*) AS n FROM tasks WHERE status IN ('todo','in_progress','blocked') GROUP BY priority"
         )
         priority_rows = await cur.fetchall()
         by_priority = {r["priority"]: r["n"] for r in priority_rows}
@@ -2341,43 +2459,43 @@ async def executive_stats(days: int = 7) -> dict:
 
         tasks_created = await count("SELECT COUNT(*) FROM tasks WHERE created_at >= ?", (start.isoformat(),))
         tasks_done = await count("SELECT COUNT(*) FROM tasks WHERE status = 'done' AND updated_at >= ?", (start.isoformat(),))
-        active_count = await count("SELECT COUNT(*) FROM tasks WHERE status IN ('todo','in_progress')")
+        active_count = await count("SELECT COUNT(*) FROM tasks WHERE status IN ('todo','in_progress','blocked')")
         overdue_count = await count(
             """SELECT COUNT(*) FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline IS NOT NULL AND deadline < ?""",
+               WHERE status IN ('todo','in_progress','blocked') AND deadline IS NOT NULL AND deadline < ?""",
             (now.isoformat(),),
         )
         no_deadline_count = await count(
-            "SELECT COUNT(*) FROM tasks WHERE status IN ('todo','in_progress') AND deadline IS NULL"
+            "SELECT COUNT(*) FROM tasks WHERE status IN ('todo','in_progress','blocked') AND deadline IS NULL"
         )
         due_24_count = await count(
             """SELECT COUNT(*) FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline BETWEEN ? AND ?""",
+               WHERE status IN ('todo','in_progress','blocked') AND deadline BETWEEN ? AND ?""",
             (now.isoformat(), next_24.isoformat()),
         )
         due_48_count = await count(
             """SELECT COUNT(*) FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline BETWEEN ? AND ?""",
+               WHERE status IN ('todo','in_progress','blocked') AND deadline BETWEEN ? AND ?""",
             (now.isoformat(), next_48.isoformat()),
         )
         due_7_count = await count(
             """SELECT COUNT(*) FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline BETWEEN ? AND ?""",
+               WHERE status IN ('todo','in_progress','blocked') AND deadline BETWEEN ? AND ?""",
             (now.isoformat(), next_7.isoformat()),
         )
         recurring_count = await count(
-            "SELECT COUNT(*) FROM tasks WHERE status IN ('todo','in_progress') AND recurrence_rule IS NOT NULL"
+            "SELECT COUNT(*) FROM tasks WHERE status IN ('todo','in_progress','blocked') AND recurrence_rule IS NOT NULL"
         )
 
         cur = await db.execute(
             """SELECT priority, COUNT(*) AS n FROM tasks
-               WHERE status IN ('todo','in_progress') GROUP BY priority"""
+               WHERE status IN ('todo','in_progress','blocked') GROUP BY priority"""
         )
         by_priority = {r["priority"]: r["n"] for r in await cur.fetchall()}
 
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline IS NOT NULL AND deadline < ?
+               WHERE status IN ('todo','in_progress','blocked') AND deadline IS NOT NULL AND deadline < ?
                ORDER BY deadline ASC LIMIT 5""",
             (now.isoformat(),),
         )
@@ -2385,7 +2503,7 @@ async def executive_stats(days: int = 7) -> dict:
 
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline IS NULL
+               WHERE status IN ('todo','in_progress','blocked') AND deadline IS NULL
                ORDER BY
                  CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
                  created_at ASC LIMIT 5"""
@@ -2394,7 +2512,7 @@ async def executive_stats(days: int = 7) -> dict:
 
         cur = await db.execute(
             """SELECT * FROM tasks
-               WHERE status IN ('todo','in_progress') AND deadline BETWEEN ? AND ?
+               WHERE status IN ('todo','in_progress','blocked') AND deadline BETWEEN ? AND ?
                ORDER BY deadline ASC LIMIT 8""",
             (now.isoformat(), next_48.isoformat()),
         )
@@ -2404,7 +2522,7 @@ async def executive_stats(days: int = 7) -> dict:
             """SELECT assignee, COUNT(*) AS total,
                       SUM(CASE WHEN deadline IS NOT NULL AND deadline < ? THEN 1 ELSE 0 END) AS overdue
                FROM tasks
-               WHERE status IN ('todo','in_progress')
+               WHERE status IN ('todo','in_progress','blocked')
                  AND assignee IS NOT NULL
                  AND LOWER(TRIM(assignee)) NOT IN (
                      '', 'men', 'siz', 'belgilanmagan', '—',

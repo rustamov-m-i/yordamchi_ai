@@ -191,6 +191,13 @@ async def _build_state_block() -> str:
     active_tasks = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=200)
     overdue = await database.list_overdue_tasks()
     today_tasks = await database.list_today_tasks()
+
+    # Drop any "last shown task" whose id was deleted since it was displayed — else the
+    # LLM would be told to update/complete a dead id (a wasted, failing action).
+    global _last_task_view
+    if _last_task_view:
+        _alive = await database.filter_existing_task_ids([it.get("id") for it in _last_task_view])
+        _last_task_view = [it for it in _last_task_view if it.get("id") in _alive]
     done_today = await database.list_tasks_done_today()
     today_meetings = await database.list_today_meetings()
     # Upcoming meetings (next 30 days, not just this week) — so a reschedule/rename

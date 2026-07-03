@@ -1310,17 +1310,26 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                     _other = {k: v for k, v in data.items() if k != "status"}
                     if _other:
                         await database.update_task(target_id, _other)
-                    await database.complete_task(target_id)
+                    _ok = await database.complete_task(target_id)
                 else:
-                    await database.update_task(target_id, data)
-                created_ids["task"].append(target_id)
-                if action.get("_num"):
-                    num_to_id[action["_num"]] = target_id
+                    _ok = await database.update_task(target_id, data)
+                # A missing/deleted id → update/complete returns False. Surface it
+                # instead of silently reporting success (the LLM may act on a stale
+                # OXIRGI KO'RSATILGAN id for a task that was just deleted/completed).
+                if _ok:
+                    created_ids["task"].append(target_id)
+                    if action.get("_num"):
+                        num_to_id[action["_num"]] = target_id
+                else:
+                    created_ids["_failed"].append(atype)
             elif atype == "complete_task" and target_id:
-                await database.complete_task(target_id)
-                created_ids["task"].append(target_id)
+                if await database.complete_task(target_id):
+                    created_ids["task"].append(target_id)
+                else:
+                    created_ids["_failed"].append(atype)
             elif atype == "delete_task" and target_id:
-                await database.delete_task(target_id)
+                if not await database.delete_task(target_id):
+                    created_ids["_failed"].append(atype)
             elif atype == "schedule_meeting":
                 # To'qnashuvni oldini olish: bir xil vaqtga ustma-ust uchrashuv
                 # qo'ymaymiz. Vaqti mavjud uchrashuv bilan kesishsa — yaratmaymiz
@@ -1515,7 +1524,8 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
 # Action type → user-facing noun for the "saqlanmadi" warning.
 _ACTION_NOUN_UZ = {
     "create_task": "vazifa", "update_task": "vazifa yangilash",
-    "complete_task": "vazifa yakunlash", "create_reminder": "eslatma",
+    "complete_task": "vazifa yakunlash", "delete_task": "vazifa o'chirish",
+    "create_reminder": "eslatma",
     "schedule_meeting": "uchrashuv", "cancel_meeting": "uchrashuvni bekor qilish",
     "create_note": "note", "save_contact": "kontakt",
 }
@@ -8732,6 +8742,7 @@ async def _run_meeting_followup_extraction(message: Message, meeting: dict, note
     text = (response.get("user_message") or "").strip()
     if not text:
         text = f"✅ {len(created)} ta action item yaratildi." if created else "Action item topilmadi."
+    text += _failed_actions_note(ids_by_type)
     await _safe_answer(message, text, parse_mode="Markdown", reply_markup=tasks_compact_keyboard([]))
 
 
@@ -11957,7 +11968,8 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
     # Data safety: snapshot the DB before any irreversible bulk delete so we can
     # offer one-tap "↩️ Qaytarish". Failure to back up never blocks the delete.
     undo_token = None
-    if any(a.get("type") in _BULK_DELETE_ACTION_TYPES for a in actions):
+    if any(a.get("type") in (_BULK_DELETE_ACTION_TYPES | _CATEGORY_DELETE_ACTION_TYPES)
+           for a in actions):
         try:
             _UNDO_BACKUPS[str(query.message.message_id)] = await _create_db_backup("pre-delete")
             undo_token = str(query.message.message_id)
@@ -12781,11 +12793,13 @@ def _undo_task_gc() -> None:
 async def cb_task_del_do(query: CallbackQuery) -> None:
     """Execute task deletion after confirmation, offering a one-tap undo."""
     tid = query.data.split(":", 1)[1]
-    snapshot = await database.get_task(tid)   # capture BEFORE delete for undo
+    # Snapshot the WHOLE subtree + linked reminders before delete — else the undo
+    # would silently restore only the parent and drop its subtasks/reminders.
+    snapshot = await database.snapshot_task_tree(tid)
     await database.delete_task(tid)
     await query.answer("✅ Vazifa o'chirildi")
     kb = single_back_keyboard("taskfilter:active")
-    if snapshot:
+    if snapshot and snapshot.get("tasks"):
         _undo_task_gc()
         token = database.new_id("undo-")
         _UNDO_TASKS[token] = (snapshot, datetime.now(database.TZ))
@@ -12809,7 +12823,7 @@ async def cb_undo_task_delete(query: CallbackQuery) -> None:
         return
     snapshot, _ts = entry
     try:
-        ok = await database.restore_task(snapshot)
+        ok = await database.restore_task_tree(snapshot) > 0
     except Exception as e:
         await query.message.answer(_humanize_error(e))
         return
@@ -13952,7 +13966,8 @@ async def cb_protocol_tasks(query: CallbackQuery, state: FSMContext) -> None:
     created = await _execute_actions(pending)
     n = len(created.get("task", []))
     await state.update_data(proto_tasks_done=True)
-    await query.answer(f"✅ {n} ta vazifa qo'shildi" if n else "Vazifa qo'shilmadi")
+    _fail = "  ⚠️ ba'zilari saqlanmadi" if created.get("_failed") else ""
+    await query.answer((f"✅ {n} ta vazifa qo'shildi" if n else "Vazifa qo'shilmadi") + _fail)
     try:
         await query.message.edit_reply_markup(reply_markup=_protocol_result_kb(
             mid, data.get("proto_pending_count", n),

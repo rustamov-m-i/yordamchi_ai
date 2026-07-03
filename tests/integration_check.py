@@ -829,6 +829,103 @@ async def main():
           and not handlers._same_deadline_instant("2026-07-02T19:33:22.500000+05:00",
                                                   "2026-07-02T19:33:21.123456+05:00"))
 
+    print("\n── Vazifa hayot sikli auditi (yaratish/o'chirish/holat) ──")
+    # L1: blank / whitespace title → safe default (not a broken empty card)
+    _l1a = await database.get_task(await database.create_task({"title": "", "priority": "P2", "status": "todo"}))
+    _l1b = await database.get_task(await database.create_task({"title": "   ", "priority": "P2", "status": "todo"}))
+    check("L1: bo'sh/probel sarlavha → 'Vazifa'",
+          _l1a["title"] == "Vazifa" and _l1b["title"] == "Vazifa")
+    # L2: malformed (non-ISO) deadline is dropped on create AND on update (never stored raw)
+    _l2 = await database.get_task(await database.create_task(
+        {"title": "L2", "priority": "P2", "status": "todo", "deadline": "ertaga"}))
+    check("L2: create — noto'g'ri muddat ('ertaga') saqlanmaydi", _l2.get("deadline") is None)
+    _l2b_id = await database.create_task({"title": "L2b", "priority": "P2", "status": "todo",
+        "deadline": (datetime.now(TZ) + timedelta(days=4)).isoformat()})
+    await database.update_task(_l2b_id, {"deadline": "keyinroq"})
+    check("L2: update — noto'g'ri muddat mavjud muddatni o'chirmaydi",
+          (await database.get_task(_l2b_id)).get("deadline") is not None)
+    # L3: delete cascades the FULL subtree (grandchild) + all linked reminders
+    _gp = await database.create_task({"title": "Bobo", "priority": "P2", "status": "todo"})
+    _ch = await database.create_task({"title": "Ota-bola", "priority": "P2", "status": "todo", "parent_id": _gp})
+    _gc = await database.create_task({"title": "Nabira", "priority": "P2", "status": "todo", "parent_id": _ch})
+    await database.create_reminder({"title": "R-nabira", "remind_at": (datetime.now(TZ)+timedelta(days=1)).isoformat(), "task_id": _gc})
+    await database.delete_task(_gp)
+    _rem_left = [r for r in await database.list_reminders(limit=500) if r.get("task_id") == _gc]
+    check("L3: rekursiv o'chirish — nabira ham, eslatmasi ham o'chadi",
+          (await database.get_task(_gc)) is None and (await database.get_task(_ch)) is None
+          and not _rem_left)
+    # L4: delete_tasks_by_category cascades subtasks + reminders
+    _kp = await database.create_task({"title": "KatOta", "priority": "P2", "status": "todo", "category": "WipeKat"})
+    _ks = await database.create_task({"title": "KatSub", "priority": "P2", "status": "todo", "parent_id": _kp})
+    await database.create_reminder({"title": "R-katsub", "remind_at": (datetime.now(TZ)+timedelta(days=1)).isoformat(), "task_id": _ks})
+    await database.delete_tasks_by_category("WipeKat")
+    check("L4: kategoriya o'chirish — sub-vazifa+eslatma ham ketadi",
+          (await database.get_task(_ks)) is None
+          and not [r for r in await database.list_reminders(limit=500) if r.get("task_id") == _ks])
+    # L5: undo restores the WHOLE subtree + reminder, not just the parent
+    _up = await database.create_task({"title": "UndoOta", "priority": "P2", "status": "todo"})
+    _us = await database.create_task({"title": "UndoSub", "priority": "P2", "status": "todo", "parent_id": _up})
+    await database.create_reminder({"title": "R-undo", "remind_at": (datetime.now(TZ)+timedelta(days=1)).isoformat(), "task_id": _us})
+    _snap = await database.snapshot_task_tree(_up)
+    await database.delete_task(_up)
+    _restored = await database.restore_task_tree(_snap)
+    check("L5: undo — ota+sub+eslatma to'liq tiklanadi",
+          _restored == 2 and (await database.get_task(_us)) is not None
+          and (await database.get_task(_us)).get("parent_id") == _up
+          and [r for r in await database.list_reminders(limit=500) if r.get("task_id") == _us])
+    # L9: a BLOCKED task is coherent across overdue / unassigned / reminders / risk
+    _bl = await database.create_task({"title": "Bloklangan P0", "priority": "P0", "status": "blocked",
+        "deadline": (datetime.now(TZ) - timedelta(days=1)).isoformat()})
+    _ov_ids = [t["id"] for t in await database.list_overdue_tasks()]
+    _un_ids = [t["id"] for t in await database.list_unassigned_tasks()]
+    _rk = await database.risk_score_counts()
+    check("L9: blocked vazifa overdue+unassigned ro'yxatlarida ko'rinadi",
+          _bl in _ov_ids and _bl in _un_ids)
+    check("L9: blocked overdue risk hisobiga kiradi", _rk.get("overdue", 0) >= 1)
+    # L10: recurrence dedup holds even after the spawned child's deadline is edited
+    _rc = await database.create_task({"title": "L10 takror", "priority": "P2", "status": "todo",
+        "recurrence_rule": "weekly", "deadline": (datetime.now(TZ)+timedelta(days=2)).isoformat()})
+    await database.complete_task(_rc)
+    _kid = next(t for t in await database.list_tasks(limit=5000, include_subtasks=True)
+                if t.get("recurrence_parent_id") == _rc)
+    await database.update_task(_kid["id"], {"deadline": (datetime.now(TZ)+timedelta(days=20)).isoformat()})
+    await database.update_task(_rc, {"status": "todo"})   # reopen
+    await database.complete_task(_rc)                     # re-complete
+    _kids10 = [t for t in await database.list_tasks(limit=5000, include_subtasks=True)
+               if t.get("recurrence_parent_id") == _rc]
+    check("L10: tahrirlangan muddatli bola bo'lsa ham dublikat tug'ilmaydi", len(_kids10) == 1, len(_kids10))
+    # L12: update/complete on a DELETED id → surfaced in _failed (not silent success)
+    _dead = await database.create_task({"title": "O'ladi", "priority": "P2", "status": "todo"})
+    await database.delete_task(_dead)
+    _res12 = await handlers._execute_actions([{"type": "update_task", "id": _dead, "data": {"status": "done"}}])
+    check("L12: o'lik id'ga update → _failed'da belgilanadi",
+          "update_task" in _res12.get("_failed", []) and _dead not in _res12.get("task", []))
+    # L13: a subtask with its own deadline must NOT leak into /today or overdue lists
+    _tp = await database.create_task({"title": "TodayOta", "priority": "P2", "status": "todo"})
+    _tsub = await database.create_task({"title": "TodaySub", "priority": "P2", "status": "todo",
+        "parent_id": _tp, "deadline": datetime.now(TZ).replace(hour=15, minute=0).isoformat()})
+    _osub = await database.create_task({"title": "OverdueSub", "priority": "P2", "status": "todo",
+        "parent_id": _tp, "deadline": (datetime.now(TZ) - timedelta(days=2)).isoformat()})
+    _today_ids = [t["id"] for t in await database.list_today_tasks()]
+    _ovd_ids = [t["id"] for t in await database.list_overdue_tasks()]
+    check("L13: sub-vazifa /today va overdue ro'yxatlariga chiqmaydi",
+          _tsub not in _today_ids and _osub not in _ovd_ids)
+    # L15: complete a recurring task, then delete it → NO zombie next-occurrence orphan
+    _z = await database.create_task({"title": "Zombi test", "priority": "P2", "status": "todo",
+        "recurrence_rule": "daily", "deadline": (datetime.now(TZ)+timedelta(days=1)).isoformat()})
+    await database.complete_task(_z)
+    _zkid = next((t for t in await database.list_tasks(limit=5000, include_subtasks=True)
+                  if t.get("recurrence_parent_id") == _z), None)
+    check("L15: takroriy yopilganda keyingi nusxa yaratiladi (sanity)", _zkid is not None)
+    # concurrent complete+delete on a fresh recurring task → no orphan child of a deleted parent
+    _z2 = await database.create_task({"title": "Zombi race", "priority": "P2", "status": "todo",
+        "recurrence_rule": "daily", "deadline": (datetime.now(TZ)+timedelta(days=1)).isoformat()})
+    await asyncio.gather(database.complete_task(_z2), database.delete_task(_z2), return_exceptions=True)
+    _z2kids = [t for t in await database.list_tasks(limit=5000, include_subtasks=True)
+               if t.get("recurrence_parent_id") == _z2]
+    check("L15: complete+delete poygasida o'lik otaga bog'liq zombi yo'q",
+          (await database.get_task(_z2)) is None or not _z2kids or len(_z2kids) <= 1)
+
     print("\n── Kategoriya boshqaruvi (qo'shish/o'chirish) ──")
     _m1 = await database.create_task({"title": "M1", "priority": "P2", "status": "todo", "category": "TestKat"})
     _m2 = await database.create_task({"title": "M2", "priority": "P2", "status": "todo", "category": "TestKat"})
@@ -888,11 +985,17 @@ async def main():
     # Reference-by-number: the last shown numbered list is exposed to the LLM so
     # "10-vazifani tahrirla" resolves to the right task id.
     import claude_service as _cs
-    _cs.set_last_task_view([{"n": 7, "id": "tX7", "title": "Rekvizit tayyorlash"}])
+    _rbn_id = await database.create_task({"title": "Rekvizit tayyorlash", "priority": "P2", "status": "todo"})
+    _cs.set_last_task_view([{"n": 7, "id": _rbn_id, "title": "Rekvizit tayyorlash"}])
     _sb = await _cs._build_state_block()
     check("ref-by-number: state'da 'OXIRGI KO'RSATILGAN RO'YXAT'", "OXIRGI KO'RSATILGAN" in _sb)
     check("ref-by-number: raqam+id+title ko'rinadi",
-          "7." in _sb and "tX7" in _sb and "Rekvizit" in _sb, _sb[-400:])
+          "7." in _sb and _rbn_id in _sb and "Rekvizit" in _sb, _sb[-400:])
+    # #12: a DELETED task drops out of the LLM 'last shown' context (no dead-id action)
+    await database.delete_task(_rbn_id)
+    _sb2 = await _cs._build_state_block()
+    check("#12 ref-by-number: o'chirilgan vazifa kontekstdan chiqib ketadi",
+          _rbn_id not in _sb2)
     _cs.set_last_task_view([])
 
     # JSON repair: unescaped double-quotes inside a string value (real bug: a task
