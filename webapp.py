@@ -112,7 +112,7 @@ async def auth_middleware(request: web.Request, handler):
         logger.info("webapp FORBIDDEN %s uid=%s (principal=%s)",
                     path, user.get("id"), config.PRINCIPAL_USER_ID)
         return web.json_response({"error": "forbidden"}, status=403)
-    logger.info("webapp OK %s uid=%s", path, user.get("id"))
+    logger.debug("webapp OK %s uid=%s", path, user.get("id"))  # debug: don't flood logs/disk
     request["user"] = user
     return await handler(request)
 
