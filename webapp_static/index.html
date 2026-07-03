@@ -47,6 +47,10 @@
   .chip.violet{background:var(--brand-soft);color:var(--brand-d)}
   .chip.red{background:#fbe6e6;color:var(--red)}.chip.amber{background:#fdf1dd;color:#9a6800}
   .chip.gray{background:#f0f0f5;color:var(--muted)}
+  .chip.prog{background:#e7f0ff;color:#1e5aa8}.chip.block{background:#fdeceb;color:#c0392b}
+  .trow.sub{margin-left:24px;position:relative}
+  .trow.sub::before{content:"";position:absolute;left:-14px;top:-6px;height:calc(50% + 6px);width:10px;
+    border-left:1.5px solid #d5d5e2;border-bottom:1.5px solid #d5d5e2;border-radius:0 0 0 6px}
   .rowbtns{display:flex;gap:7px;margin-top:10px}
   .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:#f2f1f8;color:var(--text)}
   .btn.pri{background:var(--brand);color:#fff}
@@ -122,6 +126,7 @@ let VIEW="dash", META={categories:[],contacts:[]};
 // embedding JSON in an attribute breaks on the apostrophes that fill Uzbek text (o', g').
 const CACHE={tasks:{},meetings:{},notes:{},reminders:{}};
 const PRIO={P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
+const STAT={in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor",todo:""};
 const PCLS={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
 const PCOL={P0:"var(--red)",P1:"var(--amber)",P2:"var(--brand)",P3:"#b7b7c8"};
 
@@ -179,35 +184,62 @@ async function renderDash(box){
     <div class="qcard" onclick="go('insights')"><i class="ti ti-chart-bar"></i><div>Tahlil</div></div></div>`;
   box.innerHTML=h;
 }
-function taskRow(t){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
-  return `<div class="trow ${done?'done':''}" style="border-left-color:${col}">
+function taskRow(t,sub){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
+  const sc=t.status==="in_progress"?'<span class="chip prog">Jarayonda</span> '
+          :t.status==="blocked"?'<span class="chip block">Bloklangan</span> '
+          :t.status==="cancelled"?'<span class="chip gray">Bekor</span> ':'';
+  const meta=(t.category||"")+(t.assignee?(t.category?" · ":"")+t.assignee:"");
+  return `<div class="trow ${done?'done':''} ${sub?'sub':''}" style="border-left-color:${col}">
     <div class="cbox ${done?'done':''}" onclick="taskDone('${t.id}',event)">${done?'<i class="ti ti-check"></i>':''}</div>
     <div class="t" onclick="openTask('${t.id}')">
-      <div class="ti-title">${t.parent_id?'↳ ':''}${esc(t.title)}</div>
-      <div class="ti-sub">${esc(t.category||PRIO[t.priority]||"")}${t.assignee?" · "+esc(t.assignee):""}</div></div>
+      <div class="ti-title">${esc(t.title)}</div>
+      <div class="ti-sub">${sc}${esc(meta)}</div></div>
     <div class="side">${t.deadline?fmt(t.deadline):""}</div></div>`}
 
 let TFILTER="active";
+const _pr=t=>({P0:0,P1:1,P2:2,P3:3}[t.priority]??2);
+const _byPrioDl=(a,b)=>_pr(a)-_pr(b)||(a.deadline||"9999").localeCompare(b.deadline||"9999");
 async function renderTasks(box){
-  const d=await api("/tasks?status="+TFILTER);let list=d.tasks||[];
+  const d=await api("/tasks?status="+TFILTER);const list=d.tasks||[];
   list.forEach(x=>CACHE.tasks[x.id]=x);
-  list.sort((a,b)=>(a.priority||"P2").localeCompare(b.priority||"P2"));
+  // Ota vazifalar ustuvorlik+muddat bo'yicha; har birining sub-vazifalari darhol
+  // ostida (guruhlangan, chiziq bilan). Otasi bu ko'rinishда bo'lmagan sub-vazifalar
+  // (masalan ota bajarilган) oxirида alohida ko'rsatiladi.
+  const parents=list.filter(t=>!t.parent_id).sort(_byPrioDl);
+  const subs={};
+  list.filter(t=>t.parent_id).forEach(s=>{(subs[s.parent_id]=subs[s.parent_id]||[]).push(s);});
+  Object.values(subs).forEach(a=>a.sort(_byPrioDl));
+  let rows="";
+  parents.forEach(p=>{rows+=taskRow(p);(subs[p.id]||[]).forEach(s=>{rows+=taskRow(s,true);});delete subs[p.id];});
+  const orphans=Object.values(subs).flat().sort(_byPrioDl);
+  if(orphans.length){rows+='<div class="sec" style="margin-top:12px"><h2 style="font-size:13px;color:var(--faint)">Sub-vazifalar (ota boshqa ro\'yxatда)</h2></div>'+orphans.map(s=>taskRow(s,true)).join("");}
   const chip=(k,l)=>`<button class="btn ${TFILTER===k?'pri':''}" onclick="setTF('${k}')">${l}</button>`;
   box.innerHTML=hdr("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
-    (list.length?list.map(taskRow).join(""):emptyBox("checklist","Vazifa yo'q"));
+    (list.length?rows:emptyBox("checklist","Vazifa yo'q"));
 }
 function setTF(k){TFILTER=k;render("tasks")}
 
+function _isToday(ms){const d=new Date(ms),n=new Date();return d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate();}
+function _mcard(m,dim){const t=new Date(m.datetime_start).getTime(),now=Date.now();
+  const badge=m.completed_at?'<span class="chip" style="background:#e7f6ee;color:#1e7d4f">Bo\'ldi</span> '
+             :(t<now?'<span class="chip gray">O\'tgan</span> ':(_isToday(t)?'<span class="chip prog">Bugun</span> ':''));
+  return `<div class="card" style="${dim?'opacity:.62':''}">
+    <div style="font-size:15px;font-weight:500">${badge}${esc(m.title)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
+    ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}
+    <div class="rowbtns">${m.completed_at?'':`<button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>`}
+      <button class="btn" onclick="openMeeting('${m.id}')"><i class="ti ti-edit"></i></button>
+      <button class="btn dang" onclick="mCancel('${m.id}')">Bekor</button></div></div>`;}
 async function renderMeetings(box){
   const d=await api("/meetings");const list=d.meetings||[];
   list.forEach(x=>CACHE.meetings[x.id]=x);
-  box.innerHTML=hdr("Uchrashuvlar","")+(list.length?list.map(m=>`<div class="card">
-    <div style="font-size:15px;font-weight:500">${esc(m.title)}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
-    ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}
-    <div class="rowbtns"><button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>
-      <button class="btn" onclick="openMeeting('${m.id}')"><i class="ti ti-edit"></i></button>
-      <button class="btn dang" onclick="mCancel('${m.id}')">Bekor</button></div></div>`).join(""):emptyBox("calendar-off","Uchrashuv yo'q"));
+  const now=Date.now(),up=[],past=[];
+  list.forEach(m=>{const t=new Date(m.datetime_start).getTime();((m.completed_at||t<now)?past:up).push(m);});
+  up.sort((a,b)=>new Date(a.datetime_start)-new Date(b.datetime_start));   // kelgusi: yaqinи birinchi
+  past.sort((a,b)=>new Date(b.datetime_start)-new Date(a.datetime_start)); // o'tган: eng yangisi birinchi
+  let html=up.map(m=>_mcard(m,false)).join("");
+  if(past.length)html+='<div class="sec" style="margin-top:14px"><h2 style="font-size:13px;color:var(--faint)">O\'tgan</h2></div>'+past.map(m=>_mcard(m,true)).join("");
+  box.innerHTML=hdr("Uchrashuvlar","")+(list.length?html:emptyBox("calendar-off","Uchrashuv yo'q"));
 }
 async function renderNotes(box){
   const d=await api("/notes");const list=d.notes||[];

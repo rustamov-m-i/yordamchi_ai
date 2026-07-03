@@ -1657,6 +1657,11 @@ async def main():
         check("MiniApp: POST /api/tasks → 201 + DBда yaratildi",
               _r.status == 201 and bool(_body.get("id"))
               and (await database.get_task(_body["id"]))["title"] == "MiniApp orqali")
+        # Frontend rendering contract: /api/tasks item carries status + parent_id
+        # (row status badge + subtask grouping depend on these).
+        _tk = (await (await _client.get("/api/tasks?status=all", headers=_H)).json())["tasks"][0]
+        check("MiniApp: task javobiда status + parent_id maydonlari bor",
+              "status" in _tk and "parent_id" in _tk and "priority" in _tk)
         _r = await _client.post(f"/api/tasks/{_body['id']}/complete", headers=_H)
         check("MiniApp: complete → done", _r.status == 200
               and (await database.get_task(_body["id"]))["status"] == "done")
@@ -1730,6 +1735,8 @@ async def main():
             "participants": ["Karimov", "Aziz"], "location_or_link": "Zoom"})).json())["id"]
         _ml = (await (await _client.get("/api/meetings", headers=_H)).json())["meetings"]
         check("Full CRUD: uchrashuv create+list", any(m["id"] == _mid for m in _ml))
+        check("MiniApp: meeting javobiда completed_at + datetime_start (o'tgan/bo'ldi ajratish)",
+              all(k in _ml[0] for k in ("completed_at", "datetime_start")))
         _r = await _client.patch(f"/api/meetings/{_mid}", headers=_H, json={"location_or_link": "Ofis 3-qavat"})
         check("Full CRUD: uchrashuv PATCH", _r.status == 200
               and (await database.get_meeting(_mid))["location_or_link"] == "Ofis 3-qavat")
