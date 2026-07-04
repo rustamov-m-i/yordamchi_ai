@@ -9,8 +9,10 @@
   :root{
     --brand:#6C5CE7; --brand-d:#5a4fd0; --brand-soft:#ECE9FB;
     --bg:#F5F4FB; --card:#fff; --text:#15152b; --muted:#6b6b85; --faint:#9a9ab0;
-    --line:#eceaf5; --green:#1E9E75; --amber:#E8A317; --red:#d64545; --blue:#2f7ae5;
+    --soft:#f2f1f8; --line:#eceaf5; --green:#1E9E75; --amber:#E8A317; --red:#d64545; --blue:#2f7ae5;
   }
+@media (prefers-color-scheme:dark){:root:not(.tglight){--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#70707f;--line:#2f2f3b;--soft:#2e2e3a;--brand-soft:#2b2542;--brand-d:#b3a9f0;}}
+html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#70707f;--line:#2f2f3b;--soft:#2e2e3a;--brand-soft:#2b2542;--brand-d:#b3a9f0;}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        background:var(--bg);color:var(--text);font-size:16px;padding-bottom:92px}
@@ -34,7 +36,7 @@
   .sec a{font-size:13px;color:var(--brand)}
   .trow{display:flex;align-items:center;gap:11px;background:var(--card);border-left:3px solid var(--brand);
         border-radius:13px;padding:12px 13px;margin-bottom:9px}
-  .cbox{width:22px;height:22px;border-radius:7px;border:2px solid #d9d9e6;flex:none;display:flex;
+  .cbox{width:22px;height:22px;border-radius:7px;border:2px solid var(--line);flex:none;display:flex;
         align-items:center;justify-content:center;color:#fff;font-size:14px;background:transparent}
   .cbox.done{background:var(--green);border-color:var(--green)}
   .trow .t{flex:1;min-width:0}
@@ -46,15 +48,15 @@
   .chip{font-size:11px;padding:2px 9px;border-radius:20px;display:inline-block}
   .chip.violet{background:var(--brand-soft);color:var(--brand-d)}
   .chip.red{background:#fbe6e6;color:var(--red)}.chip.amber{background:#fdf1dd;color:#9a6800}
-  .chip.gray{background:#f0f0f5;color:var(--muted)}
+  .chip.gray{background:var(--soft);color:var(--muted)}
   .chip.prog{background:#e7f0ff;color:#1e5aa8}.chip.block{background:#fdeceb;color:#c0392b}
   .trow.sub{margin-bottom:6px}
-  .subgrp{margin:3px 0 9px 10px;border-left:2px solid #cfcbe8;padding-left:8px}
+  .subgrp{margin:3px 0 9px 10px;border-left:2px solid var(--line);padding-left:8px}
   .subgrp .trow:last-child{margin-bottom:0}
-  .cnt{font-size:10px;color:#8a8a9e;background:#f0eff7;padding:1px 7px;border-radius:20px;margin-left:6px}
-  .aibar{display:flex;align-items:center;gap:9px;background:#fff;border:1.5px solid var(--brand-soft);
+  .cnt{font-size:10px;color:var(--muted);background:var(--soft);padding:1px 7px;border-radius:20px;margin-left:6px}
+  .aibar{display:flex;align-items:center;gap:9px;background:var(--card);border:1.5px solid var(--brand-soft);
     border-radius:14px;padding:11px 13px;margin-bottom:14px;color:var(--brand-d);font-size:13px;box-shadow:0 1px 4px rgba(108,92,231,.1)}
-  .aibar i{color:var(--brand);font-size:18px}.aibar span{color:#8a8a9e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .aibar i{color:var(--brand);font-size:18px}.aibar span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ov{position:fixed;inset:0;background:var(--bg);z-index:40;display:none;flex-direction:column}
   .ov.show{display:flex}
   .ov .ovh{display:flex;align-items:center;gap:10px;padding:14px 14px 10px;border-bottom:1px solid var(--line);background:var(--card)}
@@ -70,11 +72,11 @@
   .chatin button{border:none;background:var(--brand);color:#fff;width:42px;border-radius:50%;font-size:18px;flex:none}
   .srhint{color:var(--faint);text-align:center;padding:30px 20px;font-size:13px}
   .rowbtns{display:flex;gap:7px;margin-top:10px}
-  .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:#f2f1f8;color:var(--text)}
+  .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:var(--soft);color:var(--text)}
   .btn.pri{background:var(--brand);color:#fff}
   .btn.dang{background:transparent;color:var(--red)}
   .empty{text-align:center;color:var(--faint);padding:48px 20px}
-  .empty i{font-size:40px;display:block;margin-bottom:10px;color:#d5d5e5}
+  .empty i{font-size:40px;display:block;margin-bottom:10px;color:var(--line)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .qcard{background:var(--card);border-radius:16px;padding:14px;text-align:center}
   .qcard i{font-size:24px;color:var(--brand)}
@@ -84,7 +86,7 @@
        align-items:center;justify-content:center;border:none;box-shadow:0 6px 16px rgba(108,92,231,.45);z-index:8}
   nav{position:fixed;left:14px;right:14px;bottom:16px;height:58px;background:var(--card);
       border-radius:20px;display:flex;align-items:center;box-shadow:0 6px 20px rgba(60,50,120,.13);z-index:7}
-  nav button{flex:1;background:none;border:none;color:#b7b7c8;font-size:21px;padding:0}
+  nav button{flex:1;background:none;border:none;color:var(--faint);font-size:21px;padding:0}
   nav button.on{color:var(--brand)}
   nav .gap{flex:1}
   .mbg{position:fixed;inset:0;background:rgba(20,18,45,.5);display:none;z-index:20;align-items:flex-end}
@@ -152,6 +154,8 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
 <script>
 const tg=window.Telegram?.WebApp; if(tg){tg.ready();tg.expand();}
+function _applyTheme(){if(tg&&tg.colorScheme)document.documentElement.classList.toggle("tgdark",tg.colorScheme==="dark");}
+_applyTheme(); if(tg&&tg.onEvent)tg.onEvent("themeChanged",_applyTheme);
 const AUTH="tma "+(tg?.initData||"");
 let VIEW="dash", META={categories:[],contacts:[]};
 // Row items are cached by id so edit handlers pass only the (safe) id in onclick —
@@ -498,7 +502,7 @@ async function showLogin(){
   document.querySelector("nav").style.display="none";$("fab").style.display="none";
   const w=document.createElement("div");
   w.style.cssText="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;background:var(--bg);z-index:50";
-  w.innerHTML='<div style="width:64px;height:64px;border-radius:20px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:30px"><i class="ti ti-checkbox"></i></div><div style="font-size:22px;font-weight:600;color:#15152b">Yordamchi Pro</div><div style="font-size:14px;color:#6b6b85;max-width:260px">Davom etish uchun Telegram akkauntingiz bilan kiring</div><div id="tgwidget" style="min-height:48px"></div>';
+  w.innerHTML='<div style="width:64px;height:64px;border-radius:20px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:30px"><i class="ti ti-checkbox"></i></div><div style="font-size:22px;font-weight:600;color:var(--text)">Yordamchi Pro</div><div style="font-size:14px;color:var(--muted);max-width:260px">Davom etish uchun Telegram akkauntingiz bilan kiring</div><div id="tgwidget" style="min-height:48px"></div>';
   document.body.appendChild(w);
   if(!bot){document.getElementById("tgwidget").innerHTML='<div style="color:var(--red);font-size:13px">Bot sozlanmagan (BOT_USERNAME)</div>';return;}
   const s=document.createElement("script");s.async=true;s.src="https://telegram.org/js/telegram-widget.js?22";
