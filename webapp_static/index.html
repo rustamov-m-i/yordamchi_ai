@@ -125,6 +125,10 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
 <div class="screen" id="v-insights"></div>
 <div class="screen" id="v-profile"></div>
 <div class="screen" id="v-protocols"></div>
+<div class="screen" id="v-team"></div>
+<div class="screen" id="v-risks"></div>
+<div class="screen" id="v-categories"></div>
+<div class="screen" id="v-calendar"></div>
 
 <button class="fab" id="fab"><i class="ti ti-plus"></i></button>
 <nav>
@@ -187,7 +191,7 @@ const el=id=>$("v-"+id);
 function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div><button class="icobtn" onclick="render(VIEW)" title="Yangilash"><i class="ti ti-refresh"></i></button></div>`}
 function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
-const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols"};
+const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols",team:"team",risks:"risks",categories:"categories",calendar:"calendar"};
 function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on"));
   el(_VIEWS[v]).classList.add("on");
   document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
@@ -205,6 +209,10 @@ async function render(v){
     else if(v==="insights")await renderInsights(box);
     else if(v==="profile")await renderProfile(box);
     else if(v==="protocols")await renderProtocols(box);
+    else if(v==="team")await renderTeam(box);
+    else if(v==="risks")await renderRisks(box);
+    else if(v==="categories")await renderCategories(box);
+    else if(v==="calendar")await renderCalendar(box);
   }catch(e){box.innerHTML=hdr("Xatolik","")+emptyBox("alert-triangle",e.message)}
 }
 
@@ -334,6 +342,10 @@ async function renderProfile(box){
       <div style="flex:1"><div style="font-size:26px;font-weight:600">${c.done||0}</div><div style="font-size:12px;opacity:.85">Bajarilgan</div></div></div></div>
     <div class="card menu">
       <div class="mi" onclick="go('insights')"><i class="ti ti-chart-bar"></i>Statistika<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('team')"><i class="ti ti-users"></i>Jamoa yuklamasi<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('risks')"><i class="ti ti-alert-triangle"></i>Risklar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('calendar')"><i class="ti ti-calendar-month"></i>Kalendar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('categories')"><i class="ti ti-folder"></i>Kategoriyalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnomalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Excel eksport (vazifalar)<i class="ti ti-download ch"></i></div>
       <div class="mi" onclick="go('notes')"><i class="ti ti-note"></i>Qaydlar<i class="ti ti-chevron-right ch"></i></div>
@@ -363,6 +375,48 @@ async function download(path,fallback){
     setTimeout(()=>URL.revokeObjectURL(url),1500);flash("Yuklab olindi ✓");
   }catch(e){flash("⚠️ "+e.message);}
 }
+
+async function renderTeam(box){
+  const t=(await api("/team")).team||[];const mx=Math.max(1,...t.map(x=>x.active||0));
+  box.innerHTML=hdr("Jamoa yuklamasi","")+(t.length?t.map(p=>`<div class="card">
+    <div style="display:flex;justify-content:space-between"><div style="font-size:15px;font-weight:500">${esc(p.name)}</div><div style="font-size:14px;color:var(--brand);font-weight:600">${p.active||0}</div></div>
+    <div style="height:6px;background:var(--soft);border-radius:6px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${Math.round((p.active||0)/mx*100)}%;background:var(--brand)"></div></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:7px">${p.urgent?`<span class="chip block">${p.urgent} shoshilinch</span> `:''}${p.overdue?`<span class="chip red">${p.overdue} kechikkan</span> `:''}${p.next_deadline?'<i class="ti ti-clock" style="vertical-align:-2px"></i> '+fmt(p.next_deadline):''}</div></div>`).join(""):emptyBox("users","Ijrochi topilmadi"));
+}
+async function renderRisks(box){
+  const d=await api("/risks");const c=d.counts||{};
+  const card=(n,l,col)=>`<div class="card" style="text-align:center;padding:14px 8px"><div style="font-size:26px;font-weight:600;color:${col}">${n||0}</div><div style="font-size:12px;color:var(--muted)">${l}</div></div>`;
+  let h=hdr("Risklar","")+`<div class="grid2">${card(c.overdue,"Kechikkan","var(--red)")}${card(c.urgent_open,"Shoshilinch","#e67e22")}${card(c.unassigned,"Ijrochisiz","var(--brand)")}${card(c.no_deadline,"Muddatsiz","var(--muted)")}</div>`;
+  const ov=d.overdue||[];
+  if(ov.length){h+='<div class="sec" style="margin-top:14px"><h2>Kechikkan vazifalar</h2></div>';ov.forEach(x=>{CACHE.tasks[x.id]=x;h+=taskRow(x);});}
+  box.innerHTML=h;
+}
+async function renderCategories(box){
+  const list=(await api("/categories")).categories||[];CACHE.cats=list;
+  let h=hdr("Kategoriyalar","")+`<div class="card" style="display:flex;gap:8px"><input id="f_newcat" placeholder="Yangi kategoriya" style="flex:1"><button class="btn pri" onclick="addCat()">Qo'shish</button></div>`;
+  h+= list.length? list.map((c,i)=>`<div class="card" style="display:flex;align-items:center;justify-content:space-between">
+    <div><span style="font-size:15px">${esc(c.icon||"")} ${esc(c.name)}</span> <span class="cnt">${c.count||0}</span></div>
+    <button class="btn dang" onclick="delCat(${i})"><i class="ti ti-trash"></i></button></div>`).join("") : emptyBox("folder","Kategoriya yo'q");
+  box.innerHTML=h;
+}
+async function addCat(){const n=val("f_newcat");if(!n)return flash("Nom kerak");
+  try{await api("/categories",{method:"POST",body:JSON.stringify({name:n})});flash("Qo'shildi");render("categories");}catch(e){flash("⚠️ "+e.message);}}
+function delCat(i){const c=(CACHE.cats||[])[i];if(!c)return;
+  const run=async()=>{try{await api("/categories?name="+encodeURIComponent(c.name),{method:"DELETE"});flash("O'chirildi");render("categories");}catch(e){flash("⚠️ "+e.message);}};
+  if(tg?.showConfirm)tg.showConfirm("Ro'yxatдан o'chirilsinmi?",ok=>{if(ok)run()});else run();}
+let _calYM=null;
+async function renderCalendar(box){
+  const now=new Date();if(!_calYM)_calYM={y:now.getFullYear(),m:now.getMonth()+1};
+  const d=await api(`/calendar?year=${_calYM.y}&month=${_calYM.m}`);const list=d.meetings||[];
+  const MON=["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"];
+  let h=`<div class="head"><button class="icobtn" onclick="calNav(-1)"><i class="ti ti-chevron-left"></i></button>
+    <h1 style="font-size:18px">${MON[_calYM.m-1]} ${_calYM.y}</h1><button class="icobtn" onclick="calNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
+  const byDay={};list.forEach(m=>{const k=new Date(m.datetime_start).getDate();(byDay[k]=byDay[k]||[]).push(m);CACHE.meetings[m.id]=m;});
+  const days=Object.keys(byDay).map(Number).sort((a,b)=>a-b);
+  h+= days.length? days.map(k=>`<div class="sec"><h2 style="font-size:14px">${k}-kun</h2></div>`+byDay[k].map(m=>`<div class="card" onclick="openMeeting('${m.id}')"><div style="font-size:14px;font-weight:500">${esc(m.title)}</div><div style="font-size:12px;color:var(--muted);margin-top:3px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?" · "+esc(m.location_or_link):""}</div></div>`).join("")).join("") : emptyBox("calendar-off","Bu oyда uchrashuv yo'q");
+  box.innerHTML=h;
+}
+function calNav(delta){_calYM.m+=delta;if(_calYM.m<1){_calYM.m=12;_calYM.y--;}if(_calYM.m>12){_calYM.m=1;_calYM.y++;}render("calendar");}
 
 function go(v){switchView(v)}
 

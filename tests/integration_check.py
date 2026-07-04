@@ -1755,6 +1755,29 @@ async def main():
         check("Protocols/Export: authsiz → 401",
               (await _client.get("/api/protocols")).status == 401
               and (await _client.get("/api/export/tasks")).status == 401)
+        # ── Jamoa / Risklar / Kategoriyalar / Kalendar ──
+        await database.create_task({"title": "Yuklama ish", "priority": "P0", "status": "todo", "assignee": "TeamX",
+            "deadline": (datetime.now(TZ) - timedelta(days=1)).isoformat()})
+        _tm = await (await _client.get("/api/team", headers=_H)).json()
+        check("Team: yuklama ro'yxati (name/active)",
+              any(p.get("name") == "TeamX" and "active" in p for p in _tm.get("team", [])))
+        _rk = await (await _client.get("/api/risks", headers=_H)).json()
+        check("Risks: counts + overdue ro'yxati",
+              all(k in _rk.get("counts", {}) for k in ("overdue", "urgent_open", "unassigned"))
+              and isinstance(_rk.get("overdue"), list))
+        _cc0 = await _client.post("/api/categories", headers=_H, json={"name": "WebKat"})
+        _cl = await (await _client.get("/api/categories", headers=_H)).json()
+        check("Categories: create + list", _cc0.status == 201
+              and any(c.get("name") == "WebKat" for c in _cl.get("categories", [])))
+        _cd = await _client.delete("/api/categories?name=WebKat", headers=_H)
+        check("Categories: delete", _cd.status == 200)
+        _now = datetime.now(TZ)
+        _cal = await (await _client.get(f"/api/calendar?year={_now.year}&month={_now.month}", headers=_H)).json()
+        check("Calendar: oylik uchrashuvlar (meetings ro'yxati)", "meetings" in _cal and "year" in _cal)
+        check("Team/Risks/Cal: authsiz → 401",
+              (await _client.get("/api/team")).status == 401
+              and (await _client.get("/api/risks")).status == 401
+              and (await _client.get("/api/calendar")).status == 401)
 
         # S1: non-scalar value for a scalar field → clean 400, NOT a raw 500
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "x", "priority": {"a": 1}})

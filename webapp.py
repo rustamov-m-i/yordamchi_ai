@@ -599,6 +599,51 @@ async def export_tasks(request: web.Request) -> web.Response:
         "Content-Disposition": f'attachment; filename="{cap["name"]}"'})
 
 
+async def team(request: web.Request) -> web.Response:
+    """Per-assignee workload (active/urgent/overdue) — sorted by active desc."""
+    m = await database.assignee_load_map()
+    rows = sorted(m.values(), key=lambda x: (-x.get("active", 0), x.get("name", "")))
+    return web.json_response({"team": rows})
+
+
+async def risks(request: web.Request) -> web.Response:
+    counts = await database.risk_score_counts()
+    overdue = await database.list_overdue_tasks()
+    unassigned = await database.list_unassigned_tasks(limit=50)
+    return web.json_response({"counts": counts, "overdue": overdue, "unassigned": unassigned})
+
+
+async def categories_list(request: web.Request) -> web.Response:
+    return web.json_response({"categories": await database.list_categories()})
+
+
+async def category_create(request: web.Request) -> web.Response:
+    name = (( await _json_body(request)).get("name") or "").strip()
+    if not name:
+        return web.json_response({"error": "name required"}, status=400)
+    await database.create_category(name)
+    return web.json_response({"ok": True}, status=201)
+
+
+async def category_delete(request: web.Request) -> web.Response:
+    name = (request.query.get("name") or "").strip()
+    if not name:
+        return web.json_response({"error": "name required"}, status=400)
+    await database.delete_category_record(name)   # metadata row only; tasks keep working
+    return web.json_response({"ok": True})
+
+
+async def calendar(request: web.Request) -> web.Response:
+    now = database.parse_iso_dt(database.now_iso())
+    try:
+        year = int(request.query.get("year") or now.year)
+        month = int(request.query.get("month") or now.month)
+    except ValueError:
+        year, month = now.year, now.month
+    rows = await database.list_meetings_in_month(year, month)
+    return web.json_response({"year": year, "month": month, "meetings": rows})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
@@ -654,6 +699,12 @@ def create_app() -> web.Application:
         web.get("/api/protocols", protocols_list),
         web.get("/api/protocols/{id}/download", protocol_download),
         web.get("/api/export/tasks", export_tasks),
+        web.get("/api/team", team),
+        web.get("/api/risks", risks),
+        web.get("/api/categories", categories_list),
+        web.post("/api/categories", category_create),
+        web.delete("/api/categories", category_delete),
+        web.get("/api/calendar", calendar),
         web.get("/api/tasks", tasks_list),
         web.post("/api/tasks", task_create),
         web.patch("/api/tasks/{id}", task_update),
