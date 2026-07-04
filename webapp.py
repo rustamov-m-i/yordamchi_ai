@@ -21,7 +21,7 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl, quote, urlencode
+from urllib.parse import parse_qsl, urlencode
 
 import aiohttp
 from aiohttp import web
@@ -1142,19 +1142,18 @@ async def auth_tg_callback(request: web.Request) -> web.Response:
                    config.WEBAPP_OAUTH_CLIENT_ID, len(_sec),
                    hashlib.sha256(_sec.encode()).hexdigest()[:8] if _sec else "-",
                    oauth_redirect_uri())
-    # RFC 6749 §2.3.1: url-encode client_id/secret before the Basic credential.
-    creds = base64.b64encode(
-        f"{quote(config.WEBAPP_OAUTH_CLIENT_ID, safe='')}:{quote(_sec, safe='')}".encode()).decode()
+    # client_secret_post (discovery'da e'lon qilingan) — Basic-header kodlash
+    # nozikliklarini chetlab o'tadi; secret to'g'ridan-to'g'ri form body'da ketadi.
     try:
         async with aiohttp.ClientSession() as sess:
             async with sess.post(
                 _OAUTH_TOKEN_URL,
-                headers={"Authorization": "Basic " + creds},
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
                     "redirect_uri": oauth_redirect_uri(),
                     "client_id": config.WEBAPP_OAUTH_CLIENT_ID,
+                    "client_secret": _sec,
                     "code_verifier": stash["v"],
                 },
                 timeout=aiohttp.ClientTimeout(total=15),
