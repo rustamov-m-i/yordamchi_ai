@@ -580,6 +580,10 @@ mbg.addEventListener("click",e=>{if(e.target===mbg)closeM()});
 function openM(html){$("modal").innerHTML=html;mbg.classList.add("show")}
 function opts(list,sel){return list.map(v=>`<option ${v===sel?"selected":""}>${esc(v)}</option>`).join("")}
 function val(id){return ($(id)?.value||"").trim()}
+// Teglarni har qanday shakldan ("a, b" satri) — massiv, JSON-satr yoki bo'sh — himoyalab chiqaradi.
+function _tagsStr(g){if(Array.isArray(g))return g.join(", ");
+  if(typeof g==="string"){try{const p=JSON.parse(g);if(Array.isArray(p))return p.join(", ");}catch(e){}return g;}
+  return "";}
 
 function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":(t.parent_id?"Yangi sub-vazifa":"Yangi vazifa")}</h3>
   <input type="hidden" id="f_parent" value="${esc(t.parent_id||"")}">
@@ -591,7 +595,7 @@ function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":(t.parent_id?"Y
     <div style="flex:1"><label>Holat</label><select id="f_status">${Object.keys(STATSEL).map(s=>`<option value="${s}" ${(t.status||"todo")===s?"selected":""}>${STATSEL[s]}</option>`).join("")}</select></div></div>
   <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}"><datalist id="dl_cat">${opts(META.categories)}</datalist>
   <div style="display:flex;gap:10px"><div style="flex:1"><label>Takroriylik</label><select id="f_rec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(t.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select></div>
-    <div style="flex:1"><label>Teglar (vergul)</label><input id="f_tags" value="${esc((t.tags||[]).join(", "))}"></div></div>
+    <div style="flex:1"><label>Teglar (vergul)</label><input id="f_tags" value="${esc(_tagsStr(t.tags))}"></div></div>
   ${t.id?`<button class="btn" style="margin-top:12px;width:100%" onclick="closeM();openTask({parent_id:'${t.id}'})"><i class="ti ti-subtask"></i> Sub-vazifa qo'shish</button>`:""}
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button>${t.id?`<button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
 const openTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));

@@ -1682,6 +1682,21 @@ async def main():
         check("/api/me authsiz → 401", (await _client.get("/api/me")).status == 401)
         check("Begona sessiya → 403",
               (await _client.get("/api/tasks", headers={"Cookie": f"ya_session={_wa.make_session(999999)}"})).status == 403)
+        # ── Bug: dashboard 'Jamoa nazorati' → openTask → taskForm crash ──
+        # list_stale_delegations qaytargan vazifada `tags` XOM JSON-satr bo'lib qolgan
+        # edi (boshqa hamma funksiya _row_to_task orqali list qaytaradi). Mini-app
+        # taskForm `tags.join(", ")` chaqiradi → TypeError. Ildizni tekshiramiz:
+        _stid = await database.create_task({"title": "Kechikkan topshiriq", "priority": "P1",
+            "status": "todo", "assignee": "Bekzod Karimov", "tags": ["shoshilinch", "q3"]})
+        import aiosqlite as _sq6
+        _old = (datetime.now(TZ) - timedelta(days=5)).isoformat()
+        async with _sq6.connect(config.DATABASE_PATH) as _db6:
+            await _db6.execute("UPDATE tasks SET created_at=? WHERE id=?", (_old, _stid)); await _db6.commit()
+        _stale = await database.list_stale_delegations(min_age_days=3, limit=20)
+        _st_row = next((t for t in _stale if t["id"] == _stid), None)
+        check("Bug: list_stale_delegations → tags LIST (JSON-satr emas)",
+              _st_row is not None and isinstance(_st_row.get("tags"), list)
+              and _st_row["tags"] == ["shoshilinch", "q3"] and "age_days" in _st_row)
         _r = await _client.get("/api/dashboard", headers=_H)
         _dj = await _r.json()
         check("MiniApp: /api/dashboard → progress+counts+today",
@@ -1696,6 +1711,14 @@ async def main():
               isinstance(_dj.get("priority"), list)
               and isinstance(_dj.get("team", {}).get("overloaded"), list)
               and isinstance(_dj.get("team", {}).get("stale"), list))
+        # Har bir vazifa-shaklidagi obyektда `tags` LIST bo'lishi shart (satr emas) —
+        # mini-app uni to'g'ridan-to'g'ri kesh qilib taskForm'да join() qiladi.
+        _task_lists = (_dj.get("priority") or []) + (_dj.get("today", {}).get("tasks") or []) + (_dj.get("team", {}).get("stale") or [])
+        check("MiniApp: dashboard vazifalarida tags LIST (crash oldini olish)",
+              len(_task_lists) > 0
+              and all(isinstance(t.get("tags", []), list) for t in _task_lists))
+        check("MiniApp: dashboard team.stale → kechikkan vazifa ko'rinadi (tags list)",
+              any(t["id"] == _stid and isinstance(t.get("tags"), list) for t in _dj.get("team", {}).get("stale", [])))
         _r = await _client.get("/api/insights", headers=_H)
         _ij = await _r.json()
         check("MiniApp: /api/insights → 7 kunlik bar + kategoriyalar",

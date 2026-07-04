@@ -1521,7 +1521,10 @@ async def list_stale_delegations(min_age_days: int = 3, limit: int = 20) -> list
                LIMIT ?""",
             (min_age_days, limit),
         )
-        return [dict(r) for r in await cur.fetchall()]
+        # _row_to_task (not raw dict) so JSON columns like `tags` come back as a
+        # list — consumers (mini-app task form) call tags.join() and a raw JSON
+        # string crashes them. Keeps the extra age_days column.
+        return [_row_to_task(r) for r in await cur.fetchall()]
 
 
 async def list_recurring_tasks(limit: int = 30) -> list[dict]:
