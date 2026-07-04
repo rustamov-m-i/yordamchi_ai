@@ -88,9 +88,17 @@ WEBAPP_PORT: int = _int("WEBAPP_PORT", required=False, default=8081)
 WEBAPP_URL: str = os.getenv("WEBAPP_URL", "").strip()
 # Bind host — keep 127.0.0.1 so only the local nginx reverse proxy can reach it.
 WEBAPP_HOST: str = os.getenv("WEBAPP_HOST", "127.0.0.1").strip()
-# Bot @username — set at startup from get_me(); the browser Login Widget needs it.
-# Overridable via env for the web layer when the bot process isn't the one serving.
+# Bot @username — set at startup from get_me(); the browser login screen shows it
+# as a fallback link. Overridable via env when the bot process isn't the one serving.
 BOT_USERNAME: str = os.getenv("WEBAPP_BOT_USERNAME", "").strip()
+# ── Browser login: Telegram OAuth 2.0 / OpenID Connect ──
+# The classic Login Widget is deprecated; browsers use the OIDC redirect flow at
+# oauth.telegram.org. client_id = bot id (numeric part of the token) unless BotFather
+# shows a different one; client_secret comes from BotFather → Bot Settings > Web Login.
+# Register the callback as a Redirect URI there: <WEBAPP_URL>/api/auth/tg/callback.
+WEBAPP_OAUTH_CLIENT_ID: str = os.getenv(
+    "WEBAPP_OAUTH_CLIENT_ID", "").strip() or (TELEGRAM_BOT_TOKEN.split(":")[0] if TELEGRAM_BOT_TOKEN else "")
+WEBAPP_OAUTH_CLIENT_SECRET: str = os.getenv("WEBAPP_OAUTH_CLIENT_SECRET", "").strip()
 # ⚠️ TEMPORARY DEV SWITCH — open browser access with NO authentication. When True,
 # every web request is treated as the principal, so ANYONE with the public URL sees
 # all data (tasks/meetings/protocols/contacts). Off by default. Only enable while

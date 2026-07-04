@@ -12,19 +12,28 @@ Design:
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import hmac
 import json
 import logging
+import secrets
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlencode
 
+import aiohttp
 from aiohttp import web
 
 import config
 import database
 import claude_service
+
+try:
+    import jwt  # PyJWT — verifies the RS256-signed OIDC id_token from Telegram
+except ImportError:  # pragma: no cover
+    jwt = None
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +148,79 @@ def check_session(token: str | None) -> int | None:
         return None
 
 
+# ── Browser login: Telegram OAuth 2.0 / OpenID Connect (classic widget deprecated) ──
+_OAUTH_AUTH_URL = "https://oauth.telegram.org/auth"
+_OAUTH_TOKEN_URL = "https://oauth.telegram.org/token"
+_OAUTH_JWKS_URL = "https://oauth.telegram.org/.well-known/jwks.json"
+_OAUTH_ISSUER = "https://oauth.telegram.org"
+_OAUTH_STATE_COOKIE = "ya_oauth"
+_OAUTH_STATE_TTL = 600  # 10 min to finish the round-trip
+
+
+def oauth_redirect_uri() -> str:
+    """The callback URL registered in BotFather (Bot Settings > Web Login →
+    Redirect URIs). Must match exactly what we send to the auth endpoint."""
+    return config.WEBAPP_URL.rstrip("/") + "/api/auth/tg/callback"
+
+
+def _oauth_pack(data: dict) -> str:
+    """Sign a short-lived {state, verifier} blob into a cookie value (no server-side
+    store needed) — same HMAC key family as the session cookie."""
+    body = base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+    exp = int(time.time()) + _OAUTH_STATE_TTL
+    payload = f"{body}.{exp}"
+    sig = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _oauth_unpack(token: str | None) -> dict | None:
+    if not token:
+        return None
+    try:
+        body, exp_s, sig = token.rsplit(".", 2)
+        payload = f"{body}.{exp_s}"
+    except ValueError:
+        return None
+    if not hmac.compare_digest(
+            hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest(), sig):
+        return None
+    try:
+        if time.time() > int(exp_s):
+            return None
+        return json.loads(base64.urlsafe_b64decode(body.encode()))
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
+def _verify_id_token(id_token: str) -> int | None:
+    """Verify the OIDC id_token's RS256 signature against Telegram's JWKS and its
+    iss/aud, then return the Telegram user id (blocking — run in an executor)."""
+    if not jwt:
+        logger.error("PyJWT not installed — cannot verify OIDC id_token")
+        return None
+    try:
+        signing_key = jwt.PyJWKClient(_OAUTH_JWKS_URL).get_signing_key_from_jwt(id_token)
+        claims = jwt.decode(
+            id_token, signing_key.key,
+            algorithms=["RS256", "ES256", "EdDSA", "ES256K"],
+            issuer=_OAUTH_ISSUER,
+            options={"verify_aud": False},  # aud may be numeric bot id; check below
+        )
+    except Exception as e:
+        logger.info("OIDC id_token verification failed: %s", e)
+        return None
+    aud = claims.get("aud")
+    cid = str(config.WEBAPP_OAUTH_CLIENT_ID)
+    if str(aud) != cid and cid not in (aud if isinstance(aud, list) else [aud]):
+        logger.info("OIDC aud mismatch: %r != %s", aud, cid)
+        return None
+    uid = claims.get("id", claims.get("sub"))
+    try:
+        return int(uid)
+    except (TypeError, ValueError):
+        return None
+
+
 @web.middleware
 async def noindex_middleware(request: web.Request, handler):
     """Tag every response noindex/nofollow so search engines never index the app
@@ -171,8 +253,10 @@ async def auth_middleware(request: web.Request, handler):
     """Gate every /api/* route behind a valid initData for the principal. Static
     files and the health check are public (they carry no data)."""
     path = request.path
-    # Public: health, the login endpoint itself, and the bot-username config (widget needs it).
-    if not path.startswith("/api/") or path in ("/api/health", "/api/auth/telegram", "/api/config"):
+    # Public: health, config, and the login endpoints (widget + OAuth start/callback).
+    if not path.startswith("/api/") or path in (
+            "/api/health", "/api/auth/telegram", "/api/config",
+            "/api/auth/tg/start", "/api/auth/tg/callback"):
         return await handler(request)
     # 1) Telegram Mini App initData (opened INSIDE Telegram).
     header = request.headers.get("Authorization", "")
@@ -986,8 +1070,12 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def app_config(request: web.Request) -> web.Response:
-    """Public: the bot username the Login Widget needs. Nothing sensitive."""
-    return web.json_response({"bot": getattr(config, "BOT_USERNAME", "")})
+    """Public: bot username (fallback link) + whether browser OAuth login is
+    configured, so the login screen can show the right button. Nothing sensitive."""
+    return web.json_response({
+        "bot": getattr(config, "BOT_USERNAME", ""),
+        "oauth": bool(config.WEBAPP_OAUTH_CLIENT_SECRET and config.WEBAPP_URL),
+    })
 
 
 async def auth_telegram(request: web.Request) -> web.Response:
@@ -1002,6 +1090,89 @@ async def auth_telegram(request: web.Request) -> web.Response:
     resp = web.json_response({"ok": True, "name": u.get("first_name")})
     resp.set_cookie(SESSION_COOKIE, make_session(int(u["id"])), max_age=_SESSION_TTL,
                     httponly=True, secure=True, samesite="Strict", path="/")
+    return resp
+
+
+async def auth_tg_start(request: web.Request) -> web.Response:
+    """Begin browser login via Telegram OAuth 2.0 / OpenID Connect. Generates PKCE +
+    state, stashes them in a short-lived signed cookie, and redirects the user to
+    Telegram's consent page. (Classic Login Widget is deprecated.)"""
+    if not config.WEBAPP_OAUTH_CLIENT_SECRET or not config.WEBAPP_URL:
+        return web.Response(
+            text="Login sozlanmagan: WEBAPP_OAUTH_CLIENT_SECRET va WEBAPP_URL kerak.",
+            status=503)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(24)
+    params = {
+        "client_id": config.WEBAPP_OAUTH_CLIENT_ID,
+        "redirect_uri": oauth_redirect_uri(),
+        "response_type": "code",
+        "scope": "openid",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    resp = web.HTTPFound(_OAUTH_AUTH_URL + "?" + urlencode(params))
+    # SameSite=Lax so the cookie survives the top-level redirect back from Telegram.
+    resp.set_cookie(_OAUTH_STATE_COOKIE, _oauth_pack({"s": state, "v": verifier}),
+                    max_age=_OAUTH_STATE_TTL, httponly=True, secure=True,
+                    samesite="Lax", path="/")
+    return resp
+
+
+async def auth_tg_callback(request: web.Request) -> web.Response:
+    """OAuth redirect target: verify state, exchange the code for an id_token, confirm
+    the Telegram user is the principal, then set the session cookie."""
+    def _fail(reason: str):
+        r = web.HTTPFound("/?login_error=" + reason)
+        r.del_cookie(_OAUTH_STATE_COOKIE, path="/")
+        return r
+
+    if request.query.get("error"):
+        return _fail(request.query.get("error", "denied"))
+    code = request.query.get("code")
+    state = request.query.get("state")
+    stash = _oauth_unpack(request.cookies.get(_OAUTH_STATE_COOKIE))
+    if not code or not stash or not hmac.compare_digest(stash.get("s", ""), state or ""):
+        return _fail("state")   # expired / CSRF
+    creds = base64.b64encode(
+        f"{config.WEBAPP_OAUTH_CLIENT_ID}:{config.WEBAPP_OAUTH_CLIENT_SECRET}".encode()).decode()
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                _OAUTH_TOKEN_URL,
+                headers={"Authorization": "Basic " + creds},
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": oauth_redirect_uri(),
+                    "client_id": config.WEBAPP_OAUTH_CLIENT_ID,
+                    "code_verifier": stash["v"],
+                },
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as r:
+                if r.status != 200:
+                    logger.info("OAuth token exchange failed: %s %s", r.status, await r.text())
+                    return _fail("token")
+                tok = await r.json()
+    except Exception:
+        logger.exception("OAuth token exchange error")
+        return _fail("token")
+    id_token = tok.get("id_token")
+    if not id_token:
+        return _fail("token")
+    # JWKS fetch + JWT verify are blocking (urllib) — keep the event loop free.
+    uid = await asyncio.get_event_loop().run_in_executor(None, _verify_id_token, id_token)
+    if uid is None:
+        return _fail("token")
+    if uid != int(config.PRINCIPAL_USER_ID):
+        return _fail("forbidden")
+    resp = web.HTTPFound("/")
+    resp.set_cookie(SESSION_COOKIE, make_session(uid), max_age=_SESSION_TTL,
+                    httponly=True, secure=True, samesite="Strict", path="/")
+    resp.del_cookie(_OAUTH_STATE_COOKIE, path="/")
     return resp
 
 
@@ -1034,6 +1205,8 @@ def create_app() -> web.Application:
         web.get("/api/health", health),
         web.get("/api/config", app_config),
         web.post("/api/auth/telegram", auth_telegram),
+        web.get("/api/auth/tg/start", auth_tg_start),
+        web.get("/api/auth/tg/callback", auth_tg_callback),
         web.post("/api/auth/logout", auth_logout),
         web.get("/api/me", me),
         web.get("/api/meta", meta),

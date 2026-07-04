@@ -1101,50 +1101,33 @@ function _chatDownload(d){const box=document.createElement("div");box.className=
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
-// ── Brauzer login (Telegram Login Widget) ──
-// "Telegram orqali kirish" tugmasi bosilganda Telegram onTGAuth(user)ni chaqiradi →
-// biz uni /api/auth/telegram'ga yuboramiz → backend HMAC'ni tekshiradi, egaligini
-// (PRINCIPAL_USER_ID) tasdiqlaydi va imzolangan HttpOnly session cookie o'rnatadi.
-// SHART: WEBAPP_BOT_USERNAME env o'rnatilishi va domen BotFather'да /setdomain bilan
-// ro'yxatdan o'tishi kerak — aks holda Telegram tugmani ko'rsatmaydi.
-window.onTGAuth=async(user)=>{
-  const btn=$("tglogin_btn");if(btn)btn.innerHTML='<span style="opacity:.7;font-size:14px">Kirilmoqda…</span>';
-  try{await api("/auth/telegram",{method:"POST",body:JSON.stringify(user)});location.reload();}
-  catch(e){
-    const forbidden=(e.message||"").includes("403")||(e.message||"").toLowerCase().includes("forbidden");
-    const msg=forbidden?"Bu hisob ruxsat etilmagan — faqat platforma egasi kira oladi."
-                       :"Kirish amalga oshmadi: "+e.message;
-    const el=$("tglogin_err");if(el){el.textContent=msg;el.style.display="block";}
-    if(btn)btn.innerHTML="";
-  }
-};
+// ── Brauzer login (Telegram OAuth 2.0 / OpenID Connect) ──
+// Klassik Login Widget Telegram tomonidan deprecated qilindi. Endi tugma
+// /api/auth/tg/start'ga olib boradi → backend oauth.telegram.org consent sahifasiga
+// yo'naltiradi → qaytishda id_token tekshiriladi (imzo + egalik) → session cookie.
+const _LOGIN_ERR={forbidden:"Bu hisob ruxsat etilmagan — faqat platforma egasi kira oladi.",
+  state:"Sessiya muddati tugadi. Qaytadan urinib ko'ring.",
+  token:"Telegram bilan bog'lanib bo'lmadi. Qaytadan urinib ko'ring.",
+  denied:"Kirish bekor qilindi."};
 async function showLogin(){
-  let bot="";try{bot=(await (await fetch("/api/config")).json()).bot;}catch(e){}
+  let cfg={};try{cfg=await (await fetch("/api/config")).json();}catch(e){}
+  const bot=cfg.bot||"";
   const nav=document.querySelector("nav");if(nav)nav.style.display="none";
   const fab=$("fab");if(fab)fab.style.display="none";
+  const perr=new URLSearchParams(location.search).get("login_error");
+  const errMsg=perr?(_LOGIN_ERR[perr]||"Kirish amalga oshmadi."):"";
+  const btn=cfg.oauth
+    ? `<a href="/api/auth/tg/start" style="margin-top:10px;background:#54a9eb;color:#fff;text-decoration:none;padding:13px 26px;border-radius:13px;font-size:15px;font-weight:600;display:inline-flex;align-items:center;gap:8px"><i class="ti ti-brand-telegram" style="font-size:19px"></i>Telegram orqali kirish</a>`
+    : `<div style="margin-top:6px;color:var(--red);font-size:13px;max-width:300px;line-height:1.5">⚠️ Login sozlanmagan: serverda <code>WEBAPP_OAUTH_CLIENT_SECRET</code> o'rnatilishi kerak.</div>`;
   const w=document.createElement("div");
   w.style.cssText="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:var(--bg);z-index:50";
   w.innerHTML='<div style="width:66px;height:66px;border-radius:20px;background:linear-gradient(135deg,var(--brand),#a86bd0);color:#fff;display:flex;align-items:center;justify-content:center;font-size:31px"><i class="ti ti-brand-telegram"></i></div>'
     +'<div style="font-size:23px;font-weight:800;color:var(--text);letter-spacing:-.02em">Yordamchi Pro</div>'
     +'<div style="font-size:14px;color:var(--muted);max-width:300px;line-height:1.55">Davom etish uchun Telegram orqali kiring. Faqat platforma egasi kira oladi.</div>'
-    +'<div id="tglogin_btn" style="margin-top:10px;min-height:48px;display:flex;align-items:center;justify-content:center"></div>'
-    +'<div id="tglogin_err" style="display:none;color:var(--red);font-size:13px;max-width:300px;line-height:1.5"></div>'
+    +(errMsg?`<div style="color:var(--red);font-size:13px;max-width:300px;line-height:1.5">${errMsg}</div>`:'')
+    +btn
     +(bot?`<a href="https://t.me/${bot}" style="margin-top:2px;color:var(--muted);text-decoration:none;font-size:13px">yoki botni Telegramda oching →</a>`:'');
   document.body.appendChild(w);
-  if(bot){
-    // Login Widget skripti o'zini "Log in with Telegram" tugmasi (iframe) bilan
-    // almashtiradi va muvaffaqiyatda global onTGAuth(user)ni chaqiradi.
-    const s=document.createElement("script");
-    s.async=true;s.src="https://telegram.org/js/telegram-widget.js?22";
-    s.setAttribute("data-telegram-login",bot);
-    s.setAttribute("data-size","large");
-    s.setAttribute("data-radius","12");
-    s.setAttribute("data-onauth","onTGAuth(user)");
-    s.setAttribute("data-request-access","write");
-    $("tglogin_btn").appendChild(s);
-  }else{
-    $("tglogin_btn").innerHTML='<div style="color:var(--red);font-size:13px;max-width:300px;line-height:1.5">⚠️ Login sozlanmagan: <code>WEBAPP_BOT_USERNAME</code> env o\'rnatilishi kerak.</div>';
-  }
 }
 (async()=>{
   // Not inside Telegram (no initData) → require a browser session; 401 → login page.
