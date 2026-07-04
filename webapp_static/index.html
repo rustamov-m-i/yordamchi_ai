@@ -19,9 +19,9 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .screen{padding:14px 16px 0;display:none}
   .screen.on{display:block}
   .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
-  .head h1{margin:0;font-size:20px;font-weight:600}
+  .head h1{margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em}
   .head .sub{font-size:13px;color:var(--muted)}
-  .icobtn{width:38px;height:38px;border-radius:12px;background:var(--card);display:flex;
+  .icobtn{width:38px;height:38px;border-radius:12px;background:var(--brand-soft);display:flex;
           align-items:center;justify-content:center;color:var(--brand);font-size:19px;border:none}
   .hero{background:var(--brand);border-radius:20px;padding:16px 18px;color:#fff;margin-bottom:16px}
   .hero .top{display:flex;justify-content:space-between;align-items:center;font-size:13px;opacity:.9}
@@ -54,6 +54,38 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .subgrp{margin:3px 0 9px 10px;border-left:2px solid var(--line);padding-left:8px}
   .subgrp .trow:last-child{margin-bottom:0}
   .cnt{font-size:10px;color:var(--muted);background:var(--soft);padding:1px 7px;border-radius:20px;margin-left:6px}
+  /* ── Vazifalar tab — timeline ── */
+  .tflt{display:flex;gap:8px;margin-bottom:15px}
+  .tflt button{border:none;border-radius:20px;padding:8px 17px;font-size:13px;font-weight:600;background:var(--soft);color:var(--muted)}
+  .tflt button.on{background:var(--brand);color:#fff}
+  .tline{position:relative;padding-left:30px}
+  .tline::before{content:'';position:absolute;left:14px;top:13px;bottom:13px;width:2px;background:var(--line)}
+  .tnode{position:relative;margin-bottom:11px}
+  .tnode::before{content:'';position:absolute;left:-23px;top:19px;width:15px;height:15px;border-radius:50%;
+    border:2.5px solid var(--rc,var(--brand));background:var(--bg);box-sizing:border-box;z-index:1}
+  .tkard{background:var(--card);border-radius:15px;padding:13px 14px;box-shadow:0 1px 3px rgba(20,20,43,.05)}
+  .tktop{display:flex;align-items:flex-start;gap:11px}
+  .tkcb{width:22px;height:22px;border-radius:7px;border:2px solid var(--line);flex:none;display:flex;
+    align-items:center;justify-content:center;color:#fff;font-size:14px;margin-top:1px;background:transparent}
+  .tkcb.on{background:var(--brand);border-color:var(--brand)}
+  .tktitle{flex:1;min-width:0;font-size:14px;font-weight:600;line-height:1.35}
+  .tkdays{font-size:11px;font-weight:600;flex:none;white-space:nowrap;margin-top:2px}
+  .tkdays.d-red{color:var(--red)}.tkdays.d-amber{color:var(--amber)}.tkdays.d-mute{color:var(--faint)}
+  .tkmeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:9px 0 0 33px}
+  .tkmeta .who{font-size:11.5px;color:var(--faint)}
+  .tkexp{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0 33px;font-size:12px;color:var(--muted)}
+  .tkexp i.tw{font-size:14px;color:var(--faint)}.tkexp i.ch{font-size:15px;transition:transform .15s}
+  .tnode.done .tktitle{text-decoration:line-through;color:var(--faint)}
+  .tsubs{display:none;margin:9px 0 2px 33px;position:relative;padding-left:18px}
+  .tsubs.open{display:block}
+  .tsubs::before{content:'';position:absolute;left:4px;top:8px;bottom:8px;width:2px;background:var(--line)}
+  .tsubi{position:relative;display:flex;align-items:flex-start;gap:9px;padding:7px 0}
+  .tsubi::before{content:'';position:absolute;left:-13.5px;top:12px;width:9px;height:9px;border-radius:50%;
+    background:var(--rc,var(--brand));z-index:1}
+  .tsubi .tkcb{width:19px;height:19px;border-radius:6px;font-size:12px;margin-top:0}
+  .tsubi .st{flex:1;min-width:0;font-size:13px;line-height:1.35}
+  .tsubi .sw{font-size:11px;color:var(--faint);margin-top:2px}
+  .tsubi.done .st{color:var(--faint)}.tsubi.done .stt{text-decoration:line-through}
   .aibar{display:flex;align-items:center;gap:9px;background:var(--card);border:1.5px solid var(--brand-soft);
     border-radius:14px;padding:11px 13px;margin-bottom:14px;color:var(--brand-d);font-size:13px;box-shadow:0 1px 4px rgba(108,92,231,.1)}
   .aibar i{color:var(--brand);font-size:18px}.aibar span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -301,28 +333,61 @@ function taskRow(t,sub,nsub){const done=t.status==="done";const col=PCOL[t.prior
 let TFILTER="active";
 const _pr=t=>({P0:0,P1:1,P2:2,P3:3}[t.priority]??2);
 const _byPrioDl=(a,b)=>_pr(a)-_pr(b)||(a.deadline||"9999").localeCompare(b.deadline||"9999");
+const _ACT=new Set(["todo","in_progress","blocked"]);
+const _mf=t=>TFILTER==="all"?true:TFILTER==="done"?t.status==="done":_ACT.has(t.status);
+let _openSubs=new Set();
+const PCHIP={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
+// "X kun qoldi" / "Bugun" / "X kun kechikdi" — rangi shoshilinchlikка qarab.
+function daysLeft(iso){if(!iso)return null;const d=new Date(iso);if(isNaN(d))return null;
+  const n=new Date();const day=864e5;
+  const dd=Math.round((Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())-Date.UTC(n.getFullYear(),n.getMonth(),n.getDate()))/day);
+  if(dd<0)return{t:`${-dd} kun kechikdi`,c:"d-red"};
+  if(dd===0)return{t:"Bugun",c:"d-red"};
+  if(dd===1)return{t:"Ertaga",c:"d-amber"};
+  if(dd<=2)return{t:`${dd} kun qoldi`,c:"d-amber"};
+  return{t:`${dd} kun qoldi`,c:"d-mute"};}
+const _prioPill=p=>{const l=PRIO[p]||"";return l?`<span class="chip ${PCHIP[p]||'gray'}">${l}</span>`:"";};
+const _statPill=s=>s==="in_progress"?'<span class="chip prog">Jarayonda</span>'
+  :s==="blocked"?'<span class="chip block">Bloklangan</span>'
+  :s==="cancelled"?'<span class="chip gray">Bekor</span>':"";
+function _metaLine(t){const m=(t.category||"")+(t.assignee?(t.category?" · ":"")+t.assignee:"");return m?`<span class="who">${esc(m)}</span>`:"";}
+const _cb=(t,done)=>`<div class="tkcb ${done?'on':''}" onclick="taskToggle('${t.id}',${done},event)">${done?'<i class="ti ti-check"></i>':''}</div>`;
+function subRow(s){const done=s.status==="done";
+  return `<div class="tsubi ${done?'done':''}" style="--rc:${PCOL[s.priority]||'var(--brand)'}">
+    ${_cb(s,done)}<div class="st" onclick="openTask('${s.id}')"><span class="stt">${esc(s.title)}</span>${_metaLine(s)?`<div class="sw">${_metaLine(s)}</div>`:""}</div></div>`;}
+function taskCard(t,kids){const done=t.status==="done";const dl=daysLeft(t.deadline);
+  const dtot=kids.length,ddone=kids.filter(k=>k.status==="done").length;
+  let sub="";
+  if(kids.length){const open=_openSubs.has(t.id);
+    sub=`<div class="tkexp" onclick="toggleSubs('${t.id}',event)"><i class="ti ti-corner-down-right tw"></i><span>${ddone}/${dtot} ichki vazifa</span><i class="ti ti-chevron-down ch" id="chev-${t.id}" style="${open?'transform:rotate(180deg)':''}"></i></div>
+      <div class="tsubs ${open?'open':''}" id="subs-${t.id}">${kids.map(subRow).join("")}</div>`;}
+  return `<div class="tnode ${done?'done':''}" style="--rc:${PCOL[t.priority]||'var(--brand)'}"><div class="tkard">
+    <div class="tktop">${_cb(t,done)}<div class="tktitle" onclick="openTask('${t.id}')">${esc(t.title)}</div>${dl?`<div class="tkdays ${dl.c}">${dl.t}</div>`:""}</div>
+    <div class="tkmeta">${_statPill(t.status)}${_prioPill(t.priority)}${_metaLine(t)}</div>${sub}</div></div>`;}
+const taskToggle=(id,done,e)=>{if(e)e.stopPropagation();
+  if(done)act(()=>api(`/tasks/${id}`,{method:"PATCH",body:JSON.stringify({status:"todo"})}),"Qayta ochildi");
+  else act(()=>api(`/tasks/${id}/complete`,{method:"POST"}),"Bajarildi");};
+function toggleSubs(id,e){if(e)e.stopPropagation();const el=document.getElementById("subs-"+id);if(!el)return;
+  const open=el.classList.toggle("open");open?_openSubs.add(id):_openSubs.delete(id);
+  const ch=document.getElementById("chev-"+id);if(ch)ch.style.transform=open?"rotate(180deg)":"";}
 async function renderTasks(box){
-  const d=await api("/tasks?status="+TFILTER);const list=d.tasks||[];
+  // Barcha vazifalarni bir marta olamiz — ota vazifa faol bo'lsa ham, uning
+  // BARCHA ichki vazifalari (holatidan qat'i nazar) sanoq "1/3" va chizib tashlash
+  // to'g'ri bo'lishi uchun kerak. Ota vazifalar filtr bo'yicha, ichkilar to'liq.
+  const d=await api("/tasks?status=all");const list=d.tasks||[];
   list.forEach(x=>CACHE.tasks[x.id]=x);
-  // Ota vazifalar ustuvorlik+muddat bo'yicha; har birining sub-vazifalari darhol
-  // ostida (guruhlangan, chiziq bilan). Otasi bu ko'rinishда bo'lmagan sub-vazifalar
-  // (masalan ota bajarilган) oxirида alohida ko'rsatiladi.
-  const parents=list.filter(t=>!t.parent_id).sort(_byPrioDl);
-  const subs={};
-  list.filter(t=>t.parent_id).forEach(s=>{(subs[s.parent_id]=subs[s.parent_id]||[]).push(s);});
-  Object.values(subs).forEach(a=>a.sort(_byPrioDl));
-  let rows="";
-  parents.forEach(p=>{
-    const kids=subs[p.id]||[];
-    rows+=taskRow(p,false,kids.length);
-    if(kids.length)rows+='<div class="subgrp">'+kids.map(s=>taskRow(s,true)).join("")+'</div>';
-    delete subs[p.id];
-  });
-  const orphans=Object.values(subs).flat().sort(_byPrioDl);
-  if(orphans.length){rows+='<div class="sec" style="margin-top:12px"><h2 style="font-size:13px;color:var(--faint)">Sub-vazifalar (ota boshqa ro\'yxatда)</h2></div><div class="subgrp">'+orphans.map(s=>taskRow(s,true)).join("")+'</div>';}
-  const chip=(k,l)=>`<button class="btn ${TFILTER===k?'pri':''}" onclick="setTF('${k}')">${l}</button>`;
-  box.innerHTML=hdr("Vazifalar","")+`<div class="rowbtns" style="margin-bottom:12px">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
-    (list.length?rows:emptyBox("checklist","Vazifa yo'q"));
+  const kidsBy={};list.filter(t=>t.parent_id).forEach(s=>{(kidsBy[s.parent_id]=kidsBy[s.parent_id]||[]).push(s);});
+  Object.values(kidsBy).forEach(a=>a.sort(_byPrioDl));
+  const shown=list.filter(t=>!t.parent_id&&_mf(t)).sort(_byPrioDl);
+  const shownIds=new Set(shown.map(p=>p.id));
+  const rows=shown.map(p=>taskCard(p,kidsBy[p.id]||[])).join("");
+  // Otasi shu filtrда ko'rinmaydigan (masalan ota bajarilган) va filtrga mos ichki vazifalar
+  const orphans=list.filter(t=>t.parent_id&&!shownIds.has(t.parent_id)&&_mf(t)).sort(_byPrioDl);
+  const orphHtml=orphans.length?('<div class="sec" style="margin:16px 2px 9px"><h2 style="font-size:13px;color:var(--faint)">Ichki vazifalar (ota boshqa ro\'yxatда)</h2></div><div class="tline">'+orphans.map(s=>taskCard(s,[])).join("")+'</div>'):"";
+  const chip=(k,l)=>`<button class="${TFILTER===k?'on':''}" onclick="setTF('${k}')">${l}</button>`;
+  box.innerHTML=hdr("Vazifalar","")+`<div class="tflt">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
+    (shown.length?'<div class="tline">'+rows+'</div>':"")+orphHtml+
+    ((shown.length||orphans.length)?"":emptyBox("checklist","Vazifa yo'q"));
 }
 function setTF(k){TFILTER=k;render("tasks")}
 
