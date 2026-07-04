@@ -207,12 +207,12 @@ def _verify_id_token(id_token: str) -> int | None:
             options={"verify_aud": False},  # aud may be numeric bot id; check below
         )
     except Exception as e:
-        logger.info("OIDC id_token verification failed: %s", e)
+        logger.warning("OIDC id_token verification failed: %s", e)
         return None
     aud = claims.get("aud")
     cid = str(config.WEBAPP_OAUTH_CLIENT_ID)
     if str(aud) != cid and cid not in (aud if isinstance(aud, list) else [aud]):
-        logger.info("OIDC aud mismatch: %r != %s", aud, cid)
+        logger.warning("OIDC aud mismatch: token aud=%r, our client_id=%s", aud, cid)
         return None
     uid = claims.get("id", claims.get("sub"))
     try:
@@ -1153,21 +1153,25 @@ async def auth_tg_callback(request: web.Request) -> web.Response:
                 },
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as r:
+                body = await r.text()
                 if r.status != 200:
-                    logger.info("OAuth token exchange failed: %s %s", r.status, await r.text())
+                    logger.warning("OAuth token exchange failed: HTTP %s body=%s", r.status, body[:500])
                     return _fail("token")
-                tok = await r.json()
+                tok = json.loads(body)
     except Exception:
         logger.exception("OAuth token exchange error")
         return _fail("token")
     id_token = tok.get("id_token")
     if not id_token:
+        logger.warning("OAuth: token response missing id_token: keys=%s", list(tok.keys()))
         return _fail("token")
     # JWKS fetch + JWT verify are blocking (urllib) — keep the event loop free.
     uid = await asyncio.get_event_loop().run_in_executor(None, _verify_id_token, id_token)
     if uid is None:
         return _fail("token")
     if uid != int(config.PRINCIPAL_USER_ID):
+        logger.warning("OAuth: non-principal login blocked (uid=%s, principal=%s)",
+                       uid, config.PRINCIPAL_USER_ID)
         return _fail("forbidden")
     resp = web.HTTPFound("/")
     resp.set_cookie(SESSION_COOKIE, make_session(uid), max_age=_SESSION_TTL,
