@@ -21,7 +21,7 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, quote, urlencode
 
 import aiohttp
 from aiohttp import web
@@ -1137,8 +1137,14 @@ async def auth_tg_callback(request: web.Request) -> web.Response:
     stash = _oauth_unpack(request.cookies.get(_OAUTH_STATE_COOKIE))
     if not code or not stash or not hmac.compare_digest(stash.get("s", ""), state or ""):
         return _fail("state")   # expired / CSRF
+    _sec = config.WEBAPP_OAUTH_CLIENT_SECRET
+    logger.warning("OAuth token exchange: client_id=%r secret_len=%d secret_sha8=%s redirect_uri=%s",
+                   config.WEBAPP_OAUTH_CLIENT_ID, len(_sec),
+                   hashlib.sha256(_sec.encode()).hexdigest()[:8] if _sec else "-",
+                   oauth_redirect_uri())
+    # RFC 6749 §2.3.1: url-encode client_id/secret before the Basic credential.
     creds = base64.b64encode(
-        f"{config.WEBAPP_OAUTH_CLIENT_ID}:{config.WEBAPP_OAUTH_CLIENT_SECRET}".encode()).decode()
+        f"{quote(config.WEBAPP_OAUTH_CLIENT_ID, safe='')}:{quote(_sec, safe='')}".encode()).decode()
     try:
         async with aiohttp.ClientSession() as sess:
             async with sess.post(
