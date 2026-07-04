@@ -484,18 +484,128 @@ _DESTRUCTIVE = {"delete_task", "delete_all_tasks", "delete_tasks_by_category",
                 "delete_category", "cancel_meeting", "delete_note", "delete_reminder"}
 _PENDING_CHAT: dict = {}          # token -> (actions, monotonic_ts)
 _PENDING_TTL = 300
-_CHAT_HIST: list = []             # last few (role, text) turns for lightweight memory
 _last_chat_ts = [0.0]
 
 
 async def _apply_chat_actions(actions):
+    """Execute non-show actions. Returns (created, notes, refresh):
+      created  — {type: count} of items actually created/updated,
+      notes    — user-facing warnings (meeting conflicts, failed actions) the bot
+                 also surfaces; without these a conflict/failure looks like success,
+      refresh  — whether the client should re-render the current section."""
     import handlers
     try:
         ids = await handlers._execute_actions(actions)
-        return {k: len(v) for k, v in ids.items() if v and not k.startswith("_")}
     except Exception:
         logger.exception("webapp chat: _execute_actions failed")
-        return {}
+        return {}, ["Amalni bajarishda xatolik yuz berdi."], False
+    created = {k: len(v) for k, v in ids.items() if v and not k.startswith("_")}
+    notes = []
+    for c in ids.get("_conflict") or []:
+        notes.append("⚠️ Vaqt to'qnashuvi: " + c)
+    if ids.get("_failed"):
+        notes.append("⚠️ Bajarilmadi: " + ", ".join(ids["_failed"]))
+    refresh = bool(created) or bool(ids.get("_refresh")) or bool(ids.get("_conflict"))
+    return created, notes, refresh
+
+
+async def _chat_view(action: dict) -> dict | None:
+    """Resolve a show_* action into structured data for the mini-app chat.
+
+    The bot renders these as Telegram lists (handlers._render_show_action); the web
+    chat can't receive Telegram messages, so we return the SAME DB-backed slice as
+    JSON for the client to render inline. Without this, "vazifalarni ko'rsat" /
+    "bugungi uchrashuvlar" / "statistika" produced a reply with no data attached."""
+    from datetime import datetime, timedelta
+    atype = action.get("type")
+    filt = ((action.get("data") or {}).get("filter") or "").strip().lower()
+
+    if atype == "show_tasks":
+        # Top-level only (parent_id IS NULL) — a compact chat preview, same overview
+        # scope the bot shows; the user taps "open section" for grouped subtasks.
+        if filt == "all":
+            items = await database.list_tasks(limit=1000)
+        elif filt == "done":
+            items = await database.list_tasks(status_in=["done"], limit=200)
+        elif filt == "today":
+            items = await database.list_today_tasks()
+        elif filt == "overdue":
+            items = await database.list_overdue_tasks()
+        elif filt == "important":
+            _act = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=1000)
+            items = [t for t in _act if t.get("priority") in ("P0", "P1")]
+        else:
+            filt = "active"
+            items = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=1000)
+        return {"kind": "tasks", "filter": filt, "items": items}
+
+    if atype == "show_meetings":
+        now = datetime.now(database.TZ)
+        day0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if filt == "today":
+            items = await database.list_today_meetings()
+        elif filt == "tomorrow":
+            items = await database.list_meetings_in_window(
+                (day0 + timedelta(days=1)).isoformat(), (day0 + timedelta(days=2)).isoformat())
+        elif filt == "past":
+            items = await database.list_meetings_in_window(
+                (day0 - timedelta(days=30)).isoformat(), now.isoformat())
+        elif filt == "all":
+            items = await database.list_meetings_in_window(
+                (day0 - timedelta(days=7)).isoformat(), (day0 + timedelta(days=60)).isoformat())
+        else:
+            # "week" starts at today_start (not now) so a meeting already under way
+            # today still shows — same rule as the bot (_render_meetings_for_filter).
+            filt = "week"
+            items = await database.list_meetings_in_window(
+                day0.isoformat(), (day0 + timedelta(days=7)).isoformat())
+        # Exclude completed meetings for every view except the explicit "past" one,
+        # matching the bot so a done meeting doesn't linger in "upcoming".
+        if filt != "past":
+            items = [m for m in items if not m.get("completed_at")]
+        return {"kind": "meetings", "filter": filt, "items": items}
+
+    if atype == "show_free_slots":
+        import handlers
+        now = datetime.now(database.TZ)
+        base = handlers._resolve_target_date(action.get("data", {}).get("date"), now) or now.date()
+        rng = (action.get("data", {}).get("range") or "day").strip().lower()
+
+        def _slots(free):
+            return [{"start": s.strftime("%H:%M"), "end": e.strftime("%H:%M"),
+                     "mins": int((e - s).total_seconds() // 60)} for s, e in free]
+
+        days = []
+        if rng in ("week", "hafta"):
+            monday = base - timedelta(days=base.weekday())
+            for i in range(5):  # Mon–Fri
+                dd = monday + timedelta(days=i)
+                free, _ = await handlers._free_slots_for_day(dd)
+                days.append({"date": dd.isoformat(), "slots": _slots(free)})
+            rng = "week"
+        else:
+            free, _ = await handlers._free_slots_for_day(base)
+            days.append({"date": base.isoformat(), "slots": _slots(free)})
+            rng = "day"
+        return {"kind": "slots", "range": rng, "days": days}
+
+    if atype == "show_notes":
+        return {"kind": "notes", "items": await database.list_notes(status="inbox", limit=200)}
+    if atype == "show_reminders":
+        return {"kind": "reminders", "items": await database.list_reminders(status_in=["scheduled"], limit=200)}
+    if atype == "show_contacts":
+        return {"kind": "contacts", "items": await database.list_contacts()}
+    if atype == "show_stats":
+        d = action.get("data") or {}
+        try:
+            days = int(d.get("days", 7))
+        except (TypeError, ValueError):
+            days = 7
+        if days not in (1, 7, 30):
+            days = 7
+        return {"kind": "stats", "days": days, "stats": await database.executive_stats(days=days)}
+    # show_free_slots / run_plan have no simple data slice — the reply text stands alone.
+    return None
 
 
 async def chat(request: web.Request) -> web.Response:
@@ -503,6 +613,7 @@ async def chat(request: web.Request) -> web.Response:
     auto-apply (single-user, like voice auto-confirm); destructive ones (delete/
     bulk/cancel) return confirm_token and are held until POST /api/chat/confirm."""
     import time as _t
+    import handlers
     data = await _json_body(request)
     msg = (data.get("message") or "").strip()
     if not msg:
@@ -515,29 +626,72 @@ async def chat(request: web.Request) -> web.Response:
         return web.json_response({"reply": "Biroz sekinroq — bir zumdan keyin qayting."})
     _last_chat_ts[0] = now
     try:
-        hist = "\n".join(f"{r}: {t}" for r, t in _CHAT_HIST[-6:])
-        prompt = (hist + "\n" + msg) if hist else msg
-        resp = await claude_service.process_message(prompt)
+        # Same brain as the bot. process_message pulls the shared conversation
+        # history from the DB itself, so we pass the raw message — a manual prepend
+        # would double the history and pollute the saved transcript.
+        resp = await claude_service.process_message(msg)
     except Exception:
         logger.exception("webapp chat: process_message failed")
         return web.json_response({"reply": "AI vaqtinchalik javob bera olmadi. Qayta urining."})
     actions = resp.get("actions", []) or []
-    reply = (resp.get("user_message") or "").strip() or "Bajarildi."
-    _CHAT_HIST.append(("user", msg))
-    _CHAT_HIST.append(("assistant", reply))
-    del _CHAT_HIST[:-12]
-    destructive = [a for a in actions if a.get("type") in _DESTRUCTIVE]
+    # Fall back to the clarification question when the model asks one but leaves
+    # user_message empty — otherwise the chat would show a misleading "Bajarildi."
+    reply = ((resp.get("user_message") or "").strip()
+             or (resp.get("clarification_question") or "").strip()
+             or "Bajarildi.")
+
+    # The model is asking a question, not acting — mirror the bot: surface the
+    # question and execute NOTHING (a half-understood action must not auto-apply).
+    if resp.get("needs_clarification"):
+        return web.json_response({"reply": reply, "needs_clarification": True})
+
+    # show_* actions render Telegram lists in the bot; resolve them into structured
+    # `views` the web chat can render inline (this is what makes "ko'rsat/ro'yxat/
+    # statistika/bo'sh vaqt" actually return DB data in the mini app).
+    show_types = handlers._SHOW_ACTION_TYPES
+    notes = []
+    views = []
+    for a in [a for a in actions if a.get("type") in show_types]:
+        try:
+            v = await _chat_view(a)
+            if v:
+                views.append(v)
+            elif a.get("type") == "run_plan":
+                notes.append("📋 To'liq rejalashtirishni bot orqali /plan bilan bajaring.")
+        except Exception:
+            logger.exception("webapp chat: show-view resolve failed (%s)", a.get("type"))
+            notes.append("⚠️ Ba'zi ma'lumotlarni yuklab bo'lmadi.")
+    rest = [a for a in actions if a.get("type") not in show_types]
+
+    # export_tasks → a download hint the client fetches (the endpoint streams xlsx).
+    download = None
+    _exp = next((a for a in rest if a.get("type") == "export_tasks"), None)
+    if _exp is not None:
+        rest = [a for a in rest if a is not _exp]
+        _d = _exp.get("data") or {}
+        _filt = handlers._EXPORT_STATUS_WORDS.get((_d.get("status") or "").strip().lower()) or "active"
+        _script = "cyr" if (_d.get("script") or "").strip().lower() in ("cyr", "kiril", "krill") else "lat"
+        download = {"path": f"/export/tasks?filter={_filt}&script={_script}", "name": "vazifalar.xlsx"}
+
+    destructive = [a for a in rest if a.get("type") in _DESTRUCTIVE]
     if destructive:
-        # Purge stale, cache these, ask the client to confirm.
+        # Purge stale, cache the non-show actions, ask the client to confirm.
         for k in [k for k, (_, ts) in _PENDING_CHAT.items() if now - ts > _PENDING_TTL]:
             _PENDING_CHAT.pop(k, None)
         token = database.new_id("chat-")
-        _PENDING_CHAT[token] = (actions, now)
+        _PENDING_CHAT[token] = (rest, now)
         n = len(destructive)
-        return web.json_response({"reply": reply, "confirm_token": token,
+        if notes:
+            reply = reply + "\n\n" + "\n".join(notes)
+        return web.json_response({"reply": reply, "views": views, "download": download,
+                                  "confirm_token": token,
                                   "confirm_prompt": f"{n} ta o'chirish/bekor amali bajarilsinmi?"})
-    created = await _apply_chat_actions(actions) if actions else {}
-    return web.json_response({"reply": reply, "created": created})
+    created, apply_notes, refresh = (await _apply_chat_actions(rest)) if rest else ({}, [], False)
+    notes.extend(apply_notes)
+    if notes:
+        reply = reply + "\n\n" + "\n".join(notes)
+    return web.json_response({"reply": reply, "created": created, "views": views,
+                              "download": download, "refresh": refresh})
 
 
 async def chat_confirm(request: web.Request) -> web.Response:
@@ -548,8 +702,9 @@ async def chat_confirm(request: web.Request) -> web.Response:
     entry = _PENDING_CHAT.pop(token, None)
     if not entry or _t.monotonic() - entry[1] > _PENDING_TTL:
         return web.json_response({"error": "muddati o'tdi"}, status=410)
-    created = await _apply_chat_actions(entry[0])
-    return web.json_response({"reply": "Bajarildi.", "created": created})
+    created, notes, refresh = await _apply_chat_actions(entry[0])
+    reply = "Bajarildi." if not notes else "Bajarildi.\n\n" + "\n".join(notes)
+    return web.json_response({"reply": reply, "created": created, "refresh": refresh})
 
 
 async def protocols_list(request: web.Request) -> web.Response:

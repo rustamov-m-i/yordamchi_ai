@@ -1739,6 +1739,70 @@ async def main():
             check("Chat: confirm → o'chadi", _cc.status == 200 and (await database.get_task(_dtid)) is None)
             check("Chat: noto'g'ri token → 410",
                   (await _client.post("/api/chat/confirm", headers=_H, json={"token": "yoq"})).status == 410)
+            # show_* actions must return DB-backed `views` (bug: they hit _execute_actions'
+            # else-branch → _failed → reply with no data). Reproduces "bazadan ma'lumot yo'q".
+            await asyncio.sleep(1.6)
+            async def _fake_show(text, **k):
+                return {"user_message": "Mana faol vazifalaringiz:",
+                        "actions": [{"type": "show_tasks", "data": {"filter": "active"}}]}
+            _cs2.process_message = _fake_show
+            _sv = await (await _client.post("/api/chat", headers=_H, json={"message": "vazifalarni ko'rsat"})).json()
+            _views = _sv.get("views") or []
+            check("Chat: show_tasks → views (DB'dan ma'lumot qaytadi, _failed emas)",
+                  len(_views) == 1 and _views[0].get("kind") == "tasks"
+                  and _views[0].get("filter") == "active"
+                  and isinstance(_views[0].get("items"), list) and len(_views[0]["items"]) > 0
+                  and not _sv.get("created"))
+            await asyncio.sleep(1.6)
+            async def _fake_stats(text, **k):
+                return {"user_message": "Statistika:",
+                        "actions": [{"type": "show_stats", "data": {"days": 7}}]}
+            _cs2.process_message = _fake_stats
+            _st = await (await _client.post("/api/chat", headers=_H, json={"message": "statistika"})).json()
+            check("Chat: show_stats → stats view (executive_stats)",
+                  len(_st.get("views") or []) == 1 and _st["views"][0].get("kind") == "stats"
+                  and "active" in (_st["views"][0].get("stats") or {}).get("tasks", {}))
+            await asyncio.sleep(1.6)
+            async def _fake_exp(text, **k):
+                return {"user_message": "Eksport tayyor.", "actions": [{"type": "export_tasks", "data": {}}]}
+            _cs2.process_message = _fake_exp
+            _ed = await (await _client.post("/api/chat", headers=_H, json={"message": "eksport qil"})).json()
+            check("Chat: export_tasks → download hint (/export/tasks)",
+                  isinstance(_ed.get("download"), dict) and "/export/tasks" in _ed["download"].get("path", ""))
+            # needs_clarification → NOTHING executes (bot parity), question surfaced
+            await asyncio.sleep(1.6)
+            _nc0 = len(await database.list_tasks(limit=9999))
+            async def _fake_clar(text, **k):
+                return {"needs_clarification": True, "clarification_question": "Qaysi vazifa?",
+                        "user_message": "", "actions": [{"type": "create_task", "data": {"title": "AJRATILMAGAN"}}]}
+            _cs2.process_message = _fake_clar
+            _ncr = await (await _client.post("/api/chat", headers=_H, json={"message": "uni bajar"})).json()
+            check("Chat: needs_clarification → savol + amal bajarilmaydi",
+                  _ncr.get("needs_clarification") and _ncr.get("reply") == "Qaysi vazifa?"
+                  and len(await database.list_tasks(limit=9999)) == _nc0)
+            # meeting time conflict → warning note appended, no silent success
+            _cf_mid = await database.create_meeting({"title": "Band slot",
+                "datetime_start": "2031-03-03T10:00:00+05:00", "datetime_end": "2031-03-03T11:00:00+05:00"})
+            await asyncio.sleep(1.6)
+            async def _fake_conf(text, **k):
+                return {"user_message": "Uchrashuv qo'shildi.",
+                        "actions": [{"type": "schedule_meeting", "data": {"title": "Ustma-ust",
+                            "datetime_start": "2031-03-03T10:30:00+05:00", "datetime_end": "2031-03-03T11:30:00+05:00"}}]}
+            _cs2.process_message = _fake_conf
+            _cfr = await (await _client.post("/api/chat", headers=_H, json={"message": "uchrashuv qo'y"})).json()
+            check("Chat: to'qnashuv → ogohlantirish (jimgina muvaffaqiyat emas)",
+                  "to'qnashuv" in (_cfr.get("reply") or "").lower() and not _cfr.get("created", {}).get("meeting"))
+            await database.cancel_meeting(_cf_mid)
+            # show_free_slots → slots view (reuses handlers._free_slots_for_day)
+            await asyncio.sleep(1.6)
+            async def _fake_slots(text, **k):
+                return {"user_message": "Bugungi bo'sh vaqt:",
+                        "actions": [{"type": "show_free_slots", "data": {"range": "day"}}]}
+            _cs2.process_message = _fake_slots
+            _fs = await (await _client.post("/api/chat", headers=_H, json={"message": "bo'sh vaqtim"})).json()
+            check("Chat: show_free_slots → slots view (bo'sh vaqt ma'lumoti)",
+                  len(_fs.get("views") or []) == 1 and _fs["views"][0].get("kind") == "slots"
+                  and isinstance(_fs["views"][0].get("days"), list) and len(_fs["views"][0]["days"]) == 1)
         finally:
             _cs2.process_message = _orig_pm
         check("Search/Chat: authsiz → 401",

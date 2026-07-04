@@ -70,6 +70,22 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .chatin input{flex:1;border:1.5px solid var(--line);border-radius:20px;padding:10px 14px;font-size:16px}
   .chatin input:focus{outline:none;border-color:var(--brand)}
   .chatin button{border:none;background:var(--brand);color:#fff;width:42px;border-radius:50%;font-size:18px;flex:none}
+  /* AI-chat inline result cards (show_* → structured data) */
+  .cv{max-width:92%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:9px 4px 5px;margin:0 0 10px}
+  .cvh{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.02em;padding:0 11px 7px;display:flex;align-items:center;gap:6px}
+  .cvh i{color:var(--brand);font-size:15px}
+  .cvr{display:flex;align-items:center;gap:8px;padding:8px 11px;border-top:1px solid var(--line);font-size:13.5px}
+  .cvr>span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cvd{width:8px;height:8px;border-radius:50%;flex:none}.cvd2{color:var(--brand);font-size:15px;flex:none}
+  .cvm{font-size:11px;color:var(--faint);flex:none}
+  .cvmore{padding:7px 11px;font-size:12px;color:var(--faint);border-top:1px solid var(--line)}
+  .cvopen{padding:9px 11px;font-size:12.5px;font-weight:600;color:var(--brand);border-top:1px solid var(--line)}
+  .cvempty{padding:9px 11px;font-size:13px;color:var(--faint)}
+  .cvstat{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border-top:1px solid var(--line)}
+  .cvstat>div{background:var(--card);padding:10px 11px;display:flex;flex-direction:column;gap:2px}
+  .cvstat b{font-size:20px;font-weight:700;color:var(--text)}.cvstat span{font-size:11px;color:var(--muted)}
+  .cvdl{max-width:92%;margin:0 0 10px}
+  .cvdl button{border:1.5px solid var(--brand);background:transparent;color:var(--brand);border-radius:11px;padding:9px 14px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px}
   .srhint{color:var(--faint);text-align:center;padding:30px 20px;font-size:13px}
   .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:2px 2px 8px}
   .radar{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:16px}
@@ -597,16 +613,70 @@ async function sendChat(){if(_chatBusy)return;const inp=$("chatq");const q=(inp.
   inp.value="";appendMsg("u",q);const th=appendMsg("a","…");_chatBusy=true;
   try{const r=await api("/chat",{method:"POST",body:JSON.stringify({message:q})});
     th.textContent=r.reply||"Bajarildi.";
+    (r.views||[]).forEach(_chatView);
+    if(r.download)_chatDownload(r.download);
     if(r.confirm_token){
       const doIt=async()=>{const r2=await api("/chat/confirm",{method:"POST",body:JSON.stringify({token:r.confirm_token})});
         appendMsg("a",r2.reply+_summary(r2.created));render(VIEW);};
       if(tg?.showConfirm)tg.showConfirm(r.confirm_prompt||"Bajarilsinmi?",ok=>{if(ok)doIt();else appendMsg("a","Bekor qilindi.");});
       else if(confirm(r.confirm_prompt||"Bajarilsinmi?"))doIt();
-    }else{const s=_summary(r.created);if(s){th.textContent+=s;render(VIEW);}}
+    }else{const s=_summary(r.created);if(s)th.textContent+=s;if(s||r.refresh)render(VIEW);}
   }catch(e){th.textContent="⚠️ "+e.message;}
   _chatBusy=false;}
 function _summary(c){c=c||{};const nm={task:"vazifa",meeting:"uchrashuv",note:"qayd",reminder:"eslatma"};
   const bits=Object.keys(c).map(k=>c[k]+" "+(nm[k]||k));return bits.length?"\n\n✓ "+bits.join(", "):"";}
+// Render a show_* result (tasks/meetings/notes/reminders/contacts/stats) as an inline card.
+const _CVLBL={tasks:{active:"Faol vazifalar",all:"Barcha vazifalar",today:"Bugungi vazifalar",overdue:"Kechikkan vazifalar",important:"Muhim vazifalar",done:"Bajarilgan vazifalar"},
+  meetings:{today:"Bugungi uchrashuvlar",tomorrow:"Ertangi uchrashuvlar",week:"Shu hafta uchrashuvlar",all:"Barcha uchrashuvlar",past:"O'tgan uchrashuvlar"}};
+function _cvCard(icon,title,bodyHTML,openView){
+  const box=document.createElement("div");box.className="cv";
+  box.innerHTML=`<div class="cvh"><i class="ti ti-${icon}"></i>${esc(title)}</div>`+bodyHTML+
+    (openView?`<div class="cvopen" onclick="closeOv('chatov');go('${openView}')">Bo'limni ochish →</div>`:"");
+  $("chatmsgs").appendChild(box);$("chatmsgs").scrollTop=$("chatmsgs").scrollHeight;}
+function _cvRows(items,n,rowFn){
+  if(!items.length)return '<div class="cvempty">Topilmadi</div>';
+  let h=items.slice(0,n).map(rowFn).join("");
+  if(items.length>n)h+=`<div class="cvmore">va yana ${items.length-n} ta…</div>`;
+  return h;}
+function _chatView(v){
+  const it=v.items||[];
+  if(v.kind==="tasks"){it.forEach(t=>CACHE.tasks[t.id]=t);
+    _cvCard("checklist",(_CVLBL.tasks[v.filter]||"Vazifalar")+` (${it.length})`,
+      _cvRows(it,12,t=>{const c=PCOL[t.priority]||"var(--brand)";const dn=t.status==="done";
+        return `<div class="cvr" onclick="openTask('${t.id}')"><span class="cvd" style="background:${c}"></span><span style="${dn?'text-decoration:line-through;color:var(--faint)':''}">${esc(t.title)}</span>${t.deadline?`<span class="cvm">${fmt(t.deadline)}</span>`:""}</div>`;}),
+      "tasks");
+  }else if(v.kind==="meetings"){it.forEach(m=>CACHE.meetings[m.id]=m);
+    _cvCard("users",(_CVLBL.meetings[v.filter]||"Uchrashuvlar")+` (${it.length})`,
+      _cvRows(it,12,m=>`<div class="cvr" onclick="openMeeting('${m.id}')"><i class="ti ti-clock cvd2"></i><span>${esc(m.title)}</span><span class="cvm">${fmt(m.datetime_start)}</span></div>`),
+      "meetings");
+  }else if(v.kind==="notes"){
+    _cvCard("note",`Qaydlar (${it.length})`,
+      _cvRows(it,12,n=>`<div class="cvr" onclick="closeOv('chatov');go('notes')"><i class="ti ti-point cvd2"></i><span>${esc(n.title||n.content||'')}</span></div>`),
+      "notes");
+  }else if(v.kind==="reminders"){
+    _cvCard("bell",`Eslatmalar (${it.length})`,
+      _cvRows(it,12,r=>`<div class="cvr" onclick="closeOv('chatov');go('reminders')"><i class="ti ti-bell cvd2"></i><span>${esc(r.title||'')}</span><span class="cvm">${fmt(r.remind_at)}</span></div>`),
+      "reminders");
+  }else if(v.kind==="contacts"){
+    _cvCard("address-book",`Jamoa (${it.length})`,
+      _cvRows(it,15,c=>`<div class="cvr" onclick="closeOv('chatov');go('team')"><i class="ti ti-user cvd2"></i><span>${esc(c.name||'')}</span>${c.role?`<span class="cvm">${esc(c.role)}</span>`:""}</div>`),
+      "team");
+  }else if(v.kind==="stats"){const t=(v.stats||{}).tasks||{};
+    _cvCard("chart-bar",`Statistika (${v.days} kun)`,
+      `<div class="cvstat"><div><b>${t.done||0}</b><span>bajarildi</span></div><div><b>${t.active||0}</b><span>faol</span></div><div><b>${t.overdue||0}</b><span>kechikkan</span></div><div><b>${t.due_24h||0}</b><span>24 soatda</span></div></div>`,
+      "insights");
+  }else if(v.kind==="slots"){const wk=v.range==="week";
+    const dfmt=iso=>{const d=new Date(iso);return isNaN(d)?iso:d.toLocaleDateString("uz",{weekday:"long",day:"numeric",month:"long"});};
+    const body=(v.days||[]).map(d=>{const sl=d.slots||[];
+      return (wk?`<div class="cvr" style="font-weight:600;color:var(--muted)"><span>${esc(dfmt(d.date))}</span></div>`:"")+
+        (sl.length?sl.map(s=>`<div class="cvr"><i class="ti ti-clock cvd2" style="color:var(--green)"></i><span>${s.start}–${s.end}</span><span class="cvm">${s.mins} daq</span></div>`).join("")
+          :`<div class="cvempty">Bo'sh vaqt yo'q</div>`);}).join("");
+    _cvCard("clock-hour-9",wk?"Bo'sh vaqt (shu hafta)":"Bo'sh vaqt (09:00–18:00)",body,"calendar");
+  }}
+function _chatDownload(d){const box=document.createElement("div");box.className="cvdl";
+  box.innerHTML=`<button><i class="ti ti-file-spreadsheet"></i>Excel yuklab olish</button>`;
+  box.querySelector("button").onclick=()=>download(d.path,d.name||"export.xlsx");
+  $("chatmsgs").appendChild(box);$("chatmsgs").scrollTop=$("chatmsgs").scrollHeight;}
 
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
