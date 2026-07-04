@@ -828,7 +828,11 @@ function _chatDownload(d){const box=document.createElement("div");box.className=
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
-// ── Browser login (Telegram Login Widget). In-app (Telegram) skips this. ──
+// ── Browser login (Telegram Login Widget) — HOZIRCHA O'CHIRILGAN. ──
+// Domen BotFather'да ro'yxatdan o'tmagani uchun ("Bot domain invalid") brauzer
+// login vaqtincha o'chirildi; ilova faqat Telegram ichida ochiladi. Qayta yoqish
+// uchun: quyidagi showLogin() ичига Login Widget skriptini qaytaring (git tarixida).
+// onTGAuth + /api/auth/telegram + sessiya backend'да saqlanib qoldi (uxlab turibdi).
 window.onTGAuth=async(user)=>{
   try{await api("/auth/telegram",{method:"POST",body:JSON.stringify(user)});location.reload();}
   catch(e){_fatal("Kirish rad etildi: "+e.message);}
@@ -838,14 +842,11 @@ async function showLogin(){
   document.querySelector("nav").style.display="none";$("fab").style.display="none";
   const w=document.createElement("div");
   w.style.cssText="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;background:var(--bg);z-index:50";
-  w.innerHTML='<div style="width:64px;height:64px;border-radius:20px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:30px"><i class="ti ti-checkbox"></i></div><div style="font-size:22px;font-weight:600;color:var(--text)">Yordamchi Pro</div><div style="font-size:14px;color:var(--muted);max-width:260px">Davom etish uchun Telegram akkauntingiz bilan kiring</div><div id="tgwidget" style="min-height:48px"></div>';
+  w.innerHTML='<div style="width:64px;height:64px;border-radius:20px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:30px"><i class="ti ti-brand-telegram"></i></div>'
+    +'<div style="font-size:22px;font-weight:600;color:var(--text)">Yordamchi Pro</div>'
+    +'<div style="font-size:14px;color:var(--muted);max-width:290px;line-height:1.55">Bu ilova hozircha faqat Telegram ichida ochiladi. Botni oching va menyudagi tugma orqali kiring.</div>'
+    +(bot?`<a href="https://t.me/${bot}" style="margin-top:6px;background:var(--brand);color:#fff;text-decoration:none;padding:12px 24px;border-radius:13px;font-size:15px;font-weight:600"><i class="ti ti-brand-telegram" style="vertical-align:-2px;margin-right:5px"></i>Telegramда ochish</a>`:'');
   document.body.appendChild(w);
-  if(!bot){document.getElementById("tgwidget").innerHTML='<div style="color:var(--red);font-size:13px">Bot sozlanmagan (BOT_USERNAME)</div>';return;}
-  const s=document.createElement("script");s.async=true;s.src="https://telegram.org/js/telegram-widget.js?22";
-  s.setAttribute("data-telegram-login",bot);s.setAttribute("data-size","large");
-  s.setAttribute("data-userpic","false");s.setAttribute("data-request-access","write");
-  s.setAttribute("data-onauth","onTGAuth(user)");
-  document.getElementById("tgwidget").appendChild(s);
 }
 (async()=>{
   // Not inside Telegram (no initData) → require a browser session; 401 → login page.
