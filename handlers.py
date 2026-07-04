@@ -1238,17 +1238,25 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     _existing_cats: "set | None" = None       # lazy allowlist — categories (manual/Excel only)
     _existing_contacts: "dict | None" = None  # lazy allowlist {casefold: canonical name}
     # Excel hierarchy: "3.1" → subtask of the row numbered "3". Maps each row's №
-    # to the task id it created/updated, so a child resolves its parent_id. Parents
-    # ("3") precede children ("3.1") in the file, so the map is populated in time.
+    # to the task id it created/updated, so a child resolves its parent_id.
     num_to_id: dict[str, str] = {}
+    # Order-independent: an exported sheet may be re-sorted so a subtask row comes
+    # BEFORE its parent. Seed the map from every UPDATE row (its id is known upfront),
+    # so a dotted child resolves its parent regardless of row order (bug: sorting the
+    # file detached subtasks). New parents (create) are still added during the loop.
+    for _a in actions:
+        if _a.get("_num") and _a.get("type") == "update_task" and _a.get("id"):
+            num_to_id.setdefault(str(_a["_num"]), _a["id"])
 
     def _resolve_parent(act: dict, data: dict) -> None:
-        """№-driven re-parenting (authoritative): a dotted № → child of its top-level
-        ancestor; a plain № → top-level (parent_id=None). No-op for non-Excel rows."""
+        """№-driven re-parenting: a dotted № → child of its top-level ancestor; a plain
+        № → top-level (parent_id=None). No-op for non-Excel rows and for flat per-assignee
+        files (act["_flat"]) where subtasks are numbered plainly and the parent lives in an
+        'Asosiy vazifa' column — re-parenting from that would wrongly promote them."""
         num = act.get("_num")
-        if not num:
+        if not num or act.get("_flat"):
             return
-        data["parent_id"] = num_to_id.get(num.split(".")[0]) if "." in num else None
+        data["parent_id"] = num_to_id.get(str(num).split(".")[0]) if "." in str(num) else None
 
     for action in actions:
         atype = action.get("type", "")
@@ -3514,6 +3522,10 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         """Is a column for this field present in the file's header?"""
         return any(n in header for n in names)
 
+    # A per-assignee (flat) export has an "Asosiy vazifa" column and numbers subtasks
+    # plainly — its № carries NO parent/child hierarchy, so re-parenting from it must be
+    # suppressed (else every subtask is promoted to top-level on re-import).
+    _flat_file = has(("asosiyvazifa", "asosiyvazifasi"))
     out: list[dict] = []
     for r in table[header_idx + 1:]:
         d = {header[i]: r[i] for i in range(min(len(header), len(r)))}
@@ -3578,6 +3590,8 @@ def _structured_tasks_from_table(table: list) -> list[dict]:
         num = str(pick(d, _COL_NUMBER) or "").strip().rstrip(".")
         if num:
             act["_num"] = num
+        if _flat_file:
+            act["_flat"] = True   # № is non-hierarchical in a per-assignee export
         out.append(act)
     return out
 

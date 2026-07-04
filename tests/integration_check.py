@@ -417,6 +417,33 @@ async def main():
         if _t["title"].startswith("IMPN_"):
             await database.delete_task(_t["id"])
 
+    # ── Bug: Excel round-trip sub-vazifalarni adashtiradi ──
+    _rp = await database.create_task({"title": "RT_ota", "priority": "P1", "status": "todo"})
+    _rs = await database.create_task({"title": "RT_sub", "parent_id": _rp, "priority": "P2", "status": "todo"})
+    # (A) Fayl saralanganda sub qatori otadan OLDIN kelsa ham — sub top-level bo'lib ketmasin
+    #     (num→id xaritasi update id'laridan oldindan to'ldiriladi → tartibga bog'liq emas).
+    _reorder = [{"type": "update_task", "id": _rs, "data": {"source": "excel"}, "_num": "1.1"},
+                {"type": "update_task", "id": _rp, "data": {"source": "excel"}, "_num": "1"}]
+    await handlers._execute_actions(_reorder)
+    check("Round-trip: saralangan faylда sub ota bilan qoladi (tartibga bog'liq emas)",
+          (await database.get_task(_rs)).get("parent_id") == _rp)
+    # (B) Per-assignee (flat) eksport re-import — dotsiz № sub-vazifani top-level qilmaydi.
+    _flat_acts = handlers._structured_tasks_from_table(
+        [("№", "Vazifa", "Asosiy vazifa", "Ijrochi", "ID"),
+         ("1", "RT_ota", "", "Aziz", _rp), ("2", "RT_sub", "RT_ota", "Aziz", _rs)])
+    check("Import: flat (Asosiy vazifa ustunli) eksportда _flat bayrog'i o'rnatiladi",
+          bool(_flat_acts) and all(a.get("_flat") for a in _flat_acts))
+    for _a in _flat_acts:
+        _rid = _a.pop("_id", "")
+        if _rid and await database.get_task(_rid):
+            _a["type"] = "update_task"; _a["id"] = _rid
+    await handlers._execute_actions(_flat_acts)
+    check("Round-trip: flat (per-ijrochi) re-import sub-vazifani top-level qilmaydi",
+          (await database.get_task(_rs)).get("parent_id") == _rp)
+    for _t in await database.list_tasks(status_in=None, limit=9000, include_subtasks=True):
+        if _t["title"].startswith("RT_"):
+            await database.delete_task(_t["id"])
+
     # Round-trip CLEAR: a blank cell in a PRESENT column clears the field on update
     # (the reported "to'liq yangilanmaydi" bug — blank assignee/izoh/kategoriya stayed).
     _clrid = await database.create_task({"title": "IMPCLR", "assignee": "Aziz",
