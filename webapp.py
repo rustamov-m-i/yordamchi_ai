@@ -489,6 +489,70 @@ async def chat(request: web.Request) -> web.Response:
     return web.json_response({"reply": reply, "created": created})
 
 
+async def protocols_list(request: web.Request) -> web.Response:
+    """Meetings that have a saved protocol (bayonnoma)."""
+    import handlers
+    out = []
+    for m in await database.list_meetings_with_protocol(limit=100):
+        if handlers._looks_like_protocol(m.get("follow_up_actions")):
+            out.append({"id": m["id"], "title": m.get("title"),
+                        "datetime_start": m.get("datetime_start")})
+    return web.json_response({"protocols": out})
+
+
+async def protocol_download(request: web.Request) -> web.Response:
+    """Render a saved protocol to Word/PDF and stream it back."""
+    import handlers
+    import protocol_doc
+    mid = request.match_info["id"]
+    fmt = request.query.get("fmt", "word")
+    script = "cyrillic" if request.query.get("script") == "cyr" else "latin"
+    m = await database.get_meeting(mid)
+    if not m:
+        return web.json_response({"error": "not found"}, status=404)
+    fu = m.get("follow_up_actions") or []
+    text = (fu[0] if (isinstance(fu, list) and fu) else str(fu or "")).strip()
+    if not text:
+        return web.json_response({"error": "bayonnoma yo'q"}, status=404)
+    proto_tasks = handlers._proto_tasks_from_text(text)
+    fields = protocol_doc.build_fields(m, text, proto_tasks, await database.get_settings())
+    try:
+        if fmt == "pdf":
+            blob = protocol_doc.build_pdf(fields, script)
+            ct, ext = "application/pdf", "pdf"
+        else:
+            blob = protocol_doc.build_docx(fields, script)
+            ct, ext = ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx")
+    except RuntimeError as e:  # e.g. reportlab not installed for PDF
+        return web.json_response({"error": str(e)}, status=400)
+    return web.Response(body=blob, headers={
+        "Content-Type": ct, "Content-Disposition": f'attachment; filename="bayonnoma-{mid}.{ext}"'})
+
+
+async def export_tasks(request: web.Request) -> web.Response:
+    """Excel export of tasks — reuses the bot's _send_tasks_export via a capturing
+    fake message (no refactor of the 400-line builder)."""
+    import handlers
+    status = request.query.get("filter", "active")
+    script = "cyr" if request.query.get("script") == "cyr" else "lat"
+    cap: dict = {}
+
+    class _Capture:
+        async def answer_document(self, file, caption=None, parse_mode=None, reply_markup=None):
+            cap["data"] = file.data
+            cap["name"] = getattr(file, "filename", "vazifalar.xlsx")
+
+        async def answer(self, *a, **k):
+            cap["err"] = a[0] if a else ""
+
+    await handlers._send_tasks_export(_Capture(), status=status, script=script)
+    if "data" not in cap:
+        return web.json_response({"error": cap.get("err", "export failed")}, status=500)
+    return web.Response(body=cap["data"], headers={
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": f'attachment; filename="{cap["name"]}"'})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
@@ -540,6 +604,9 @@ def create_app() -> web.Application:
         web.get("/api/insights", insights),
         web.get("/api/search", search),
         web.post("/api/chat", chat),
+        web.get("/api/protocols", protocols_list),
+        web.get("/api/protocols/{id}/download", protocol_download),
+        web.get("/api/export/tasks", export_tasks),
         web.get("/api/tasks", tasks_list),
         web.post("/api/tasks", task_create),
         web.patch("/api/tasks/{id}", task_update),

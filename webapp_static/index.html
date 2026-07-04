@@ -122,6 +122,7 @@
 <div class="screen" id="v-reminders"></div>
 <div class="screen" id="v-insights"></div>
 <div class="screen" id="v-profile"></div>
+<div class="screen" id="v-protocols"></div>
 
 <button class="fab" id="fab"><i class="ti ti-plus"></i></button>
 <nav>
@@ -180,15 +181,15 @@ const el=id=>$("v-"+id);
 function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div>${icon?`<button class="icobtn"><i class="ti ti-${icon}"></i></button>`:""}</div>`}
 function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
+const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols"};
 function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on"));
-  const map={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile"};
-  el(map[v]).classList.add("on");
-  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v||(v==="notes"&&false)));
+  el(_VIEWS[v]).classList.add("on");
+  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
   render(v);window.scrollTo(0,0);}
 
 async function render(v){
-  const box=el({dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile"}[v]);
-  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda… ·v3</div>';
+  const box=el(_VIEWS[v]);
+  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda… ·v4</div>';
   try{
     if(v==="dash")await renderDash(box);
     else if(v==="tasks")await renderTasks(box);
@@ -197,6 +198,7 @@ async function render(v){
     else if(v==="reminders")await renderReminders(box);
     else if(v==="insights")await renderInsights(box);
     else if(v==="profile")await renderProfile(box);
+    else if(v==="protocols")await renderProtocols(box);
   }catch(e){box.innerHTML=hdr("Xatolik","")+emptyBox("alert-triangle",e.message)}
 }
 
@@ -326,9 +328,32 @@ async function renderProfile(box){
       <div style="flex:1"><div style="font-size:26px;font-weight:600">${c.done||0}</div><div style="font-size:12px;opacity:.85">Bajarilgan</div></div></div></div>
     <div class="card menu">
       <div class="mi" onclick="go('insights')"><i class="ti ti-chart-bar"></i>Statistika<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnomalar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Excel eksport (vazifalar)<i class="ti ti-download ch"></i></div>
       <div class="mi" onclick="go('notes')"><i class="ti ti-note"></i>Qaydlar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('reminders')"><i class="ti ti-bell"></i>Eslatmalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" style="border-bottom:none" onclick="go('meetings')"><i class="ti ti-calendar"></i>Uchrashuvlar<i class="ti ti-chevron-right ch"></i></div></div>`;
+}
+async function renderProtocols(box){
+  const d=await api("/protocols");const list=d.protocols||[];
+  box.innerHTML=hdr("Bayonnomalar","")+(list.length?list.map(p=>`<div class="card">
+    <div style="font-size:14px;font-weight:500">${esc(p.title||"Uchrashuv")}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${p.datetime_start?fmt(p.datetime_start):""}</div>
+    <div class="rowbtns"><button class="btn pri" onclick="download('/protocols/${p.id}/download?fmt=word','bayonnoma.docx')"><i class="ti ti-file-word"></i> Word</button>
+      <button class="btn" onclick="download('/protocols/${p.id}/download?fmt=pdf','bayonnoma.pdf')"><i class="ti ti-file-typography"></i> PDF</button>
+      <button class="btn" onclick="download('/protocols/${p.id}/download?fmt=word&script=cyr','bayonnoma.docx')">Word · Kiril</button></div></div>`).join(""):emptyBox("file-text","Bayonnoma yo'q"));
+}
+async function download(path,fallback){
+  flash("Yuklanmoqda…");
+  try{
+    const r=await fetch("/api"+path,{credentials:"same-origin",headers:{"Authorization":AUTH}});
+    if(!r.ok){let e="Xato "+r.status;try{e=(await r.json()).error||e}catch{}return flash("⚠️ "+e);}
+    const blob=await r.blob();
+    const cd=r.headers.get("Content-Disposition")||"";const mm=cd.match(/filename="?([^"]+)"?/);
+    const url=URL.createObjectURL(blob);const a=document.createElement("a");
+    a.href=url;a.download=(mm?mm[1]:fallback);document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);flash("Yuklab olindi ✓");
+  }catch(e){flash("⚠️ "+e.message);}
 }
 
 function go(v){switchView(v)}

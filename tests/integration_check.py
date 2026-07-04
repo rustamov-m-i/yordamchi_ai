@@ -1721,6 +1721,27 @@ async def main():
         check("Search/Chat: authsiz → 401",
               (await _client.get("/api/search?q=x")).status == 401
               and (await _client.post("/api/chat", json={"message": "x"})).status == 401)
+        # ── Bayonnomalar (protokol) + Excel eksport ──
+        _pmid = await database.create_meeting({"title": "Protokol uchrashuv",
+            "datetime_start": datetime.now(TZ).isoformat()})
+        await database.update_meeting(_pmid, {"follow_up_actions": [
+            "BAYONNOMA\n\nMuhokama: byudjet ko'rib chiqildi. Qaror: tasdiqlandi. Mas'ul: Karimov."]})
+        _pl = await (await _client.get("/api/protocols", headers=_H)).json()
+        check("Protocols: saqlangan bayonnoma ro'yxatда", any(p["id"] == _pmid for p in _pl.get("protocols", [])))
+        _pw = await _client.get(f"/api/protocols/{_pmid}/download?fmt=word", headers=_H)
+        check("Protocols: Word (docx) yuklab olinadi",
+              _pw.status == 200 and "wordprocessing" in _pw.headers.get("Content-Type", "")
+              and len(await _pw.read()) > 500)
+        _pp = await _client.get(f"/api/protocols/{_pmid}/download?fmt=pdf", headers=_H)
+        check("Protocols: PDF yuklab olinadi (reportlab)",
+              _pp.status == 200 and "pdf" in _pp.headers.get("Content-Type", ""))
+        _ex = await _client.get("/api/export/tasks?filter=all", headers=_H)
+        check("Export: Excel (xlsx) yuklab olinadi",
+              _ex.status == 200 and "spreadsheet" in _ex.headers.get("Content-Type", "")
+              and len(await _ex.read()) > 1000)
+        check("Protocols/Export: authsiz → 401",
+              (await _client.get("/api/protocols")).status == 401
+              and (await _client.get("/api/export/tasks")).status == 401)
 
         # S1: non-scalar value for a scalar field → clean 400, NOT a raw 500
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "x", "priority": {"a": 1}})
