@@ -84,7 +84,7 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .subgrp .trow:last-child{margin-bottom:0}
   .cnt{font-size:10px;color:var(--muted);background:var(--soft);padding:1px 7px;border-radius:20px;margin-left:6px}
   /* ── Vazifalar tab — timeline ── */
-  .tflt{display:flex;gap:8px;margin-bottom:15px}
+  .tflt{display:flex;gap:8px;margin-bottom:15px;flex-wrap:wrap}
   .tflt button{border:none;border-radius:20px;padding:8px 17px;font-size:13px;font-weight:600;background:var(--soft);color:var(--muted)}
   .tflt button.on{background:var(--brand);color:#fff}
   .tline{position:relative;padding-left:30px}
@@ -261,6 +261,78 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
     .fab{left:auto;right:40px;transform:none;bottom:32px}
     .head h1{font-size:29px}.head h1.grad{font-size:46px}
   }
+  /* ── Refresh spin feedback ── */
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .icobtn.spin i{animation:spin .7s linear infinite}
+  /* ── Dashboard gradient results (daily + weekly) ── */
+  .results{display:flex;align-items:stretch;gap:0;border-radius:20px;overflow:hidden;
+    background:linear-gradient(120deg,var(--brand) 0%,#7d6ef0 42%,#a86bd0 100%);
+    color:#fff;padding:2px;box-shadow:0 8px 22px rgba(108,92,231,.28);margin-bottom:12px}
+  .results .rs{flex:1;padding:16px 16px 15px;display:flex;align-items:center;gap:13px}
+  .results .rs+.rs{border-left:1px solid rgba(255,255,255,.18)}
+  .results .rn{font-size:30px;font-weight:800;line-height:1;letter-spacing:-.02em}
+  .results .rl{font-size:12.5px;font-weight:600;opacity:.95}
+  .results .rsub{font-size:11px;opacity:.8;margin-top:2px}
+  .results .ring{width:50px;height:50px;flex:none}
+  .results .ring text{fill:#fff}
+  /* ── Datetime picker (Uzbek) ── */
+  .dtbtn{width:100%;text-align:left;background:var(--soft);border:1px solid var(--line);
+    border-radius:12px;padding:11px 13px;font-size:14px;color:var(--text);display:flex;
+    align-items:center;gap:9px;cursor:pointer}
+  .dtbtn.empty{color:var(--faint)}
+  .dtbtn i{color:var(--brand);font-size:17px}
+  #dtpop{position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.5);display:none;
+    align-items:flex-end;justify-content:center;backdrop-filter:blur(2px)}
+  #dtpop.show{display:flex}
+  .dtsheet{background:var(--card);width:100%;max-width:460px;border-radius:22px 22px 0 0;
+    padding:16px 16px 20px;box-shadow:0 -6px 30px rgba(0,0,0,.3);animation:dtup .22s ease}
+  @keyframes dtup{from{transform:translateY(20px);opacity:.4}to{transform:none;opacity:1}}
+  .dth{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .dth b{font-size:16px}
+  .dtnav{display:flex;align-items:center;gap:6px;font-size:15px;font-weight:700}
+  .dtgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}
+  .dtgrid .wd{font-size:11px;color:var(--faint);font-weight:600;padding:4px 0}
+  .dtgrid .dc{padding:9px 0;border-radius:10px;font-size:14px;cursor:pointer}
+  .dtgrid .dc.mut{color:var(--faint);opacity:.45}
+  .dtgrid .dc.today{box-shadow:inset 0 0 0 1.5px var(--brand)}
+  .dtgrid .dc.sel{background:var(--brand);color:#fff;font-weight:700}
+  .dttime{display:flex;align-items:center;gap:10px;margin:15px 0 4px;justify-content:center}
+  .dttime select{width:auto;padding:9px 12px;font-size:16px;font-weight:600;text-align:center}
+  .dttime span{font-size:18px;font-weight:700;color:var(--muted)}
+  .dtacts{display:flex;gap:8px;margin-top:15px}
+  .dtacts .btn{flex:1}
+  /* ── Meetings month calendar ── */
+  .calh{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .calh b{font-size:17px;font-weight:700}
+  .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:8px}
+  .calgrid .wd{font-size:11px;color:var(--faint);font-weight:600;text-align:center;padding:2px 0}
+  .cald{aspect-ratio:1;border-radius:12px;background:var(--card);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;font-size:14px;cursor:pointer;position:relative}
+  .cald.mut{background:transparent;color:var(--faint);opacity:.4}
+  .cald.today{box-shadow:inset 0 0 0 1.5px var(--brand)}
+  .cald.sel{background:var(--brand);color:#fff;font-weight:700}
+  .cald .dots{display:flex;gap:2px;height:5px}
+  .cald .dots i{width:5px;height:5px;border-radius:50%;background:var(--brand);display:block}
+  .cald.sel .dots i{background:#fff}
+  .calday{font-size:12.5px;font-weight:700;color:var(--faint);letter-spacing:.03em;
+    text-transform:uppercase;margin:16px 2px 9px}
+  /* ── Team / manage people ── */
+  .addrow{display:flex;gap:8px;margin-bottom:12px}
+  .addrow input{flex:1}
+  .tcard{display:flex;align-items:center;gap:12px}
+  .tcard .av{width:38px;height:38px;font-size:14px}
+  .tcard .tbody{flex:1;min-width:0}
+  .tcard .tname{font-size:14.5px;font-weight:600}
+  .tcard .tbar{height:6px;background:var(--soft);border-radius:6px;margin-top:7px;overflow:hidden}
+  .tcard .tbar>i{display:block;height:100%;background:var(--brand);border-radius:6px}
+  .tcard .tdel{width:34px;height:34px;border-radius:10px;background:var(--soft);color:var(--red);
+    display:flex;align-items:center;justify-content:center;flex:none;font-size:17px;cursor:pointer}
+  /* ── Tahlil KPIs ── */
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:10px}
+  .kpi{background:var(--card);border-radius:14px;padding:13px 14px}
+  .kpi .kn{font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:1}
+  .kpi .kl{font-size:12px;color:var(--muted);margin-top:4px}
+  @media(min-width:720px){.kpis{grid-template-columns:repeat(4,1fr)}}
 </style>
 </head>
 <body>
@@ -289,6 +361,7 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
 </nav>
 
 <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
+<div id="dtpop"><div class="dtsheet" id="dtsheet"></div></div>
 <div class="toast" id="toast"></div>
 
 <div class="ov" id="searchov">
@@ -335,9 +408,62 @@ function flash(m){const t=document.getElementById("toast");t.textContent=m;t.cla
 function fmt(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return iso;return d.toLocaleString("uz",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
 function toLocal(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return"";const p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
 function fromLocal(v){return v?new Date(v).toISOString():null}
+// ── O'zbekcha sana-vaqt tanlagich (native datetime-local o'rniga — u webview
+// tilida, ko'pincha ruscha chiqadi). Qiymat yashirin inputda toLocal formatida
+// saqlanadi, shu bois saveTask/saveMeeting'даги fromLocal(val(id)) ishlayveradi.
+const _UZMON=["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"];
+const _UZWD=["Du","Se","Cha","Pa","Ju","Sha","Yak"];   // Dushanba boshlanadi
+function _dtLabel(local){if(!local)return"";const d=new Date(local);if(isNaN(d))return"";
+  const p=n=>String(n).padStart(2,"0");
+  return `${d.getDate()}-${_UZMON[d.getMonth()]} ${d.getFullYear()}, ${p(d.getHours())}:${p(d.getMinutes())}`}
+function dtField(id,iso){const local=toLocal(iso);
+  return `<input type="hidden" id="${id}" value="${local}">
+    <button type="button" class="dtbtn ${local?"":"empty"}" id="${id}_b" onclick="openDT('${id}')">
+      <i class="ti ti-calendar-event"></i><span>${local?_dtLabel(local):"Sana va vaqtni tanlang"}</span></button>`}
+let _DT={id:null,y:0,m:0,d:0,hh:9,mm:0,has:false};
+function openDT(id){const cur=($(id)?.value)||"";const now=new Date();
+  let base=cur?new Date(cur):now;if(isNaN(base))base=now;
+  _DT={id,y:base.getFullYear(),m:base.getMonth(),d:base.getDate(),
+       hh:cur?base.getHours():9,mm:cur?base.getMinutes():0,has:!!cur};
+  _dtRender();$("dtpop").classList.add("show");}
+function closeDT(){$("dtpop").classList.remove("show")}
+function _dtNav(delta){_DT.m+=delta;if(_DT.m<0){_DT.m=11;_DT.y--}if(_DT.m>11){_DT.m=0;_DT.y++}_dtRender()}
+function _dtPick(d){_DT.d=d;_DT.has=true;_dtRender()}
+function _dtTime(which,v){_DT[which]=parseInt(v,10)||0;_DT.has=true}
+function _dtRender(){
+  const first=new Date(_DT.y,_DT.m,1);let lead=(first.getDay()+6)%7;  // Mon=0
+  const dim=new Date(_DT.y,_DT.m+1,0).getDate();const pdim=new Date(_DT.y,_DT.m,0).getDate();
+  const t=new Date();const isT=(d)=>d===t.getDate()&&_DT.m===t.getMonth()&&_DT.y===t.getFullYear();
+  let cells="";
+  for(let i=0;i<lead;i++)cells+=`<div class="dc mut">${pdim-lead+1+i}</div>`;
+  for(let d=1;d<=dim;d++){const cls=(_DT.has&&d===_DT.d?"sel ":"")+(isT(d)?"today":"");
+    cells+=`<div class="dc ${cls}" onclick="_dtPick(${d})">${d}</div>`;}
+  const opt=(n,sel,pad)=>{let o="";for(let i=0;i<n;i++){const v=pad?String(i).padStart(2,"0"):i;
+    o+=`<option value="${i}" ${i===sel?"selected":""}>${v}</option>`}return o};
+  $("dtsheet").innerHTML=`
+    <div class="dth"><b>${_UZMON[_DT.m]} ${_DT.y}</b>
+      <div class="dtnav"><button class="icobtn" onclick="_dtNav(-1)"><i class="ti ti-chevron-left"></i></button>
+        <button class="icobtn" onclick="_dtNav(1)"><i class="ti ti-chevron-right"></i></button></div></div>
+    <div class="dtgrid">${_UZWD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
+    <div class="dttime"><i class="ti ti-clock" style="color:var(--brand)"></i>
+      <select id="dt_hh" onchange="_dtTime('hh',this.value)">${opt(24,_DT.hh,true)}</select><span>:</span>
+      <select id="dt_mm" onchange="_dtTime('mm',this.value)">${opt(60,_DT.mm,true)}</select></div>
+    <div class="dtacts"><button class="btn" onclick="_dtClear()">Tozalash</button>
+      <button class="btn" onclick="closeDT()">Bekor</button>
+      <button class="btn pri" onclick="_dtDone()">Tayyor</button></div>`;}
+function _dtClear(){const inp=$(_DT.id);if(inp)inp.value="";_dtSync("");closeDT()}
+function _dtDone(){const p=n=>String(n).padStart(2,"0");
+  const v=`${_DT.y}-${p(_DT.m+1)}-${p(_DT.d)}T${p(_DT.hh)}:${p(_DT.mm)}`;
+  const inp=$(_DT.id);if(inp)inp.value=v;_dtSync(v);closeDT()}
+function _dtSync(v){const b=$(_DT.id+"_b");if(!b)return;
+  b.classList.toggle("empty",!v);b.querySelector("span").textContent=v?_dtLabel(v):"Sana va vaqtni tanlang"}
 const $=id=>document.getElementById(id);
 const el=id=>$("v-"+id);
-function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div><button class="icobtn" onclick="render(VIEW)" title="Yangilash"><i class="ti ti-refresh"></i></button></div>`}
+function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div><button class="icobtn" onclick="refreshView(this)" title="Yangilash"><i class="ti ti-refresh"></i></button></div>`}
+// Refresh with visible feedback — the icon spins while the view re-fetches, so a
+// tap never looks dead (Telegram webview has no visible loading state otherwise).
+async function refreshView(btn){if(btn)btn.classList.add("spin");
+  try{await render(VIEW);}finally{if(btn)setTimeout(()=>btn.classList.remove("spin"),350);}}
 function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
 const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols",team:"team",risks:"risks",categories:"categories",calendar:"calendar"};
@@ -399,12 +525,20 @@ async function renderDash(box){
   if(ol.length||st.length){h+=`<div class="lbl" style="margin-top:14px">Jamoa nazorati</div>`;
     ol.forEach(p=>h+=`<div class="warn" onclick="go('team')"><i class="ti ti-user-exclamation" style="color:var(--amber);font-size:19px"></i><div><b style="font-weight:600">${esc(p.name)}</b> — ${p.active||0} aktiv${p.overdue?", "+p.overdue+" kechikkan":""} <span style="color:var(--faint)">(yuklama yuqori)</span></div></div>`);
     st.forEach(x=>{CACHE.tasks[x.id]=x;h+=`<div class="warn" onclick="openTask('${x.id}')"><i class="ti ti-clock-pause" style="color:var(--red);font-size:19px"></i><div>«${esc((x.title||'').slice(0,28))}» — ${Math.round(x.age_days||0)} kun${x.assignee?" · "+esc(x.assignee):""} <span style="color:var(--faint)">(turg'un)</span></div></div>`;});}
-  // ── Haftalik pulse ──
+  // ── Natijalar: kunlik + haftalik (gradient) ──
   const pg=d.progress||0;const c=d.counts||{};
-  h+=`<div class="pulse"><svg style="width:52px;height:52px;flex:none" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--soft)" stroke-width="4"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--brand)" stroke-width="4" stroke-dasharray="${pg} ${100-pg}" stroke-dashoffset="25" stroke-linecap="round"/><text x="18" y="21" text-anchor="middle" font-size="9" font-weight="700" fill="var(--text)">${pg}%</text></svg>
-    <div><div style="font-size:13px;font-weight:600">Haftalik pulse</div><div style="font-size:12px;color:var(--muted)">${c.done||0} bajarildi · ${c.pending||0} qoldi</div></div></div>`;
-  // ── Tezkor amallar ──
-  h+=`<div class="qa"><div onclick="openTask({})"><i class="ti ti-plus"></i>Vazifa</div><div onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnoma</div><div onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Eksport</div></div>`;
+  const todayPlan=(tt.length)+(tm.length);
+  h+=`<div class="lbl" style="margin-top:14px">Natijalar</div>
+    <div class="results">
+      <div class="rs">
+        <div><div class="rn">${c.today_done||0}</div><div class="rl">Bugun bajarildi</div>
+          <div class="rsub">${todayPlan} ta bugungi reja</div></div>
+      </div>
+      <div class="rs">
+        <svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="4"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="#fff" stroke-width="4" stroke-dasharray="${pg} ${100-pg}" stroke-dashoffset="25" stroke-linecap="round"/><text x="18" y="21" text-anchor="middle" font-size="9" font-weight="700">${pg}%</text></svg>
+        <div><div class="rl">Shu hafta</div><div class="rsub">${c.done||0} bajarildi · ${c.pending||0} qoldi</div></div>
+      </div>
+    </div>`;
   box.innerHTML=h;
 }
 function taskRow(t,sub,nsub){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
@@ -424,7 +558,13 @@ let TFILTER="active";
 const _pr=t=>({P0:0,P1:1,P2:2,P3:3}[t.priority]??2);
 const _byPrioDl=(a,b)=>_pr(a)-_pr(b)||(a.deadline||"9999").localeCompare(b.deadline||"9999");
 const _ACT=new Set(["todo","in_progress","blocked"]);
-const _mf=t=>TFILTER==="all"?true:TFILTER==="done"?t.status==="done":_ACT.has(t.status);
+const _isOverdue=t=>_ACT.has(t.status)&&t.deadline&&new Date(t.deadline).getTime()<Date.now();
+const _mf=t=>TFILTER==="all"?true
+  :TFILTER==="done"?t.status==="done"
+  :TFILTER==="kechikkan"?_isOverdue(t)
+  :_ACT.has(t.status);   // faol
+// TFILTER → /export/tasks filtri
+const _EXPF={active:"active",kechikkan:"overdue",done:"done",all:"all"};
 let _openSubs=new Set();
 const PCHIP={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
 // "X kun qoldi" / "Bugun" / "X kun kechikdi" — rangi shoshilinchlikка qarab.
@@ -475,14 +615,16 @@ async function renderTasks(box){
   const orphans=list.filter(t=>t.parent_id&&!shownIds.has(t.parent_id)&&_mf(t)).sort(_byPrioDl);
   const orphHtml=orphans.length?('<div class="sec" style="margin:16px 2px 9px"><h2 style="font-size:13px;color:var(--faint)">Ichki vazifalar (ota boshqa ro\'yxatда)</h2></div><div class="tline">'+orphans.map(s=>taskCard(s,[])).join("")+'</div>'):"";
   const chip=(k,l)=>`<button class="${TFILTER===k?'on':''}" onclick="setTF('${k}')">${l}</button>`;
-  box.innerHTML=hdr("Vazifalar","")+`<div class="tflt">${chip("active","Faol")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
+  const head=`<div class="head"><div><h1>Vazifalar</h1></div><div style="display:flex;gap:8px">
+    <button class="icobtn" onclick="pickImport()" title="Import (Excel)"><i class="ti ti-upload"></i></button>
+    <button class="icobtn" onclick="download('/export/tasks?filter='+(_EXPF[TFILTER]||'active'),'vazifalar.xlsx')" title="Eksport (Excel)"><i class="ti ti-download"></i></button>
+    <button class="icobtn" onclick="refreshView(this)" title="Yangilash"><i class="ti ti-refresh"></i></button></div></div>`;
+  box.innerHTML=head+`<div class="tflt">${chip("active","Faol")}${chip("kechikkan","Kechikkan")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
     (shown.length?'<div class="tline">'+rows+'</div>':"")+orphHtml+
-    ((shown.length||orphans.length)?"":emptyBox("checklist","Vazifa yo'q"));
+    ((shown.length||orphans.length)?"":emptyBox("checklist",TFILTER==="kechikkan"?"Kechikkan vazifa yo'q 🎉":"Vazifa yo'q"));
 }
 function setTF(k){TFILTER=k;render("tasks")}
 
-let MFILTER="yaqin";
-function setMF(k){MFILTER=k;render("meetings")}
 function _hm(iso){const d=new Date(iso);if(isNaN(d))return"";const p=n=>String(n).padStart(2,"0");return `${p(d.getHours())}:${p(d.getMinutes())}`}
 const _MON=["yanvar","fevral","mart","aprel","may","iyun","iyul","avgust","sentabr","oktabr","noyabr","dekabr"];
 const _WD=["Yakshanba","Dushanba","Seshanba","Chorshanba","Payshanba","Juma","Shanba"];
@@ -499,23 +641,47 @@ function _meetRow(m){const done=!!m.completed_at;const loc=m.location_or_link||"
   let metas="";
   if(ps.length)metas+=`<div class="mm"><i class="ti ti-users"></i>${esc(ps.length>2?ps.slice(0,2).join(", ")+" +"+(ps.length-2):ps.join(", "))}</div>`;
   if(loc)metas+=`<div class="mm"><i class="ti ti-${_isLink(loc)?'video':'map-pin'}"></i>${esc(loc)}</div>`;
+  const rec=RECUR[m.recurrence_rule]&&m.recurrence_rule?`<span class="chip violet"><i class="ti ti-repeat" style="font-size:11px;vertical-align:-1px"></i> ${RECUR[m.recurrence_rule]}</span>`:'';
   let badges="";
-  if(done||_hasProtocol(m))badges='<div class="mbadges">'+(done?'<span class="chip green"><i class="ti ti-check" style="font-size:11px;vertical-align:-1px"></i> Bo\'ldi</span>':'')+(_hasProtocol(m)?'<span class="chip violet"><i class="ti ti-file-text" style="font-size:11px;vertical-align:-1px"></i> Bayonnoma</span>':'')+'</div>';
+  if(done||_hasProtocol(m)||rec)badges='<div class="mbadges">'+(done?'<span class="chip green"><i class="ti ti-check" style="font-size:11px;vertical-align:-1px"></i> Bo\'ldi</span>':'')+rec+(_hasProtocol(m)?'<span class="chip violet"><i class="ti ti-file-text" style="font-size:11px;vertical-align:-1px"></i> Bayonnoma</span>':'')+'</div>';
   return `<div class="mrow"><div class="mtime">${_hm(m.datetime_start)}</div><div class="mrail"><div class="mdot ${done?'done':''}">${done?'<i class="ti ti-check"></i>':''}</div></div><div class="mc ${done?'dim':''}" onclick="meetingDetail('${m.id}')"><div class="mt">${esc(m.title)}</div>${metas}${badges}</div></div>`}
+// Uchrashuvlar — oylik kalendar setkasi. Kun bosilganda o'sha kun ro'yxati chiqadi.
+let _meetYM=null,_meetSel=null;
 async function renderMeetings(box){
-  const d=await api("/meetings");const list=d.meetings||[];
-  list.forEach(x=>CACHE.meetings[x.id]=x);
-  const now=Date.now();
-  const mf=m=>{if(MFILTER==="hammasi")return true;const past=!!(m.completed_at||new Date(m.datetime_start).getTime()<now);return MFILTER==="otgan"?past:!past;};
-  const sel=list.filter(mf).sort((a,b)=>MFILTER==="otgan"?(new Date(b.datetime_start)-new Date(a.datetime_start)):(new Date(a.datetime_start)-new Date(b.datetime_start)));
-  let rows="",lastKey="";
-  sel.forEach(m=>{const key=new Date(m.datetime_start).toDateString();
-    if(key!==lastKey){rows+=`<div class="grp">${_dayLabel(m.datetime_start)}</div>`;lastKey=key;}
-    rows+=_meetRow(m);});
-  const chip=(k,l)=>`<button class="${MFILTER===k?'on':''}" onclick="setMF('${k}')">${l}</button>`;
-  box.innerHTML=hdr("Uchrashuvlar","")+`<div class="flt">${chip("yaqin","Yaqin")}${chip("otgan","O'tgan")}${chip("hammasi","Hammasi")}</div>`+
-    (sel.length?`<div class="mtl">${rows}</div>`:emptyBox("calendar-off","Uchrashuv yo'q"));
+  const now=new Date();
+  if(!_meetYM)_meetYM={y:now.getFullYear(),m:now.getMonth()};   // m: 0-11
+  const d=await api(`/calendar?year=${_meetYM.y}&month=${_meetYM.m+1}`);
+  const list=d.meetings||[];list.forEach(x=>CACHE.meetings[x.id]=x);
+  // Kun bo'yicha guruhlash
+  const byDay={};list.forEach(m=>{const k=new Date(m.datetime_start).getDate();(byDay[k]=byDay[k]||[]).push(m);});
+  // Tanlangan kunni aniqlash: joriy oyda bugun, aks holda birinchi uchrashuvli kun
+  const isCurMonth=(_meetYM.y===now.getFullYear()&&_meetYM.m===now.getMonth());
+  if(_meetSel==null||_meetSelMonth!==`${_meetYM.y}-${_meetYM.m}`){
+    _meetSel=isCurMonth?now.getDate():(Object.keys(byDay).map(Number).sort((a,b)=>a-b)[0]||1);
+    _meetSelMonth=`${_meetYM.y}-${_meetYM.m}`;}
+  const first=new Date(_meetYM.y,_meetYM.m,1);let lead=(first.getDay()+6)%7;   // Mon=0
+  const dim=new Date(_meetYM.y,_meetYM.m+1,0).getDate();
+  let cells="";
+  for(let i=0;i<lead;i++)cells+='<div class="cald mut"></div>';
+  for(let dd=1;dd<=dim;dd++){const cnt=(byDay[dd]||[]).length;
+    const cls=(dd===_meetSel?"sel ":"")+((isCurMonth&&dd===now.getDate())?"today":"");
+    const dots=cnt?`<div class="dots">${Array.from({length:Math.min(cnt,3)}).map(()=>'<i></i>').join("")}</div>`:'<div class="dots"></div>';
+    cells+=`<div class="cald ${cls}" onclick="meetPick(${dd})">${dd}${dots}</div>`;}
+  const dayList=(byDay[_meetSel]||[]).sort((a,b)=>new Date(a.datetime_start)-new Date(b.datetime_start));
+  const selDate=new Date(_meetYM.y,_meetYM.m,_meetSel);
+  const listHtml=dayList.length?`<div class="mtl">${dayList.map(_meetRow).join("")}</div>`
+    :emptyBox("calendar-off","Bu kunda uchrashuv yo'q");
+  box.innerHTML=hdr("Uchrashuvlar","")+
+    `<div class="calh"><button class="icobtn" onclick="meetNav(-1)"><i class="ti ti-chevron-left"></i></button>
+      <b>${_UZMON[_meetYM.m]} ${_meetYM.y}</b>
+      <button class="icobtn" onclick="meetNav(1)"><i class="ti ti-chevron-right"></i></button></div>
+    <div class="calgrid">${_UZWD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
+    <div class="calday">${_dayLabel(selDate.toISOString())}</div>
+    ${listHtml}`;
 }
+let _meetSelMonth=null;
+function meetNav(delta){_meetYM.m+=delta;if(_meetYM.m<0){_meetYM.m=11;_meetYM.y--}if(_meetYM.m>11){_meetYM.m=0;_meetYM.y++}_meetSel=null;render("meetings");}
+function meetPick(d){_meetSel=d;render("meetings");}
 async function renderNotes(box){
   const d=await api("/notes");const list=d.notes||[];
   list.forEach(x=>CACHE.notes[x.id]=x);
@@ -529,7 +695,7 @@ async function renderReminders(box){
   const d=await api("/reminders");const list=d.reminders||[];
   list.forEach(x=>CACHE.reminders[x.id]=x);
   box.innerHTML=hdr("Eslatmalar","")+(list.length?list.map(r=>`<div class="card">
-    <div style="font-size:15px;font-weight:500">${esc(r.title)}</div>
+    <div style="font-size:15px;font-weight:500">${esc(r.title)}${(r.recurrence_rule&&RECUR[r.recurrence_rule])?` <span class="chip violet"><i class="ti ti-repeat" style="font-size:11px;vertical-align:-1px"></i> ${RECUR[r.recurrence_rule]}</span>`:''}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(r.remind_at)}${r.note?" · "+esc(r.note):""}</div>
     <div class="rowbtns"><button class="btn pri" onclick="rDone('${r.id}')"><i class="ti ti-check"></i></button>
       <button class="btn" onclick="openReminder('${r.id}')"><i class="ti ti-edit"></i></button>
@@ -537,29 +703,35 @@ async function renderReminders(box){
 }
 
 async function renderInsights(box){
-  const d=await api("/insights");const days=d.by_day||[];const cats=(d.categories||[]).slice(0,6);
+  const [d,dash]=await Promise.all([api("/insights"),api("/dashboard").catch(()=>({}))]);
+  const days=d.by_day||[];const cats=(d.categories||[]).slice(0,6);
+  const r=dash.radar||{};const c=dash.counts||{};const pg=dash.progress||0;
+  const doneWeek=days.reduce((s,x)=>s+x.count,0);
   const max=Math.max(1,...days.map(x=>x.count));const wd=["Yak","Du","Se","Ch","Pa","Ju","Sh"];
   const bars=days.map(x=>{const dt=new Date(x.day+"T00:00");const lbl=isNaN(dt)?"":wd[dt.getDay()];
-    return `<div class="col"><div class="b" style="height:${Math.round(x.count/max*110)}px"></div><small>${lbl}</small></div>`}).join("");
+    return `<div class="col"><div class="b" style="height:${Math.round(x.count/max*110)}px" title="${x.count}"></div><small>${lbl}</small></div>`}).join("");
   const total=cats.reduce((s,c)=>s+c.count,0)||1;const cols=["#6C5CE7","#2f7ae5","#1E9E75","#E8A317","#d64545","#b060d0"];
   let acc=0;const segs=cats.map((c,i)=>{const frac=c.count/total;const dash=`${(frac*100).toFixed(2)} ${100-frac*100}`;
     const off=25-acc*100;acc+=frac;return `<circle r="15.915" cx="18" cy="18" fill="none" stroke="${cols[i%cols.length]}" stroke-width="6" stroke-dasharray="${dash}" stroke-dashoffset="${off}"></circle>`}).join("");
   const legend=cats.map((c,i)=>`<div class="li"><span class="dot" style="background:${cols[i%cols.length]}"></span>${esc(c.name)} <span style="margin-left:auto;color:var(--faint)">${Math.round(c.count/total*100)}%</span></div>`).join("");
+  const kpi=(n,l,col)=>`<div class="kpi"><div class="kn" style="color:${col||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
   box.innerHTML=hdr("Tahlil","So'nggi 7 kun")+
-    `<div class="card"><div style="font-size:13px;color:var(--muted);margin-bottom:2px">Bajarilgan vazifalar</div>
-      <div style="font-size:26px;font-weight:600;margin-bottom:12px">${days.reduce((s,x)=>s+x.count,0)}</div>
+    `<div class="kpis">
+      ${kpi(doneWeek,"Bajarildi (7 kun)","var(--green)")}
+      ${kpi(pg+"%","Bajarilish darajasi","var(--brand)")}
+      ${kpi(r.total||0,"Faol vazifalar")}
+      ${kpi(r.overdue||0,"Kechikkan","var(--red)")}
+    </div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:2px">Kunlik bajarilgan</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">So'nggi 7 kun kesimida</div>
       <div class="bar">${bars}</div></div>
-    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar bo'yicha yuklama</div>
       ${cats.length?`<div style="display:flex;align-items:center;gap:18px"><svg viewBox="0 0 36 36" style="width:110px;height:110px;flex:none">${segs}</svg><div class="legend" style="flex:1">${legend}</div></div>`:emptyBox("chart-donut","Ma'lumot yo'q")}</div>`;
 }
 
 async function renderProfile(box){
-  const d=await api("/dashboard").catch(()=>({counts:{}}));const c=d.counts||{};
   box.innerHTML=hdr("Profil","")+
-    `<div class="hero" style="margin-bottom:16px"><div style="font-size:15px;opacity:.9;margin-bottom:8px">Umumiy ko'rinish</div>
-      <div style="display:flex"><div style="flex:1"><div style="font-size:26px;font-weight:600">${c.total||0}</div><div style="font-size:12px;opacity:.85">Jami vazifa</div></div>
-      <div style="flex:1"><div style="font-size:26px;font-weight:600">${c.done||0}</div><div style="font-size:12px;opacity:.85">Bajarilgan</div></div></div></div>
-    <div class="card menu">
+    `<div class="card menu">
       <div class="mi" onclick="go('insights')"><i class="ti ti-chart-bar"></i>Statistika<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('team')"><i class="ti ti-users"></i>Jamoa yuklamasi<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('risks')"><i class="ti ti-alert-triangle"></i>Risklar<i class="ti ti-chevron-right ch"></i></div>
@@ -598,11 +770,27 @@ async function download(path,fallback){
 
 async function renderTeam(box){
   const t=(await api("/team")).team||[];const mx=Math.max(1,...t.map(x=>x.active||0));
-  box.innerHTML=hdr("Jamoa yuklamasi","")+(t.length?t.map(p=>`<div class="card">
-    <div style="display:flex;justify-content:space-between"><div style="font-size:15px;font-weight:500">${esc(p.name)}</div><div style="font-size:14px;color:var(--brand);font-weight:600">${p.active||0}</div></div>
-    <div style="height:6px;background:var(--soft);border-radius:6px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${Math.round((p.active||0)/mx*100)}%;background:var(--brand)"></div></div>
-    <div style="font-size:11px;color:var(--muted);margin-top:7px">${p.urgent?`<span class="chip block">${p.urgent} shoshilinch</span> `:''}${p.overdue?`<span class="chip red">${p.overdue} kechikkan</span> `:''}${p.next_deadline?'<i class="ti ti-clock" style="vertical-align:-2px"></i> '+fmt(p.next_deadline):''}</div></div>`).join(""):emptyBox("users","Ijrochi topilmadi"));
+  const row=p=>`<div class="card tcard">
+    <div class="av">${esc(_initials(p.name))}</div>
+    <div class="tbody">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div class="tname">${esc(p.name)}</div>
+        <div style="font-size:14px;color:var(--brand);font-weight:700">${p.active||0}</div></div>
+      <div class="tbar"><i style="width:${Math.round((p.active||0)/mx*100)}%"></i></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:7px">${p.urgent?`<span class="chip block">${p.urgent} shoshilinch</span> `:''}${p.overdue?`<span class="chip red">${p.overdue} kechikkan</span> `:''}${(!p.active&&!p.overdue)?'<span style="color:var(--faint)">Faol vazifasiz</span>':''}${p.next_deadline?' <i class="ti ti-clock" style="vertical-align:-2px"></i> '+fmt(p.next_deadline):''}</div>
+    </div>
+    <div class="tdel" onclick="delPerson('${esc(p.name).replace(/'/g,"\\'")}')" title="O'chirish"><i class="ti ti-trash"></i></div>
+  </div>`;
+  box.innerHTML=hdr("Jamoa yuklamasi","")+
+    `<div class="addrow"><input id="f_newperson" placeholder="Yangi ijrochi ismi" onkeydown="if(event.key==='Enter')addPerson()">
+      <button class="btn pri" onclick="addPerson()"><i class="ti ti-plus"></i> Qo'shish</button></div>`+
+    (t.length?t.map(row).join(""):emptyBox("users","Ijrochi yo'q"));
 }
+async function addPerson(){const n=val("f_newperson");if(!n)return flash("Ism kerak");
+  try{await api("/contacts",{method:"POST",body:JSON.stringify({name:n})});flash("Qo'shildi");render("team");}
+  catch(e){flash("⚠️ "+e.message);}}
+function delPerson(name){const run=async()=>{try{await api("/contacts?name="+encodeURIComponent(name),{method:"DELETE"});flash("O'chirildi");render("team");}catch(e){flash("⚠️ "+e.message);}};
+  if(tg?.showConfirm)tg.showConfirm(`«${name}» ijrochilar ro'yxatidan o'chirilsinmi? (vazifalar saqlanadi)`,ok=>{if(ok)run()});else run();}
 async function renderRisks(box){
   const d=await api("/risks");const c=d.counts||{};
   const card=(n,l,col)=>`<div class="card" style="text-align:center;padding:14px 8px"><div style="font-size:26px;font-weight:600;color:${col}">${n||0}</div><div style="font-size:12px;color:var(--muted)">${l}</div></div>`;
@@ -679,8 +867,16 @@ function del(path,v){const run=()=>act(()=>api(path,{method:"DELETE"}),"O'chiril
 
 const mbg=$("mbg");function closeM(){mbg.classList.remove("show")}
 mbg.addEventListener("click",e=>{if(e.target===mbg)closeM()});
+$("dtpop").addEventListener("click",e=>{if(e.target.id==="dtpop")closeDT()});
 function openM(html){$("modal").innerHTML=html;mbg.classList.add("show")}
 function opts(list,sel){return list.map(v=>`<option ${v===sel?"selected":""}>${esc(v)}</option>`).join("")}
+// Faqat mavjud qiymatlardan tanlanadigan <select> (yangi yozib bo'lmaydi). Joriy qiymat
+// ro'yxatda bo'lmasa ham saqlanadi (tahrirда yo'qolib qolmasin).
+function selOpts(list,cur,emptyLabel){
+  const arr=(list||[]).slice();
+  if(cur&&!arr.includes(cur))arr.unshift(cur);
+  return `<option value="">${esc(emptyLabel)}</option>`+arr.map(v=>`<option value="${esc(v)}" ${v===cur?"selected":""}>${esc(v)}</option>`).join("");
+}
 function val(id){return ($(id)?.value||"").trim()}
 // Teglarni har qanday shakldan ("a, b" satri) — massiv, JSON-satr yoki bo'sh — himoyalab chiqaradi.
 function _tagsStr(g){if(Array.isArray(g))return g.join(", ");
@@ -691,11 +887,11 @@ function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":(t.parent_id?"Y
   <input type="hidden" id="f_parent" value="${esc(t.parent_id||"")}">
   <label>Sarlavha</label><input id="f_title" value="${esc(t.title)}" placeholder="Nima qilinsin?">
   <label>Izoh</label><textarea id="f_desc">${esc(t.description)}</textarea>
-  <label>Ijrochi</label><input id="f_asg" list="dl_c" value="${esc(t.assignee)}"><datalist id="dl_c">${opts(META.contacts)}</datalist>
-  <label>Muddat</label><input type="datetime-local" id="f_dl" value="${toLocal(t.deadline)}">
+  <label>Ijrochi</label><select id="f_asg">${selOpts(META.contacts,t.assignee,"— Ijrochisiz —")}</select>
+  <label>Muddat</label>${dtField("f_dl",t.deadline)}
   <div style="display:flex;gap:10px"><div style="flex:1"><label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select></div>
     <div style="flex:1"><label>Holat</label><select id="f_status">${Object.keys(STATSEL).map(s=>`<option value="${s}" ${(t.status||"todo")===s?"selected":""}>${STATSEL[s]}</option>`).join("")}</select></div></div>
-  <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}"><datalist id="dl_cat">${opts(META.categories)}</datalist>
+  <label>Kategoriya</label><select id="f_cat">${selOpts(META.categories,t.category,"— Kategoriyasiz —")}</select>
   <div style="display:flex;gap:10px"><div style="flex:1"><label>Takroriylik</label><select id="f_rec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(t.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select></div>
     <div style="flex:1"><label>Teglar (vergul)</label><input id="f_tags" value="${esc(_tagsStr(t.tags))}"></div></div>
   ${t.id?`<button class="btn" style="margin-top:12px;width:100%" onclick="closeM();openTask({parent_id:'${t.id}'})"><i class="ti ti-subtask"></i> Sub-vazifa qo'shish</button>`:""}
@@ -730,11 +926,12 @@ async function saveTask(id){
 
 function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uchrashuv"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(m.title)}">
-  <div style="display:flex;gap:10px"><div style="flex:1"><label>Boshlanish</label><input type="datetime-local" id="f_start" value="${toLocal(m.datetime_start)}"></div>
-    <div style="flex:1"><label>Tugash</label><input type="datetime-local" id="f_end" value="${toLocal(m.datetime_end)}"></div></div>
+  <label>Boshlanish</label>${dtField("f_start",m.datetime_start)}
+  <label>Tugash</label>${dtField("f_end",m.datetime_end)}
   <label>Joy / havola</label><input id="f_loc" value="${esc(m.location_or_link)}">
   <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(", "))}">
   <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
+  <label>Takroriylik</label><select id="f_mrec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(m.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
 const editMeeting=m=>openM(meetingForm(typeof m==="object"?(m||{}):(CACHE.meetings[m]||{})));
 // Kartani bosish → tafsilot (o'qish) ekrani; yangi uchrashuv → tahrir formasi.
@@ -771,7 +968,7 @@ async function genProtocol(id){const notes=val("f_pnotes");if(!notes)return flas
     flash("Bayonnoma tayyor"+(r.tasks_created?` · ${r.tasks_created} vazifa qo'shildi`:(r.tasks_failed?" · vazifalarni qo'shib bo'lmadi":"")));
     meetingDetail(id);render(VIEW);
   }catch(e){flash("⚠️ "+e.message);if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-sparkles"></i> Bayonnoma yarat';}}}
-async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),datetime_end:fromLocal(val("f_end")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
+async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),datetime_end:fromLocal(val("f_end")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag"),recurrence_rule:val("f_mrec")};
   if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3>
@@ -784,11 +981,12 @@ async function saveNote(id){const b={title:val("f_title"),content:val("f_content
 
 function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi eslatma"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(r.title)}">
-  <label>Vaqt</label><input type="datetime-local" id="f_at" value="${toLocal(r.remind_at)}">
+  <label>Vaqt</label>${dtField("f_at",r.remind_at)}
   <label>Izoh</label><input id="f_note" value="${esc(r.note)}">
+  <label>Takroriylik</label><select id="f_rrec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(r.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveReminder('${r.id||""}')">Saqlash</button></div>`}
 const openReminder=x=>openM(reminderForm(typeof x==="object"?(x||{}):(CACHE.reminders[x]||{})));
-async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note")};
+async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note"),recurrence_rule:val("f_rrec")};
   if(!b.remind_at)return flash("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 // ── Search overlay ──
@@ -903,25 +1101,50 @@ function _chatDownload(d){const box=document.createElement("div");box.className=
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
-// ── Browser login (Telegram Login Widget) — HOZIRCHA O'CHIRILGAN. ──
-// Domen BotFather'да ro'yxatdan o'tmagani uchun ("Bot domain invalid") brauzer
-// login vaqtincha o'chirildi; ilova faqat Telegram ichida ochiladi. Qayta yoqish
-// uchun: quyidagi showLogin() ичига Login Widget skriptini qaytaring (git tarixida).
-// onTGAuth + /api/auth/telegram + sessiya backend'да saqlanib qoldi (uxlab turibdi).
+// ── Brauzer login (Telegram Login Widget) ──
+// "Telegram orqali kirish" tugmasi bosilganda Telegram onTGAuth(user)ni chaqiradi →
+// biz uni /api/auth/telegram'ga yuboramiz → backend HMAC'ni tekshiradi, egaligini
+// (PRINCIPAL_USER_ID) tasdiqlaydi va imzolangan HttpOnly session cookie o'rnatadi.
+// SHART: WEBAPP_BOT_USERNAME env o'rnatilishi va domen BotFather'да /setdomain bilan
+// ro'yxatdan o'tishi kerak — aks holda Telegram tugmani ko'rsatmaydi.
 window.onTGAuth=async(user)=>{
+  const btn=$("tglogin_btn");if(btn)btn.innerHTML='<span style="opacity:.7;font-size:14px">Kirilmoqda…</span>';
   try{await api("/auth/telegram",{method:"POST",body:JSON.stringify(user)});location.reload();}
-  catch(e){_fatal("Kirish rad etildi: "+e.message);}
+  catch(e){
+    const forbidden=(e.message||"").includes("403")||(e.message||"").toLowerCase().includes("forbidden");
+    const msg=forbidden?"Bu hisob ruxsat etilmagan — faqat platforma egasi kira oladi."
+                       :"Kirish amalga oshmadi: "+e.message;
+    const el=$("tglogin_err");if(el){el.textContent=msg;el.style.display="block";}
+    if(btn)btn.innerHTML="";
+  }
 };
 async function showLogin(){
   let bot="";try{bot=(await (await fetch("/api/config")).json()).bot;}catch(e){}
-  document.querySelector("nav").style.display="none";$("fab").style.display="none";
+  const nav=document.querySelector("nav");if(nav)nav.style.display="none";
+  const fab=$("fab");if(fab)fab.style.display="none";
   const w=document.createElement("div");
-  w.style.cssText="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;background:var(--bg);z-index:50";
-  w.innerHTML='<div style="width:64px;height:64px;border-radius:20px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:30px"><i class="ti ti-brand-telegram"></i></div>'
-    +'<div style="font-size:22px;font-weight:600;color:var(--text)">Yordamchi Pro</div>'
-    +'<div style="font-size:14px;color:var(--muted);max-width:290px;line-height:1.55">Bu ilova hozircha faqat Telegram ichida ochiladi. Botni oching va menyudagi tugma orqali kiring.</div>'
-    +(bot?`<a href="https://t.me/${bot}" style="margin-top:6px;background:var(--brand);color:#fff;text-decoration:none;padding:12px 24px;border-radius:13px;font-size:15px;font-weight:600"><i class="ti ti-brand-telegram" style="vertical-align:-2px;margin-right:5px"></i>Telegramда ochish</a>`:'');
+  w.style.cssText="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:var(--bg);z-index:50";
+  w.innerHTML='<div style="width:66px;height:66px;border-radius:20px;background:linear-gradient(135deg,var(--brand),#a86bd0);color:#fff;display:flex;align-items:center;justify-content:center;font-size:31px"><i class="ti ti-brand-telegram"></i></div>'
+    +'<div style="font-size:23px;font-weight:800;color:var(--text);letter-spacing:-.02em">Yordamchi Pro</div>'
+    +'<div style="font-size:14px;color:var(--muted);max-width:300px;line-height:1.55">Davom etish uchun Telegram orqali kiring. Faqat platforma egasi kira oladi.</div>'
+    +'<div id="tglogin_btn" style="margin-top:10px;min-height:48px;display:flex;align-items:center;justify-content:center"></div>'
+    +'<div id="tglogin_err" style="display:none;color:var(--red);font-size:13px;max-width:300px;line-height:1.5"></div>'
+    +(bot?`<a href="https://t.me/${bot}" style="margin-top:2px;color:var(--muted);text-decoration:none;font-size:13px">yoki botni Telegramda oching →</a>`:'');
   document.body.appendChild(w);
+  if(bot){
+    // Login Widget skripti o'zini "Log in with Telegram" tugmasi (iframe) bilan
+    // almashtiradi va muvaffaqiyatda global onTGAuth(user)ni chaqiradi.
+    const s=document.createElement("script");
+    s.async=true;s.src="https://telegram.org/js/telegram-widget.js?22";
+    s.setAttribute("data-telegram-login",bot);
+    s.setAttribute("data-size","large");
+    s.setAttribute("data-radius","12");
+    s.setAttribute("data-onauth","onTGAuth(user)");
+    s.setAttribute("data-request-access","write");
+    $("tglogin_btn").appendChild(s);
+  }else{
+    $("tglogin_btn").innerHTML='<div style="color:var(--red);font-size:13px;max-width:300px;line-height:1.5">⚠️ Login sozlanmagan: <code>WEBAPP_BOT_USERNAME</code> env o\'rnatilishi kerak.</div>';
+  }
 }
 (async()=>{
   // Not inside Telegram (no initData) → require a browser session; 401 → login page.

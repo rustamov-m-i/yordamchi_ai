@@ -267,7 +267,7 @@ async def _reject_bad_parent(pid: str, self_id: str | None) -> None:
 _TASK_FIELDS = ("title", "description", "deadline", "priority", "status",
                 "assignee", "category", "recurrence_rule", "parent_id", "tags")
 _MEETING_FIELDS = ("title", "datetime_start", "datetime_end", "location_or_link",
-                   "participants", "agenda", "prep_notes")
+                   "participants", "agenda", "prep_notes", "recurrence_rule")
 _NOTE_FIELDS = ("title", "content", "status", "tags")
 _REMINDER_FIELDS = ("title", "note", "remind_at", "recurrence_rule", "task_id")
 
@@ -500,6 +500,7 @@ async def dashboard(request: web.Request) -> web.Response:
     today_meetings = await database.list_today_meetings()
     week = await database.completed_counts_by_day(7)
     done_week = sum(d["count"] for d in week)
+    today_done = week[-1]["count"] if week else 0   # last bucket = today
     total = len(active)
     blocked = sum(1 for t in active if t.get("status") == "blocked")
     progress = round(done_week / (total + done_week) * 100) if (total + done_week) else 0
@@ -515,7 +516,7 @@ async def dashboard(request: web.Request) -> web.Response:
     nxt = await database.next_first_meeting()
     return web.json_response({
         "progress": progress,                                   # compat (Profil + pulse)
-        "counts": {"total": total, "done": done_week, "pending": total},
+        "counts": {"total": total, "done": done_week, "pending": total, "today_done": today_done},
         "radar": {"total": total, "overdue": len(overdue), "blocked": blocked, "unassigned": len(unassigned)},
         "today": {"meetings": today_meetings, "tasks": today_tasks, "next": nxt},
         "priority": priority,
@@ -853,8 +854,16 @@ async def export_tasks(request: web.Request) -> web.Response:
 
 
 async def team(request: web.Request) -> web.Response:
-    """Per-assignee workload (active/urgent/overdue) — sorted by active desc."""
+    """Per-assignee workload (active/urgent/overdue) merged with the managed
+    contacts directory, so people with zero active tasks still show up (and can
+    be added/removed). Sorted by active desc, then name."""
     m = await database.assignee_load_map()
+    # Fold in directory contacts that have no active task yet (0 load).
+    for c in await database.list_contacts():
+        nm = (c.get("name") or "").strip()
+        if nm and nm not in m and nm not in ("belgilanmagan", "Men"):
+            m[nm] = {"name": nm, "active": 0, "urgent": 0, "important": 0,
+                     "overdue": 0, "next_deadline": None}
     rows = sorted(m.values(), key=lambda x: (-x.get("active", 0), x.get("name", "")))
     return web.json_response({"team": rows})
 
@@ -864,6 +873,22 @@ async def risks(request: web.Request) -> web.Response:
     overdue = await database.list_overdue_tasks()
     unassigned = await database.list_unassigned_tasks(limit=50)
     return web.json_response({"counts": counts, "overdue": overdue, "unassigned": unassigned})
+
+
+async def contacts_create(request: web.Request) -> web.Response:
+    name = ((await _json_body(request)).get("name") or "").strip()
+    if not name:
+        return web.json_response({"error": "name required"}, status=400)
+    await database.save_contact({"name": name})
+    return web.json_response({"ok": True}, status=201)
+
+
+async def contacts_delete(request: web.Request) -> web.Response:
+    name = (request.query.get("name") or "").strip()
+    if not name:
+        return web.json_response({"error": "name required"}, status=400)
+    ok = await database.delete_contact(name)
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
 
 
 async def categories_list(request: web.Request) -> web.Response:
@@ -1021,6 +1046,8 @@ def create_app() -> web.Application:
         web.get("/api/protocols/{id}/download", protocol_download),
         web.get("/api/export/tasks", export_tasks),
         web.get("/api/team", team),
+        web.post("/api/contacts", contacts_create),
+        web.delete("/api/contacts", contacts_delete),
         web.get("/api/risks", risks),
         web.get("/api/categories", categories_list),
         web.post("/api/categories", category_create),

@@ -985,6 +985,7 @@ class YordamchiScheduler:
                 if reminder.get("recurrence_rule"):
                     labels = {
                         "daily": "har kuni",
+                        "weekdays": "ish kunlari",
                         "weekly": "har hafta",
                         "monthly": "har oy",
                         "quarterly": "har chorak",

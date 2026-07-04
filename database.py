@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS meetings (
     followup_sent_at TEXT,
     icloud_uid TEXT,
     completed_at TEXT,
+    recurrence_rule TEXT,
+    recurrence_parent_id TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -337,6 +339,9 @@ async def init() -> None:
         meeting_cols = {row[1] for row in await cur.fetchall()}
         if "icloud_uid" not in meeting_cols:
             await db.execute("ALTER TABLE meetings ADD COLUMN icloud_uid TEXT")
+        for col in ("recurrence_rule", "recurrence_parent_id"):
+            if col not in meeting_cols:
+                await db.execute(f"ALTER TABLE meetings ADD COLUMN {col} TEXT")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_meetings_icloud ON meetings(icloud_uid)")
 
         cur = await db.execute("PRAGMA table_info(tasks)")
@@ -873,6 +878,19 @@ async def delete_all_contacts() -> int:
         cur = await db.execute("DELETE FROM contacts")
         await db.commit()
         return cur.rowcount
+
+
+async def delete_contact(name: str) -> bool:
+    """Remove one contact by name (case-insensitive). Only touches the contacts
+    directory — existing tasks keep their assignee text untouched."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM contacts WHERE lower(name) = lower(?)", (name,))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def count_table(table: str) -> int:
@@ -2083,8 +2101,9 @@ async def create_meeting(data: dict) -> str:
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO meetings (id, title, datetime_start, datetime_end, participants,
-                                     location_or_link, agenda, prep_notes, follow_up_actions, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                     location_or_link, agenda, prep_notes, follow_up_actions,
+                                     recurrence_rule, recurrence_parent_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 meeting_id,
                 data.get("title", "Uchrashuv"),
@@ -2095,6 +2114,8 @@ async def create_meeting(data: dict) -> str:
                 _agenda_to_text(data.get("agenda")),
                 data.get("prep_notes"),
                 json.dumps(_as_list(data.get("follow_up_actions")), ensure_ascii=False),
+                normalize_recurrence_rule(data.get("recurrence_rule")),
+                data.get("recurrence_parent_id"),
                 now_iso(),
             ),
         )
@@ -2108,7 +2129,7 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
     allowed = {
         "title", "datetime_start", "datetime_end", "participants", "location_or_link",
         "agenda", "prep_notes", "follow_up_actions", "reminded_at", "prep_sent_at",
-        "followup_sent_at", "icloud_uid",
+        "followup_sent_at", "icloud_uid", "recurrence_rule", "recurrence_parent_id",
     }
     # RENAME → propagate into the saved bayonnoma body. The protocol prose is frozen
     # in follow_up_actions at generation time; without this, correcting a mis-heard
@@ -2140,6 +2161,8 @@ async def update_meeting(meeting_id: str, data: dict) -> bool:
             value = json.dumps(_as_list(value), ensure_ascii=False)  # coerce str→list (no [] data loss)
         elif key == "agenda":
             value = _agenda_to_text(value)
+        elif key == "recurrence_rule":
+            value = normalize_recurrence_rule(value)
         values.append(value)
     if not fields:
         return False
@@ -2163,14 +2186,66 @@ async def cancel_meeting(meeting_id: str) -> bool:
 
 async def complete_meeting(meeting_id: str) -> bool:
     """Mark a meeting as attended/done. It then drops out of the active
-    (Bugun/Haftalik/…) views and shows with a ✅ in O'tgan."""
+    (Bugun/Haftalik/…) views and shows with a ✅ in O'tgan.
+
+    If the meeting is recurring, completing it spawns the next occurrence
+    (mirrors task recurrence). Only the first concurrent caller — the one whose
+    conditional UPDATE flips completed_at from NULL — owns the spawn, so two
+    overlapping completes can't create two copies of next week's meeting."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,))
+        before = await cur.fetchone()
+        if before is None:
+            return False
         cur = await db.execute(
-            "UPDATE meetings SET completed_at = ? WHERE id = ?",
+            "UPDATE meetings SET completed_at = ? WHERE id = ? AND completed_at IS NULL",
             (now_iso(), meeting_id),
         )
+        won = cur.rowcount > 0
         await db.commit()
-        return cur.rowcount > 0
+    if won and before["recurrence_rule"]:
+        await create_next_recurring_meeting(_row_to_meeting(before))
+    return won or before["completed_at"] is not None
+
+
+async def create_next_recurring_meeting(completed_meeting: dict) -> Optional[str]:
+    """Spawn the next occurrence of a recurring meeting, preserving the duration
+    (end − start) and shifting the whole interval forward by the rule. Dedup: if
+    an un-completed occurrence in this chain already exists, don't create another."""
+    rule = normalize_recurrence_rule(completed_meeting.get("recurrence_rule"))
+    if not rule:
+        return None
+    start = completed_meeting.get("datetime_start")
+    next_start = compute_next_recurrence(start, rule)
+    if not next_start:
+        return None
+    # Preserve the meeting length by shifting end by the same start→next_start delta.
+    next_end = None
+    sd, ed = parse_iso_dt(start), parse_iso_dt(completed_meeting.get("datetime_end"))
+    nsd = parse_iso_dt(next_start)
+    if sd and ed and nsd:
+        next_end = (nsd + (ed - sd)).isoformat()
+    chain_id = completed_meeting.get("recurrence_parent_id") or completed_meeting.get("id")
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            """SELECT id FROM meetings
+               WHERE recurrence_parent_id IN (?, ?) AND completed_at IS NULL LIMIT 1""",
+            (chain_id, completed_meeting.get("id")),
+        )
+        existing = await cur.fetchone()
+    if existing:
+        return existing[0]
+    return await create_meeting({
+        "title": completed_meeting.get("title") or "Uchrashuv",
+        "datetime_start": next_start,
+        "datetime_end": next_end,
+        "participants": completed_meeting.get("participants", []),
+        "location_or_link": completed_meeting.get("location_or_link"),
+        "agenda": completed_meeting.get("agenda"),
+        "recurrence_rule": rule,
+        "recurrence_parent_id": chain_id,
+    })
 
 
 async def uncomplete_meeting(meeting_id: str) -> bool:
