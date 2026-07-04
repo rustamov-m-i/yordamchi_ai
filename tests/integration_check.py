@@ -1696,6 +1696,32 @@ async def main():
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "   "})
         check("MiniApp: bo'sh sarlavha → 400", _r.status == 400)
         # ── Security-hardening regressions (audit: 4 LOW) ──
+        # ── Search + AI chat ──
+        await database.create_task({"title": "Qidiruv sinovi UNIKAL", "priority": "P2", "status": "todo"})
+        _sr = await (await _client.get("/api/search?q=UNIKAL", headers=_H)).json()
+        check("Search: /api/search topadi", any("UNIKAL" in (t.get("title") or "") for t in _sr.get("tasks", [])))
+        check("Search: qisqa so'rov (<2) bo'sh", not any((await (await _client.get("/api/search?q=a", headers=_H)).json()).values()))
+        # AI chat — stub process_message so no real Anthropic call; verify it executes actions
+        import claude_service as _cs2
+        _orig_pm = _cs2.process_message
+        async def _fake_pm(text, **k):
+            return {"user_message": "Vazifa qo'shildi ✓",
+                    "actions": [{"type": "create_task", "data": {"title": "AI chat orqali " + text[:20], "source": "webapp"}}]}
+        _cs2.process_message = _fake_pm
+        try:
+            _n0 = len(await database.list_tasks(limit=9999))
+            _cr = await (await _client.post("/api/chat", headers=_H, json={"message": "test vazifa"})).json()
+            check("Chat: reply + action bajarildi (DB'да yangi vazifa)",
+                  "reply" in _cr and _cr.get("created", {}).get("task") == 1
+                  and len(await database.list_tasks(limit=9999)) == _n0 + 1)
+            check("Chat: bo'sh xabar → 400",
+                  (await _client.post("/api/chat", headers=_H, json={"message": "  "})).status == 400)
+        finally:
+            _cs2.process_message = _orig_pm
+        check("Search/Chat: authsiz → 401",
+              (await _client.get("/api/search?q=x")).status == 401
+              and (await _client.post("/api/chat", json={"message": "x"})).status == 401)
+
         # S1: non-scalar value for a scalar field → clean 400, NOT a raw 500
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "x", "priority": {"a": 1}})
         check("S1: dict qiymatli maydon → 400 (500 emas)", _r.status == 400)

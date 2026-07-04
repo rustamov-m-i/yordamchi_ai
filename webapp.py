@@ -24,6 +24,7 @@ from aiohttp import web
 
 import config
 import database
+import claude_service
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +447,48 @@ async def meta(request: web.Request) -> web.Response:
     })
 
 
+async def search(request: web.Request) -> web.Response:
+    """Cross-entity search (tasks/meetings/notes/reminders) via database.search_all."""
+    q = (request.query.get("q") or "").strip()
+    if len(q) < 2:
+        return web.json_response({"tasks": [], "meetings": [], "notes": [], "reminders": []})
+    res = await database.search_all(q, limit=30)
+    return web.json_response({
+        "tasks": res.get("tasks", []),
+        "meetings": res.get("meetings", []),
+        "notes": res.get("notes", []),
+        "reminders": res.get("reminders", []),
+    })
+
+
+async def chat(request: web.Request) -> web.Response:
+    """AI (natural language) — same brain as the bot. Runs claude_service, then
+    AUTO-APPLIES the resulting actions (single-user app; like voice auto-confirm),
+    and returns Claude's reply + a summary of what changed."""
+    data = await _json_body(request)
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return web.json_response({"error": "message required"}, status=400)
+    if len(msg) > 4000:
+        return web.json_response({"error": "message too long"}, status=400)
+    import handlers  # same process as the bot; lazy to avoid load-order issues
+    try:
+        resp = await claude_service.process_message(msg)
+    except Exception:
+        logger.exception("webapp chat: process_message failed")
+        return web.json_response({"reply": "AI vaqtinchalik javob bera olmadi. Qayta urining."})
+    actions = resp.get("actions", []) or []
+    created = {}
+    if actions:
+        try:
+            ids = await handlers._execute_actions(actions)
+            created = {k: len(v) for k, v in ids.items() if v and not k.startswith("_")}
+        except Exception:
+            logger.exception("webapp chat: _execute_actions failed")
+    reply = (resp.get("user_message") or "").strip() or "Bajarildi."
+    return web.json_response({"reply": reply, "created": created})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
@@ -495,6 +538,8 @@ def create_app() -> web.Application:
         web.get("/api/meta", meta),
         web.get("/api/dashboard", dashboard),
         web.get("/api/insights", insights),
+        web.get("/api/search", search),
+        web.post("/api/chat", chat),
         web.get("/api/tasks", tasks_list),
         web.post("/api/tasks", task_create),
         web.patch("/api/tasks/{id}", task_update),

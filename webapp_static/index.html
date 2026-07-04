@@ -52,6 +52,23 @@
   .subgrp{margin:3px 0 9px 10px;border-left:2px solid #cfcbe8;padding-left:8px}
   .subgrp .trow:last-child{margin-bottom:0}
   .cnt{font-size:10px;color:#8a8a9e;background:#f0eff7;padding:1px 7px;border-radius:20px;margin-left:6px}
+  .aibar{display:flex;align-items:center;gap:9px;background:#fff;border:1.5px solid var(--brand-soft);
+    border-radius:14px;padding:11px 13px;margin-bottom:14px;color:var(--brand-d);font-size:13px;box-shadow:0 1px 4px rgba(108,92,231,.1)}
+  .aibar i{color:var(--brand);font-size:18px}.aibar span{color:#8a8a9e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ov{position:fixed;inset:0;background:var(--bg);z-index:40;display:none;flex-direction:column}
+  .ov.show{display:flex}
+  .ov .ovh{display:flex;align-items:center;gap:10px;padding:14px 14px 10px;border-bottom:1px solid var(--line);background:var(--card)}
+  .ov .ovh input{flex:1;border:none;background:none;font-size:16px;padding:6px 0}
+  .ov .ovh input:focus{outline:none}
+  .ov .ovb{flex:1;overflow:auto;padding:12px 14px 20px}
+  .msg{max-width:82%;padding:10px 13px;border-radius:15px;font-size:14px;margin-bottom:9px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+  .msg.u{background:var(--brand);color:#fff;margin-left:auto;border-bottom-right-radius:5px}
+  .msg.a{background:var(--card);color:var(--text);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .chatin{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);background:var(--card)}
+  .chatin input{flex:1;border:1.5px solid var(--line);border-radius:20px;padding:10px 14px;font-size:16px}
+  .chatin input:focus{outline:none;border-color:var(--brand)}
+  .chatin button{border:none;background:var(--brand);color:#fff;width:42px;border-radius:50%;font-size:18px;flex:none}
+  .srhint{color:var(--faint);text-align:center;padding:30px 20px;font-size:13px}
   .rowbtns{display:flex;gap:7px;margin-top:10px}
   .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:#f2f1f8;color:var(--text)}
   .btn.pri{background:var(--brand);color:#fff}
@@ -118,6 +135,19 @@
 <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
 
+<div class="ov" id="searchov">
+  <div class="ovh"><button class="icobtn" onclick="closeOv('searchov')"><i class="ti ti-arrow-left"></i></button>
+    <input id="searchq" placeholder="Qidirish (vazifa, uchrashuv, qayd)..." oninput="doSearch(this.value)"></div>
+  <div class="ovb" id="searchres"><div class="srhint">Kamida 2 harf yozing</div></div>
+</div>
+<div class="ov" id="chatov">
+  <div class="ovh"><button class="icobtn" onclick="closeOv('chatov')"><i class="ti ti-arrow-left"></i></button>
+    <div style="font-weight:600"><i class="ti ti-sparkles" style="color:var(--brand);vertical-align:-2px"></i> Yordamchi AI</div></div>
+  <div class="ovb" id="chatmsgs"></div>
+  <div class="chatin"><input id="chatq" placeholder="Yozing yoki so'rang..." onkeydown="if(event.key==='Enter')sendChat()">
+    <button onclick="sendChat()"><i class="ti ti-arrow-up"></i></button></div>
+</div>
+
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
 <script>
 const tg=window.Telegram?.WebApp; if(tg){tg.ready();tg.expand();}
@@ -173,7 +203,9 @@ async function render(v){
 async function renderDash(box){
   const d=await api("/dashboard");const c=d.counts||{};
   let h=`<div class="head"><div><h1>Salom, Maqsud</h1><div class="sub">Bugungi rejangiz</div></div>
-    <button class="icobtn" onclick="go('reminders')"><i class="ti ti-bell"></i></button></div>
+    <div style="display:flex;gap:8px"><button class="icobtn" onclick="openSearch()"><i class="ti ti-search"></i></button>
+    <button class="icobtn" onclick="go('reminders')"><i class="ti ti-bell"></i></button></div></div>
+    <div class="aibar" onclick="openChat()"><i class="ti ti-sparkles"></i><span>Yordamchidan so'rang — "ertaga Karimovga hisobot"</span></div>
     <div class="hero"><div class="top"><span>Bu haftalik progress</span><span class="chip" style="background:rgba(255,255,255,.2);color:#fff">7 kun</span></div>
       <div class="pct">${d.progress||0}%</div><div style="font-size:13px;opacity:.9">${(d.progress||0)>=70?"Zo'r ketyapti!":"Davom eting"}</div>
       <div class="stats"><div><b>${c.total||0}</b><span>Jami</span></div><div><b>${c.done||0}</b><span>Bajarildi</span></div><div><b>${c.pending||0}</b><span>Qoldi</span></div></div></div>
@@ -357,6 +389,44 @@ function reminderForm(r={}){return `<h3>${r.id?"Eslatmani tahrirlash":"Yangi esl
 const openReminder=x=>openM(reminderForm(typeof x==="object"?(x||{}):(CACHE.reminders[x]||{})));
 async function saveReminder(id){const b={title:val("f_title")||"Eslatma",remind_at:fromLocal(val("f_at")),note:val("f_note")};
   if(!b.remind_at)return flash("Vaqt kerak");await act(()=>api(id?`/reminders/${id}`:"/reminders",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
+
+// ── Search overlay ──
+function closeOv(id){$(id).classList.remove("show");}
+function openSearch(){$("searchov").classList.add("show");setTimeout(()=>$("searchq").focus(),120);}
+let _st;
+function doSearch(q){clearTimeout(_st);_st=setTimeout(()=>runSearch(q),260);}
+function srCard(kind,id,title,sub){return `<div class="card" onclick="srOpen('${kind}','${id}')">
+  <div style="font-size:14px;font-weight:500">${esc(title)}</div>${sub?`<div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(sub)}</div>`:''}</div>`;}
+function srOpen(kind,id){closeOv("searchov");
+  ({task:openTask,meeting:openMeeting,note:openNote,reminder:openReminder}[kind]||(()=>{}))(id);}
+async function runSearch(q){const box=$("searchres");
+  if((q||"").trim().length<2){box.innerHTML='<div class="srhint">Kamida 2 harf yozing</div>';return;}
+  box.innerHTML='<div class="srhint">Qidirilmoqda…</div>';
+  try{const r=await api("/search?q="+encodeURIComponent(q.trim()));let html="";
+    const sec=(t,arr,fn)=>{if(arr&&arr.length){html+=`<div class="sec"><h2 style="font-size:13px;color:var(--faint)">${t} (${arr.length})</h2></div>`;arr.forEach(fn);}};
+    sec("Vazifalar",r.tasks,x=>{CACHE.tasks[x.id]=x;html+=srCard('task',x.id,x.title,(PRIO[x.priority]||'')+(x.assignee?' · '+x.assignee:''));});
+    sec("Uchrashuvlar",r.meetings,x=>{CACHE.meetings[x.id]=x;html+=srCard('meeting',x.id,x.title,fmt(x.datetime_start));});
+    sec("Qaydlar",r.notes,x=>{CACHE.notes[x.id]=x;html+=srCard('note',x.id,x.title||'Qayd',(x.content||'').slice(0,80));});
+    sec("Eslatmalar",r.reminders,x=>{CACHE.reminders[x.id]=x;html+=srCard('reminder',x.id,x.title,fmt(x.remind_at));});
+    box.innerHTML=html||'<div class="srhint">Hech narsa topilmadi</div>';
+  }catch(e){box.innerHTML='<div class="srhint">⚠️ '+esc(e.message)+'</div>';}}
+
+// ── AI chat overlay ──
+function openChat(){$("chatov").classList.add("show");
+  if(!$("chatmsgs").dataset.init){appendMsg("a","Salom! Nima qilay? Masalan: \"ertaga 15:00da Karimov bilan uchrashuv\" yoki \"bugungi vazifalarim\".");$("chatmsgs").dataset.init="1";}
+  setTimeout(()=>$("chatq").focus(),120);}
+function appendMsg(cls,text){const m=document.createElement("div");m.className="msg "+cls;m.textContent=text;
+  $("chatmsgs").appendChild(m);$("chatmsgs").scrollTop=$("chatmsgs").scrollHeight;return m;}
+let _chatBusy=false;
+async function sendChat(){if(_chatBusy)return;const inp=$("chatq");const q=(inp.value||"").trim();if(!q)return;
+  inp.value="";appendMsg("u",q);const th=appendMsg("a","…");_chatBusy=true;
+  try{const r=await api("/chat",{method:"POST",body:JSON.stringify({message:q})});
+    let txt=r.reply||"Bajarildi.";const c=r.created||{};const nm={task:"vazifa",meeting:"uchrashuv",note:"qayd",reminder:"eslatma"};
+    const bits=Object.keys(c).map(k=>c[k]+" "+(nm[k]||k));
+    if(bits.length){txt+="\n\n✓ "+bits.join(", ");render(VIEW);}
+    th.textContent=txt;
+  }catch(e){th.textContent="⚠️ "+e.message;}
+  _chatBusy=false;}
 
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
