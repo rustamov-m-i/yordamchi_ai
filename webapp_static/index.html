@@ -10,6 +10,7 @@
 <link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-Regular.woff2" crossorigin>
 <link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-Bold.woff2" crossorigin>
 <link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-Black.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-BoldExpanded.woff2" crossorigin>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   /* ── ALS Agrofont (Agrobank brendi) — self-hosted, o'zbek lotin + kirill qamrovi ── */
@@ -21,6 +22,9 @@
     src:url("/ALS_Agrofont/woff/ALSAgrofont-Bold.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-Bold.woff") format("woff")}
   @font-face{font-family:"ALS Agrofont";font-weight:800;font-style:normal;font-display:swap;
     src:url("/ALS_Agrofont/woff/ALSAgrofont-Black.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-Black.woff") format("woff")}
+  /* Kengaytirilgan display cut — faqat katta sarlavhalar uchun */
+  @font-face{font-family:"ALS Agrofont Expanded";font-weight:700 900;font-style:normal;font-display:swap;
+    src:url("/ALS_Agrofont/woff/ALSAgrofont-BoldExpanded.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-BoldExpanded.woff") format("woff")}
   :root{
     --brand:#6C5CE7; --brand-d:#5a4fd0; --brand-soft:#ECE9FB;
     --bg:#F5F4FB; --card:#fff; --text:#15152b; --muted:#6b6b85; --faint:#9a9ab0;
@@ -41,7 +45,8 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .navbrand{display:none}
   nav button span{display:none}
   .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
-  .head h1{margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em}
+  .head h1{margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em;
+           font-family:"ALS Agrofont Expanded","ALS Agrofont",-apple-system,"Segoe UI",Roboto,sans-serif}
   /* Dashboard hero greeting — big gradient title (only the .grad h1, not section heads). */
   .head h1.grad{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1.12}
   .head .sub{font-size:13.5px;color:var(--muted)}
