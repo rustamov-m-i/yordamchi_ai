@@ -7,8 +7,20 @@
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://telegram.org">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
+<link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-Regular.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-Bold.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="/ALS_Agrofont/woff/ALSAgrofont-Black.woff2" crossorigin>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
+  /* ── ALS Agrofont (Agrobank brendi) — self-hosted, o'zbek lotin + kirill qamrovi ── */
+  @font-face{font-family:"ALS Agrofont";font-weight:400;font-style:normal;font-display:swap;
+    src:url("/ALS_Agrofont/woff/ALSAgrofont-Regular.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-Regular.woff") format("woff")}
+  @font-face{font-family:"ALS Agrofont";font-weight:500;font-style:normal;font-display:swap;
+    src:url("/ALS_Agrofont/woff/ALSAgrofont-Medium.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-Medium.woff") format("woff")}
+  @font-face{font-family:"ALS Agrofont";font-weight:700;font-style:normal;font-display:swap;
+    src:url("/ALS_Agrofont/woff/ALSAgrofont-Bold.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-Bold.woff") format("woff")}
+  @font-face{font-family:"ALS Agrofont";font-weight:800;font-style:normal;font-display:swap;
+    src:url("/ALS_Agrofont/woff/ALSAgrofont-Black.woff2") format("woff2"),url("/ALS_Agrofont/woff/ALSAgrofont-Black.woff") format("woff")}
   :root{
     --brand:#6C5CE7; --brand-d:#5a4fd0; --brand-soft:#ECE9FB;
     --bg:#F5F4FB; --card:#fff; --text:#15152b; --muted:#6b6b85; --faint:#9a9ab0;
@@ -17,7 +29,7 @@
 @media (prefers-color-scheme:dark){:root:not(.tglight){--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#70707f;--line:#2f2f3b;--soft:#2e2e3a;--brand-soft:#2b2542;--brand-d:#b3a9f0;}}
 html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#70707f;--line:#2f2f3b;--soft:#2e2e3a;--brand-soft:#2b2542;--brand-d:#b3a9f0;}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  body{margin:0;font-family:"ALS Agrofont",-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
        background:var(--bg);color:var(--text);font-size:16px;padding-bottom:96px;
        -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
   /* Responsive shell: phone = full-bleed + bottom tab bar; tablet = wider column;
