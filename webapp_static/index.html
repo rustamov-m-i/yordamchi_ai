@@ -2,8 +2,11 @@
 <html lang="uz">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Yordamchi</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://telegram.org">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root{
@@ -14,13 +17,23 @@
 @media (prefers-color-scheme:dark){:root:not(.tglight){--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#70707f;--line:#2f2f3b;--soft:#2e2e3a;--brand-soft:#2b2542;--brand-d:#b3a9f0;}}
 html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#70707f;--line:#2f2f3b;--soft:#2e2e3a;--brand-soft:#2b2542;--brand-d:#b3a9f0;}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       background:var(--bg);color:var(--text);font-size:16px;padding-bottom:92px}
-  .screen{padding:14px 16px 0;display:none}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+       background:var(--bg);color:var(--text);font-size:16px;padding-bottom:96px;
+       -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  /* Centered app column — phone full-bleed, tablet/desktop a tidy centered column
+     (so cards/text never stretch edge-to-edge or cram into corners). */
+  .screen{padding:18px 18px 0;display:none;max-width:600px;margin:0 auto}
   .screen.on{display:block}
+  .grad{background:linear-gradient(105deg,var(--brand) 0%,#8a7bf0 45%,#b06ab3 100%);
+        -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
+  @media (min-width:600px){
+    .screen{padding-top:26px;padding-left:22px;padding-right:22px}
+    .head h1{font-size:27px}
+    .head .sub{font-size:14px}
+  }
   .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
   .head h1{margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em}
-  .head .sub{font-size:13px;color:var(--muted)}
+  .head .sub{font-size:13.5px;color:var(--muted)}
   .icobtn{width:38px;height:38px;border-radius:12px;background:var(--brand-soft);display:flex;
           align-items:center;justify-content:center;color:var(--brand);font-size:19px;border:none}
   .hero{background:var(--brand);border-radius:20px;padding:16px 18px;color:#fff;margin-bottom:16px}
@@ -40,12 +53,12 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
         align-items:center;justify-content:center;color:#fff;font-size:14px;background:transparent}
   .cbox.done{background:var(--green);border-color:var(--green)}
   .trow .t{flex:1;min-width:0}
-  .trow .t .ti-title{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .trow .t .ti-sub{font-size:11px;color:var(--faint);margin-top:1px}
+  .trow .t .ti-title{font-size:15px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .trow .t .ti-sub{font-size:12px;color:var(--faint);margin-top:1px}
   .trow.done .ti-title{text-decoration:line-through;color:var(--faint)}
   .trow .side{font-size:11px;color:var(--muted);text-align:right;flex:none}
   .card{background:var(--card);border-radius:16px;padding:14px 15px;margin-bottom:10px}
-  .chip{font-size:11px;padding:2px 9px;border-radius:20px;display:inline-block}
+  .chip{font-size:12px;padding:2px 9px;border-radius:20px;display:inline-block}
   .chip.violet{background:var(--brand-soft);color:var(--brand-d)}
   .chip.red{background:#fbe6e6;color:var(--red)}.chip.amber{background:#fdf1dd;color:#9a6800}
   .chip.gray{background:var(--soft);color:var(--muted)}
@@ -68,12 +81,12 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .tkcb{width:22px;height:22px;border-radius:7px;border:2px solid var(--line);flex:none;display:flex;
     align-items:center;justify-content:center;color:#fff;font-size:14px;margin-top:1px;background:transparent}
   .tkcb.on{background:var(--brand);border-color:var(--brand)}
-  .tktitle{flex:1;min-width:0;font-size:14px;font-weight:600;line-height:1.35}
-  .tkdays{font-size:11px;font-weight:600;flex:none;white-space:nowrap;margin-top:2px}
+  .tktitle{flex:1;min-width:0;font-size:15px;font-weight:600;line-height:1.35}
+  .tkdays{font-size:12px;font-weight:600;flex:none;white-space:nowrap;margin-top:2px}
   .tkdays.d-red{color:var(--red)}.tkdays.d-amber{color:var(--amber)}.tkdays.d-mute{color:var(--faint)}
   .tkmeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:9px 0 0 33px}
-  .tkmeta .who{font-size:11.5px;color:var(--faint)}
-  .tkexp{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0 33px;font-size:12px;color:var(--muted)}
+  .tkmeta .who{font-size:12.5px;color:var(--faint)}
+  .tkexp{display:inline-flex;align-items:center;gap:6px;margin:10px 0 0 33px;font-size:12.5px;color:var(--muted)}
   .tkexp i.tw{font-size:14px;color:var(--faint)}.tkexp i.ch{font-size:15px;transition:transform .15s}
   .tnode.done .tktitle{text-decoration:line-through;color:var(--faint)}
   .tsubs{display:none;margin:9px 0 2px 33px;position:relative;padding-left:18px}
@@ -91,7 +104,7 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .flt button{border:none;border-radius:20px;padding:8px 17px;font-size:13px;font-weight:600;background:var(--soft);color:var(--muted)}
   .flt button.on{background:var(--brand);color:#fff}
   .mtl{position:relative}
-  .grp{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.04em;text-transform:uppercase;margin:14px 0 9px 46px}
+  .grp{font-size:11.5px;font-weight:700;color:var(--faint);letter-spacing:.04em;text-transform:uppercase;margin:14px 0 9px 46px}
   .grp:first-child{margin-top:2px}
   .mrow{position:relative;display:flex;margin-bottom:10px}
   .mtime{width:38px;flex:none;text-align:right;font-size:12px;font-weight:700;color:var(--muted);padding-top:12px}
@@ -102,8 +115,8 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .mdot.done i{font-size:9px;color:#fff}
   .mc{flex:1;background:var(--card);border-radius:14px;padding:11px 13px;border:.5px solid var(--line);min-width:0}
   .mc.dim{opacity:.68}
-  .mt{font-size:14px;font-weight:600;color:var(--text);line-height:1.3}
-  .mm{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mt{font-size:15px;font-weight:600;color:var(--text);line-height:1.3}
+  .mm{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--faint);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .mm i{font-size:14px;color:var(--brand);opacity:.7;flex:none}
   .mm+.mm{margin-top:3px}
   .mbadges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
@@ -122,6 +135,7 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
     border-radius:14px;padding:11px 13px;margin-bottom:14px;color:var(--brand-d);font-size:13px;box-shadow:0 1px 4px rgba(108,92,231,.1)}
   .aibar i{color:var(--brand);font-size:18px}.aibar span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ov{position:fixed;inset:0;background:var(--bg);z-index:40;display:none;flex-direction:column}
+  .ov .ovh,.ov .ovb,.ov .chatin{width:100%;max-width:640px;margin-left:auto;margin-right:auto}
   .ov.show{display:flex}
   .ov .ovh{display:flex;align-items:center;gap:10px;padding:14px 14px 10px;border-bottom:1px solid var(--line);background:var(--card)}
   .ov .ovh input{flex:1;border:none;background:none;font-size:16px;padding:6px 0}
@@ -175,14 +189,16 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .fab{position:fixed;left:50%;transform:translateX(-50%);bottom:30px;width:52px;height:52px;
        border-radius:50%;background:var(--brand);color:#fff;font-size:26px;display:flex;
        align-items:center;justify-content:center;border:none;box-shadow:0 6px 16px rgba(108,92,231,.45);z-index:8}
-  nav{position:fixed;left:14px;right:14px;bottom:16px;height:58px;background:var(--card);
+  nav{position:fixed;left:50%;transform:translateX(-50%);width:calc(100% - 28px);max-width:472px;
+      bottom:16px;height:58px;background:var(--card);
       border-radius:20px;display:flex;align-items:center;box-shadow:0 6px 20px rgba(60,50,120,.13);z-index:7}
-  nav button{flex:1;background:none;border:none;color:var(--faint);font-size:21px;padding:0}
+  nav button{flex:1;background:none;border:none;color:var(--faint);font-size:24px;padding:0}
   nav button.on{color:var(--brand)}
   nav .gap{flex:1}
-  .mbg{position:fixed;inset:0;background:rgba(20,18,45,.5);display:none;z-index:20;align-items:flex-end}
+  .mbg{position:fixed;inset:0;background:rgba(20,18,45,.5);display:none;z-index:20;align-items:flex-end;justify-content:center}
   .mbg.show{display:flex}
-  .modal{background:var(--card);width:100%;border-radius:20px 20px 0 0;padding:18px;max-height:92vh;overflow:auto}
+  .modal{background:var(--card);width:100%;max-width:600px;border-radius:20px 20px 0 0;padding:18px;max-height:92vh;overflow:auto}
+  @media (min-width:600px){ .modal{border-radius:20px;margin-bottom:14px} }
   .modal h3{margin:2px 0 14px;font-size:17px;font-weight:600}
   label{display:block;font-size:12px;color:var(--faint);margin:11px 0 4px}
   input,textarea,select{width:100%;padding:11px 13px;font-size:16px;border-radius:12px;
@@ -247,7 +263,6 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
     <button onclick="sendChat()"><i class="ti ti-arrow-up"></i></button></div>
 </div>
 
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.7.0/dist/tabler-icons.min.css">
 <script>
 const tg=window.Telegram?.WebApp; if(tg){tg.ready();tg.expand();}
 function _applyTheme(){if(tg&&tg.colorScheme)document.documentElement.classList.toggle("tgdark",tg.colorScheme==="dark");}
@@ -291,7 +306,8 @@ function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.
 
 async function render(v){
   const box=el(_VIEWS[v]);
-  box.innerHTML='<div class="empty"><i class="ti ti-loader-2"></i>Yuklanmoqda… ·v4</div>';
+  // No "Yuklanmoqda" placeholder — data loads fast; the prior content stays until
+  // the new render replaces it, so tab switches don't flash a loading screen.
   try{
     if(v==="dash")await renderDash(box);
     else if(v==="tasks")await renderTasks(box);
@@ -312,8 +328,8 @@ async function renderDash(box){
   const d=await api("/dashboard");const r=d.radar||{};const today=d.today||{};
   const tm=today.meetings||[],tt=today.tasks||[];
   tt.forEach(x=>CACHE.tasks[x.id]=x);tm.forEach(x=>CACHE.meetings[x.id]=x);
-  const dstr=new Date().toLocaleDateString("uz",{day:"numeric",month:"long",weekday:"long"});
-  let h=`<div class="head"><div><h1>Salom, Maqsud</h1><div class="sub">${dstr}</div></div>
+  const _nd=new Date();const dstr=`${_WD[_nd.getDay()]}, ${_nd.getDate()}-${_MON[_nd.getMonth()]}`;
+  let h=`<div class="head"><div><h1 class="grad">Salom, Maqsud</h1><div class="sub">${dstr}</div></div>
     <div style="display:flex;gap:8px"><button class="icobtn" onclick="openSearch()"><i class="ti ti-search"></i></button>
     <button class="icobtn" onclick="go('reminders')"><i class="ti ti-bell"></i></button></div></div>
     <div class="aibar" onclick="openChat()"><i class="ti ti-sparkles"></i><span>Yordamchidan so'rang yoki buyuring…</span></div>`;
@@ -642,7 +658,24 @@ function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":(t.parent_id?"Y
     <div style="flex:1"><label>Teglar (vergul)</label><input id="f_tags" value="${esc(_tagsStr(t.tags))}"></div></div>
   ${t.id?`<button class="btn" style="margin-top:12px;width:100%" onclick="closeM();openTask({parent_id:'${t.id}'})"><i class="ti ti-subtask"></i> Sub-vazifa qo'shish</button>`:""}
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button>${t.id?`<button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
-const openTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));
+const editTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));
+// Kartani bosish → tafsilot (o'qish) ekrani; yangi/sub vazifa → tahrir formasi.
+const openTask=x=>(typeof x==="object")?editTask(x||{}):taskDetail(x);
+function taskDetail(id){const t=CACHE.tasks[id];if(!t)return flash("Vazifa topilmadi");openM(taskDetailHtml(t));}
+function taskDetailHtml(t){const done=t.status==="done";
+  const kids=Object.values(CACHE.tasks).filter(x=>x&&x.parent_id===t.id).sort(_byPrioDl);
+  const dl=daysLeft(t.deadline);const dcls={"d-red":"red","d-amber":"amber","d-mute":"gray"};
+  let h=`<h3 style="margin-bottom:9px">${esc(t.title)}</h3>`;
+  h+=`<div class="mbadges" style="margin:0 0 13px">${_statPill(t.status)}${_prioPill(t.priority)}${dl?`<span class="chip ${dcls[dl.c]}"><i class="ti ti-clock" style="font-size:11px;vertical-align:-1px"></i> ${dl.t}</span>`:""}</div>`;
+  if(t.deadline)h+=`<div class="drow"><i class="ti ti-calendar-event"></i>${fmt(t.deadline)}</div>`;
+  if((t.assignee||"").trim())h+=`<div class="drow"><i class="ti ti-user"></i>${esc(t.assignee)}</div>`;
+  if((t.category||"").trim())h+=`<div class="drow"><i class="ti ti-folder"></i>${esc(t.category)}</div>`;
+  if((t.description||"").trim())h+=`<div class="dlbl">Izoh</div><div class="dnote">${esc(t.description)}</div>`;
+  if(kids.length){const dn=kids.filter(k=>k.status==="done").length;
+    h+=`<div class="dlbl">Ichki vazifalar · ${dn}/${kids.length}</div><div class="tsubs open" style="margin:0 0 2px 4px">${kids.map(subRow).join("")}</div>`;}
+  h+=`<div class="macts">${done?`<button class="btn" onclick="closeM();taskToggle('${t.id}',true)"><i class="ti ti-rotate-2"></i> Qayta ochish</button>`:`<button class="btn pri" onclick="closeM();taskToggle('${t.id}',false)"><i class="ti ti-check"></i> Bajarildi</button>`}<button class="btn" onclick="editTask('${t.id}')"><i class="ti ti-edit"></i> Tahrir</button></div>`;
+  h+=`<div class="macts" style="margin-top:9px"><button class="btn" style="flex:1" onclick="closeM();editTask({parent_id:'${t.id}'})"><i class="ti ti-subtask"></i> Sub-vazifa</button><button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button></div>`;
+  return h}
 function delTask(id){const run=()=>{closeM();act(()=>api(`/tasks/${id}`,{method:"DELETE"}),"O'chirildi")};
   if(tg?.showConfirm)tg.showConfirm("Vazifa o'chirilsinmi?",ok=>{if(ok)run()});else run()}
 async function saveTask(id){
