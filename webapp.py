@@ -1163,7 +1163,7 @@ async def auth_tg_callback(request: web.Request) -> web.Response:
         return _fail("token")
     id_token = tok.get("id_token")
     if not id_token:
-        logger.warning("OAuth: token response missing id_token: keys=%s", list(tok.keys()))
+        logger.warning("OAuth: token response has no id_token: %s", tok)
         return _fail("token")
     # JWKS fetch + JWT verify are blocking (urllib) — keep the event loop free.
     uid = await asyncio.get_event_loop().run_in_executor(None, _verify_id_token, id_token)
