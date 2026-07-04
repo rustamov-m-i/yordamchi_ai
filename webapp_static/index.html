@@ -20,17 +20,14 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
        background:var(--bg);color:var(--text);font-size:16px;padding-bottom:96px;
        -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-  /* Centered app column — phone full-bleed, tablet/desktop a tidy centered column
-     (so cards/text never stretch edge-to-edge or cram into corners). */
-  .screen{padding:18px 18px 0;display:none;max-width:600px;margin:0 auto}
+  /* Responsive shell: phone = full-bleed + bottom tab bar; tablet = wider column;
+     desktop = left sidebar nav + wide content that fills the screen. */
+  .screen{padding:18px 16px 0;display:none;max-width:640px;margin:0 auto}
   .screen.on{display:block}
   .grad{background:linear-gradient(105deg,var(--brand) 0%,#8a7bf0 45%,#b06ab3 100%);
         -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
-  @media (min-width:600px){
-    .screen{padding-top:26px;padding-left:22px;padding-right:22px}
-    .head h1{font-size:27px}
-    .head .sub{font-size:14px}
-  }
+  .navbrand{display:none}
+  nav button span{display:none}
   .head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
   .head h1{margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em}
   .head .sub{font-size:13.5px;color:var(--muted)}
@@ -220,6 +217,31 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .menu .mi{display:flex;align-items:center;gap:12px;padding:14px 2px;border-bottom:1px solid var(--line);font-size:15px}
   .menu .mi i{color:var(--brand);font-size:20px}
   .menu .mi .ch{margin-left:auto;color:var(--faint)}
+  /* ─── Responsive shell (placed last so it overrides base rules) ─── */
+  /* Tablet — fill more width, roomier padding, 4-wide radar */
+  @media (min-width:640px){
+    .screen{max-width:860px;padding:26px 26px 0}
+    .head h1{font-size:27px}.head .sub{font-size:14px}
+    .radar{grid-template-columns:repeat(4,1fr)}
+  }
+  /* Desktop — left sidebar nav + wide content that fills the screen */
+  @media (min-width:960px){
+    body{padding-bottom:28px;padding-left:236px}
+    .screen{max-width:1120px;padding:32px 44px 48px;margin:0 auto}
+    nav{flex-direction:column;left:0;right:auto;top:0;bottom:0;width:236px;height:auto;transform:none;
+        border-radius:0;align-items:stretch;justify-content:flex-start;gap:5px;padding:22px 14px;max-width:none;
+        box-shadow:1px 0 0 var(--line)}
+    nav .gap{display:none}
+    .navbrand{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:700;color:var(--brand);
+              padding:6px 12px 20px;letter-spacing:-.01em}
+    .navbrand i{font-size:24px}
+    nav button{flex:none;flex-direction:row;justify-content:flex-start;gap:14px;font-size:21px;
+               padding:12px 14px;border-radius:13px;color:var(--muted)}
+    nav button span{display:inline;font-size:15px;font-weight:500}
+    nav button.on{background:var(--brand-soft);color:var(--brand)}
+    .fab{left:auto;right:40px;transform:none;bottom:32px}
+    .head h1{font-size:29px}
+  }
 </style>
 </head>
 <body>
@@ -239,11 +261,12 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
 
 <button class="fab" id="fab"><i class="ti ti-plus"></i></button>
 <nav>
-  <button data-v="dash" class="on"><i class="ti ti-home-2"></i></button>
-  <button data-v="tasks"><i class="ti ti-checkbox"></i></button>
+  <div class="navbrand"><i class="ti ti-sparkles"></i><span>Yordamchi</span></div>
+  <button data-v="dash" class="on"><i class="ti ti-home-2"></i><span>Bosh sahifa</span></button>
+  <button data-v="tasks"><i class="ti ti-checkbox"></i><span>Vazifalar</span></button>
   <span class="gap"></span>
-  <button data-v="meetings"><i class="ti ti-calendar"></i></button>
-  <button data-v="profile"><i class="ti ti-user"></i></button>
+  <button data-v="meetings"><i class="ti ti-calendar"></i><span>Uchrashuvlar</span></button>
+  <button data-v="profile"><i class="ti ti-user"></i><span>Profil</span></button>
 </nav>
 
 <div class="mbg" id="mbg"><div class="modal" id="modal"></div></div>
