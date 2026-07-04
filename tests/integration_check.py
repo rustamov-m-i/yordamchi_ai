@@ -1682,6 +1682,29 @@ async def main():
         check("/api/me authsiz → 401", (await _client.get("/api/me")).status == 401)
         check("Begona sessiya → 403",
               (await _client.get("/api/tasks", headers={"Cookie": f"ya_session={_wa.make_session(999999)}"})).status == 403)
+        # ── noindex + robots (maxfiy ilova qidiruvга tushmasin) ──
+        _rh = await _client.get("/api/health")
+        check("MiniApp: X-Robots-Tag noindex har javobda",
+              "noindex" in _rh.headers.get("X-Robots-Tag", ""))
+        _rob = await _client.get("/robots.txt")
+        check("MiniApp: /robots.txt → Disallow all",
+              _rob.status == 200 and "Disallow: /" in (await _rob.text()))
+        # ── WEBAPP_OPEN_ACCESS: vaqtincha to'liq ochiq brauzer kirishi (env bilan) ──
+        _prev_open = config.WEBAPP_OPEN_ACCESS
+        try:
+            config.WEBAPP_OPEN_ACCESS = False
+            check("Open-access OFF → authsiz /api/tasks 401",
+                  (await _client.get("/api/tasks")).status == 401)
+            config.WEBAPP_OPEN_ACCESS = True
+            check("Open-access ON → authsiz /api/tasks 200 (principal)",
+                  (await _client.get("/api/tasks")).status == 200)
+            _mo = await _client.get("/api/me")
+            check("Open-access ON → /api/me principal uid",
+                  _mo.status == 200 and (await _mo.json()).get("uid") == _pid)
+        finally:
+            config.WEBAPP_OPEN_ACCESS = _prev_open
+        check("Open-access qayta OFF → authsiz 401",
+              (await _client.get("/api/tasks")).status == 401)
         # ── Bug: dashboard 'Jamoa nazorati' → openTask → taskForm crash ──
         # list_stale_delegations qaytargan vazifada `tags` XOM JSON-satr bo'lib qolgan
         # edi (boshqa hamma funksiya _row_to_task orqali list qaytaradi). Mini-app

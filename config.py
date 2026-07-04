@@ -91,6 +91,12 @@ WEBAPP_HOST: str = os.getenv("WEBAPP_HOST", "127.0.0.1").strip()
 # Bot @username — set at startup from get_me(); the browser Login Widget needs it.
 # Overridable via env for the web layer when the bot process isn't the one serving.
 BOT_USERNAME: str = os.getenv("WEBAPP_BOT_USERNAME", "").strip()
+# ⚠️ TEMPORARY DEV SWITCH — open browser access with NO authentication. When True,
+# every web request is treated as the principal, so ANYONE with the public URL sees
+# all data (tasks/meetings/protocols/contacts). Off by default. Only enable while
+# building the web version; turn it off (unset) before real use. Responses always
+# carry X-Robots-Tag: noindex so search engines don't index the page.
+WEBAPP_OPEN_ACCESS: bool = _bool("WEBAPP_OPEN_ACCESS", False)
 
 # Data retention — banking-compliance friendly defaults. Override per
 # deployment if your jurisdiction requires longer/shorter windows.

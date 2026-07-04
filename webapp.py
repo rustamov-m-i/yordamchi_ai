@@ -140,6 +140,19 @@ def check_session(token: str | None) -> int | None:
 
 
 @web.middleware
+async def noindex_middleware(request: web.Request, handler):
+    """Tag every response noindex/nofollow so search engines never index the app
+    (it holds private data; matters especially while open browser access is on)."""
+    try:
+        resp = await handler(request)
+    except web.HTTPException as e:
+        e.headers["X-Robots-Tag"] = "noindex, nofollow"
+        raise
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return resp
+
+
+@web.middleware
 async def error_middleware(request: web.Request, handler):
     """Outermost safety net: an unexpected exception in any handler becomes a clean
     JSON 500 (logged server-side) instead of a raw aiohttp crash page. HTTP responses
@@ -169,6 +182,12 @@ async def auth_middleware(request: web.Request, handler):
     # 2) Browser session cookie (issued after a Login-Widget sign-in).
     if uid is None:
         uid = check_session(request.cookies.get(SESSION_COOKIE))
+    # 3) ⚠️ TEMPORARY: fully-open browser access (env WEBAPP_OPEN_ACCESS=1). Every
+    # request is treated as the principal — anyone with the URL sees all data. Only
+    # for building the web version; disable before real use. (noindex header is set
+    # on every response by noindex_middleware so search engines don't index it.)
+    if uid is None and config.WEBAPP_OPEN_ACCESS:
+        uid = int(config.PRINCIPAL_USER_ID)
     if uid is None:
         logger.info("webapp AUTH-FAIL %s", path)
         return web.json_response({"error": "unauthorized"}, status=401)
@@ -975,8 +994,17 @@ async def me(request: web.Request) -> web.Response:
 
 # ───────────────────────── app factory / runner ─────────────────────────
 
+async def robots(request: web.Request) -> web.Response:
+    """Disallow all crawlers — the app is private (belt-and-braces with the
+    X-Robots-Tag header)."""
+    return web.Response(text="User-agent: *\nDisallow: /\n", content_type="text/plain")
+
+
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[error_middleware, auth_middleware])
+    if config.WEBAPP_OPEN_ACCESS:
+        logger.warning("⚠️ WEBAPP_OPEN_ACCESS is ON — browser access is UNAUTHENTICATED "
+                       "(anyone with the URL sees all data). Disable before real use.")
+    app = web.Application(middlewares=[noindex_middleware, error_middleware, auth_middleware])
     app.add_routes([
         web.get("/api/health", health),
         web.get("/api/config", app_config),
@@ -1023,6 +1051,7 @@ def create_app() -> web.Application:
         web.post("/api/reminders/{id}/complete", reminder_complete),
         web.delete("/api/reminders/{id}", reminder_delete),
     ])
+    app.router.add_get("/robots.txt", robots)
     # Static frontend (served last so /api wins). index.html at "/", with no-store so
     # Telegram never serves a stale cached build after a redeploy.
     if _STATIC_DIR.is_dir():
