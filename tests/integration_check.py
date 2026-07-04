@@ -1778,6 +1778,28 @@ async def main():
               (await _client.get("/api/team")).status == 401
               and (await _client.get("/api/risks")).status == 401
               and (await _client.get("/api/calendar")).status == 401)
+        # ── Fayl import + ovoz ──
+        _csv = "Vazifa,Ijrochi,Ustuvorlik\nImport CSV ish,Karimov,P1\nImport CSV 2,Aziz,P2\n"
+        _ir = await _client.post("/api/import/tasks?name=t.csv", headers=_H, data=_csv.encode("utf-8"))
+        _ij = await _ir.json()
+        check("Import: CSV → vazifalar yaratildi",
+              _ir.status == 200 and _ij.get("created", 0) >= 2
+              and any(t["title"] == "Import CSV ish" for t in await database.list_tasks(limit=9999)))
+        check("Import: bo'sh/noto'g'ri fayl → 400",
+              (await _client.post("/api/import/tasks?name=x.csv", headers=_H, data=b"salom dunyo\n")).status == 400)
+        # voice — stub transcribe (no real STT call)
+        import voice_service as _vs
+        _ovs = _vs.transcribe
+        async def _fake_tr(b, filename="v", language="uz"): return "ertaga hisobot tayyorla"
+        _vs.transcribe = _fake_tr
+        try:
+            _vr = await _client.post("/api/voice?name=v.webm", headers=_H, data=b"AUDIOBYTES")
+            check("Voice: audio → matn", _vr.status == 200 and (await _vr.json()).get("text") == "ertaga hisobot tayyorla")
+        finally:
+            _vs.transcribe = _ovs
+        check("Import/Voice: authsiz → 401",
+              (await _client.post("/api/import/tasks", data=b"x")).status == 401
+              and (await _client.post("/api/voice", data=b"x")).status == 401)
 
         # S1: non-scalar value for a scalar field → clean 400, NOT a raw 500
         _r = await _client.post("/api/tasks", headers=_H, json={"title": "x", "priority": {"a": 1}})

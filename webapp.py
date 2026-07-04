@@ -644,6 +644,65 @@ async def calendar(request: web.Request) -> web.Response:
     return web.json_response({"year": year, "month": month, "meetings": rows})
 
 
+async def import_tasks_file(request: web.Request) -> web.Response:
+    """Import tasks from an uploaded .xlsx/.csv (raw body). Deterministic parse only
+    (no LLM smart path) → executes via the same pipeline as the bot's file import."""
+    import io
+    import handlers
+    name = (request.query.get("name") or "").lower()
+    data = await request.read()
+    if not data:
+        return web.json_response({"error": "fayl bo'sh"}, status=400)
+    if len(data) > 6 * 1024 * 1024:
+        return web.json_response({"error": "fayl juda katta (max 6MB)"}, status=413)
+    try:
+        if name.endswith(".csv"):
+            import csv
+            table = [tuple(r) for r in csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace")))
+                     if any((c or "").strip() for c in r)]
+        else:
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            table = handlers._read_task_sheet(wb)
+    except Exception:
+        logger.exception("webapp import: parse failed")
+        return web.json_response({"error": "faylni o'qib bo'lmadi (.xlsx yoki .csv)"}, status=400)
+    if not table:
+        return web.json_response({"error": "fayl bo'sh"}, status=400)
+    actions = handlers._structured_tasks_from_table(table)
+    for a in actions:
+        rid = a.pop("_id", "")
+        if rid and await database.get_task(rid):
+            a["type"] = "update_task"
+            a["id"] = rid
+    if not actions:
+        return web.json_response({"error": "vazifaga o'xshash ustunlar topilmadi"}, status=400)
+    for a in actions:
+        a.setdefault("data", {})["source"] = "excel"
+    n_upd = sum(1 for a in actions if a.get("type") == "update_task")
+    await handlers._execute_actions(actions)
+    return web.json_response({"created": len(actions) - n_upd, "updated": n_upd})
+
+
+async def voice(request: web.Request) -> web.Response:
+    """Transcribe an uploaded audio clip (raw body) → text (Uzbek). The frontend
+    puts the text into the chat input for the user to review/send."""
+    import voice_service
+    data = await request.read()
+    if not data:
+        return web.json_response({"error": "audio yo'q"}, status=400)
+    if len(data) > getattr(voice_service, "MAX_AUDIO_BYTES", 20 * 1024 * 1024):
+        return web.json_response({"error": "audio juda katta"}, status=413)
+    try:
+        text = await voice_service.transcribe(data, filename=request.query.get("name", "voice.webm"), language="uz")
+    except Exception:
+        logger.exception("webapp voice: transcribe failed")
+        return web.json_response({"error": "ovozni o'girib bo'lmadi"}, status=500)
+    if not text:
+        return web.json_response({"error": "ovoz tushunilmadi"}, status=422)
+    return web.json_response({"text": text})
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
@@ -705,6 +764,8 @@ def create_app() -> web.Application:
         web.post("/api/categories", category_create),
         web.delete("/api/categories", category_delete),
         web.get("/api/calendar", calendar),
+        web.post("/api/import/tasks", import_tasks_file),
+        web.post("/api/voice", voice),
         web.get("/api/tasks", tasks_list),
         web.post("/api/tasks", task_create),
         web.patch("/api/tasks/{id}", task_update),

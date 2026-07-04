@@ -151,7 +151,8 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   <div class="ovh"><button class="icobtn" onclick="closeOv('chatov')"><i class="ti ti-arrow-left"></i></button>
     <div style="font-weight:600"><i class="ti ti-sparkles" style="color:var(--brand);vertical-align:-2px"></i> Yordamchi AI</div></div>
   <div class="ovb" id="chatmsgs"></div>
-  <div class="chatin"><input id="chatq" placeholder="Yozing yoki so'rang..." onkeydown="if(event.key==='Enter')sendChat()">
+  <div class="chatin"><button id="micbtn" onclick="toggleMic()" style="background:var(--soft);color:var(--brand)"><i class="ti ti-microphone"></i></button>
+    <input id="chatq" placeholder="Yozing yoki so'rang..." onkeydown="if(event.key==='Enter')sendChat()">
     <button onclick="sendChat()"><i class="ti ti-arrow-up"></i></button></div>
 </div>
 
@@ -348,6 +349,7 @@ async function renderProfile(box){
       <div class="mi" onclick="go('categories')"><i class="ti ti-folder"></i>Kategoriyalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnomalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Excel eksport (vazifalar)<i class="ti ti-download ch"></i></div>
+      <div class="mi" onclick="pickImport()"><i class="ti ti-file-upload"></i>Excel/CSV import<i class="ti ti-upload ch"></i></div>
       <div class="mi" onclick="go('notes')"><i class="ti ti-note"></i>Qaydlar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('reminders')"><i class="ti ti-bell"></i>Eslatmalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('meetings')"><i class="ti ti-calendar"></i>Uchrashuvlar<i class="ti ti-chevron-right ch"></i></div>
@@ -417,6 +419,34 @@ async function renderCalendar(box){
   box.innerHTML=h;
 }
 function calNav(delta){_calYM.m+=delta;if(_calYM.m<1){_calYM.m=12;_calYM.y--;}if(_calYM.m>12){_calYM.m=1;_calYM.y++;}render("calendar");}
+
+function pickImport(){const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx,.csv";
+  inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;flash("Import qilinmoqda…");
+    try{const buf=await f.arrayBuffer();
+      const r=await fetch("/api/import/tasks?name="+encodeURIComponent(f.name),{method:"POST",credentials:"same-origin",headers:{"Authorization":AUTH},body:buf});
+      const j=await r.json();if(!r.ok)return flash("⚠️ "+(j.error||("Xato "+r.status)));
+      flash(`${j.created||0} yangi, ${j.updated||0} yangilangan`);render(VIEW);
+    }catch(e){flash("⚠️ "+e.message);}};
+  inp.click();}
+
+let _rec=null,_chunks=[];
+async function toggleMic(){
+  if(_rec&&_rec.state==="recording"){_rec.stop();return;}
+  if(!navigator.mediaDevices||!window.MediaRecorder){return flash("Bu qurilmada ovoz qo'llab-quvvatlanmaydi");}
+  try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    _rec=new MediaRecorder(stream);_chunks=[];
+    _rec.ondataavailable=e=>{if(e.data.size)_chunks.push(e.data);};
+    _rec.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());
+      const mic=$("micbtn");if(mic)mic.innerHTML='<i class="ti ti-microphone"></i>';
+      const blob=new Blob(_chunks,{type:_rec.mimeType||"audio/webm"});flash("O'girilmoqda…");
+      try{const r=await fetch("/api/voice?name=voice.webm",{method:"POST",credentials:"same-origin",headers:{"Authorization":AUTH},body:blob});
+        const j=await r.json();if(r.ok&&j.text){$("chatq").value=j.text;$("chatq").focus();flash("Tayyor — tekshirib yuboring");}
+        else flash("⚠️ "+(j.error||"tushunilmadi"));
+      }catch(e){flash("⚠️ "+e.message);}};
+    _rec.start();const mic=$("micbtn");if(mic)mic.innerHTML='<i class="ti ti-player-stop"></i>';
+    flash("Yozilmoqda… to'xtatish uchun mikrofonni bosing");
+  }catch(e){flash("Mikrofonга ruxsat berilmadi");}
+}
 
 function go(v){switchView(v)}
 
