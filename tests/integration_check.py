@@ -1716,6 +1716,19 @@ async def main():
                   and len(await database.list_tasks(limit=9999)) == _n0 + 1)
             check("Chat: bo'sh xabar → 400",
                   (await _client.post("/api/chat", headers=_H, json={"message": "  "})).status == 400)
+            # Destructive action → confirm_token, NOT auto-executed until /chat/confirm
+            _dtid = await database.create_task({"title": "Chat o'chirar", "priority": "P2", "status": "todo"})
+            async def _fake_del(text, **k):
+                return {"user_message": "O'chirilsinmi?", "actions": [{"type": "delete_task", "id": _dtid}]}
+            _cs2.process_message = _fake_del
+            await asyncio.sleep(1.6)  # chat rate-limit oynasidan o'tish
+            _dc = await (await _client.post("/api/chat", headers=_H, json={"message": "o'chir"})).json()
+            check("Chat: halokatли amal tasdiqсиz bajarilmaydi (confirm_token)",
+                  bool(_dc.get("confirm_token")) and (await database.get_task(_dtid)) is not None)
+            _cc = await _client.post("/api/chat/confirm", headers=_H, json={"token": _dc["confirm_token"]})
+            check("Chat: confirm → o'chadi", _cc.status == 200 and (await database.get_task(_dtid)) is None)
+            check("Chat: noto'g'ri token → 410",
+                  (await _client.post("/api/chat/confirm", headers=_H, json={"token": "yoq"})).status == 410)
         finally:
             _cs2.process_message = _orig_pm
         check("Search/Chat: authsiz → 401",

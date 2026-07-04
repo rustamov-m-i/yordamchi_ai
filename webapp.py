@@ -461,32 +461,78 @@ async def search(request: web.Request) -> web.Response:
     })
 
 
+# Destructive action types that must NOT auto-apply from chat — they need an explicit
+# confirm (delete/bulk/cancel). Pending confirmations are cached briefly by token.
+_DESTRUCTIVE = {"delete_task", "delete_all_tasks", "delete_tasks_by_category",
+                "delete_category", "cancel_meeting", "delete_note", "delete_reminder"}
+_PENDING_CHAT: dict = {}          # token -> (actions, monotonic_ts)
+_PENDING_TTL = 300
+_CHAT_HIST: list = []             # last few (role, text) turns for lightweight memory
+_last_chat_ts = [0.0]
+
+
+async def _apply_chat_actions(actions):
+    import handlers
+    try:
+        ids = await handlers._execute_actions(actions)
+        return {k: len(v) for k, v in ids.items() if v and not k.startswith("_")}
+    except Exception:
+        logger.exception("webapp chat: _execute_actions failed")
+        return {}
+
+
 async def chat(request: web.Request) -> web.Response:
-    """AI (natural language) — same brain as the bot. Runs claude_service, then
-    AUTO-APPLIES the resulting actions (single-user app; like voice auto-confirm),
-    and returns Claude's reply + a summary of what changed."""
+    """AI (natural language) — same brain as the bot. Non-destructive actions
+    auto-apply (single-user, like voice auto-confirm); destructive ones (delete/
+    bulk/cancel) return confirm_token and are held until POST /api/chat/confirm."""
+    import time as _t
     data = await _json_body(request)
     msg = (data.get("message") or "").strip()
     if not msg:
         return web.json_response({"error": "message required"}, status=400)
     if len(msg) > 4000:
         return web.json_response({"error": "message too long"}, status=400)
-    import handlers  # same process as the bot; lazy to avoid load-order issues
+    # Light rate-limit: 1 request / 1.5s (each call costs a Claude request).
+    now = _t.monotonic()
+    if now - _last_chat_ts[0] < 1.5:
+        return web.json_response({"reply": "Biroz sekinroq — bir zumdan keyin qayting."})
+    _last_chat_ts[0] = now
     try:
-        resp = await claude_service.process_message(msg)
+        hist = "\n".join(f"{r}: {t}" for r, t in _CHAT_HIST[-6:])
+        prompt = (hist + "\n" + msg) if hist else msg
+        resp = await claude_service.process_message(prompt)
     except Exception:
         logger.exception("webapp chat: process_message failed")
         return web.json_response({"reply": "AI vaqtinchalik javob bera olmadi. Qayta urining."})
     actions = resp.get("actions", []) or []
-    created = {}
-    if actions:
-        try:
-            ids = await handlers._execute_actions(actions)
-            created = {k: len(v) for k, v in ids.items() if v and not k.startswith("_")}
-        except Exception:
-            logger.exception("webapp chat: _execute_actions failed")
     reply = (resp.get("user_message") or "").strip() or "Bajarildi."
+    _CHAT_HIST.append(("user", msg))
+    _CHAT_HIST.append(("assistant", reply))
+    del _CHAT_HIST[:-12]
+    destructive = [a for a in actions if a.get("type") in _DESTRUCTIVE]
+    if destructive:
+        # Purge stale, cache these, ask the client to confirm.
+        for k in [k for k, (_, ts) in _PENDING_CHAT.items() if now - ts > _PENDING_TTL]:
+            _PENDING_CHAT.pop(k, None)
+        token = database.new_id("chat-")
+        _PENDING_CHAT[token] = (actions, now)
+        n = len(destructive)
+        return web.json_response({"reply": reply, "confirm_token": token,
+                                  "confirm_prompt": f"{n} ta o'chirish/bekor amali bajarilsinmi?"})
+    created = await _apply_chat_actions(actions) if actions else {}
     return web.json_response({"reply": reply, "created": created})
+
+
+async def chat_confirm(request: web.Request) -> web.Response:
+    """Execute the destructive actions held under a confirm_token from /api/chat."""
+    import time as _t
+    data = await _json_body(request)
+    token = (data.get("token") or "").strip()
+    entry = _PENDING_CHAT.pop(token, None)
+    if not entry or _t.monotonic() - entry[1] > _PENDING_TTL:
+        return web.json_response({"error": "muddati o'tdi"}, status=410)
+    created = await _apply_chat_actions(entry[0])
+    return web.json_response({"reply": "Bajarildi.", "created": created})
 
 
 async def protocols_list(request: web.Request) -> web.Response:
@@ -604,6 +650,7 @@ def create_app() -> web.Application:
         web.get("/api/insights", insights),
         web.get("/api/search", search),
         web.post("/api/chat", chat),
+        web.post("/api/chat/confirm", chat_confirm),
         web.get("/api/protocols", protocols_list),
         web.get("/api/protocols/{id}/download", protocol_download),
         web.get("/api/export/tasks", export_tasks),

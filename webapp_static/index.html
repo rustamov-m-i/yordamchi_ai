@@ -180,7 +180,7 @@ function toLocal(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return"
 function fromLocal(v){return v?new Date(v).toISOString():null}
 const $=id=>document.getElementById(id);
 const el=id=>$("v-"+id);
-function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div>${icon?`<button class="icobtn"><i class="ti ti-${icon}"></i></button>`:""}</div>`}
+function hdr(title,sub,icon){return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:""}</div><button class="icobtn" onclick="render(VIEW)" title="Yangilash"><i class="ti ti-refresh"></i></button></div>`}
 function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
 const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols"};
@@ -334,8 +334,10 @@ async function renderProfile(box){
       <div class="mi" onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Excel eksport (vazifalar)<i class="ti ti-download ch"></i></div>
       <div class="mi" onclick="go('notes')"><i class="ti ti-note"></i>Qaydlar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('reminders')"><i class="ti ti-bell"></i>Eslatmalar<i class="ti ti-chevron-right ch"></i></div>
-      <div class="mi" style="border-bottom:none" onclick="go('meetings')"><i class="ti ti-calendar"></i>Uchrashuvlar<i class="ti ti-chevron-right ch"></i></div></div>`;
+      <div class="mi" onclick="go('meetings')"><i class="ti ti-calendar"></i>Uchrashuvlar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" style="border-bottom:none;color:var(--red)" onclick="doLogout()"><i class="ti ti-logout" style="color:var(--red)"></i>Chiqish<i class="ti ti-chevron-right ch"></i></div></div>`;
 }
+async function doLogout(){try{await api("/auth/logout",{method:"POST"});}catch(e){}location.reload();}
 async function renderProtocols(box){
   const d=await api("/protocols");const list=d.protocols||[];
   box.innerHTML=hdr("Bayonnomalar","")+(list.length?list.map(p=>`<div class="card">
@@ -433,10 +435,22 @@ function closeOv(id){$(id).classList.remove("show");}
 function openSearch(){$("searchov").classList.add("show");setTimeout(()=>$("searchq").focus(),120);}
 let _st;
 function doSearch(q){clearTimeout(_st);_st=setTimeout(()=>runSearch(q),260);}
-function srCard(kind,id,title,sub){return `<div class="card" onclick="srOpen('${kind}','${id}')">
-  <div style="font-size:14px;font-weight:500">${esc(title)}</div>${sub?`<div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(sub)}</div>`:''}</div>`;}
+function srCard(kind,id,title,sub){
+  let acts="";
+  if(kind==="task"||kind==="reminder")acts+=`<button class="btn pri" onclick="event.stopPropagation();srDone('${kind}','${id}')"><i class="ti ti-check"></i></button>`;
+  if(kind==="meeting")acts+=`<button class="btn pri" onclick="event.stopPropagation();srDone('meeting','${id}')">Bo'ldi</button>`;
+  acts+=`<button class="btn dang" onclick="event.stopPropagation();srDel('${kind}','${id}')"><i class="ti ti-trash"></i></button>`;
+  return `<div class="card" onclick="srOpen('${kind}','${id}')">
+    <div style="font-size:14px;font-weight:500">${esc(title)}</div>${sub?`<div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(sub)}</div>`:''}
+    <div class="rowbtns">${acts}</div></div>`;}
 function srOpen(kind,id){closeOv("searchov");
   ({task:openTask,meeting:openMeeting,note:openNote,reminder:openReminder}[kind]||(()=>{}))(id);}
+async function srDone(kind,id){const p={task:`/tasks/${id}/complete`,reminder:`/reminders/${id}/complete`,meeting:`/meetings/${id}/complete`}[kind];
+  try{await api(p,{method:"POST"});flash("Bajarildi");runSearch($("searchq").value);}catch(e){flash("⚠️ "+e.message);}}
+function srDel(kind,id){
+  const cancel=(kind==="meeting");const p=cancel?`/meetings/${id}/cancel`:{task:`/tasks/${id}`,note:`/notes/${id}`,reminder:`/reminders/${id}`}[kind];
+  if(!p)return;const run=async()=>{try{await api(p,{method:cancel?"POST":"DELETE"});flash("Bajarildi");runSearch($("searchq").value);}catch(e){flash("⚠️ "+e.message);}};
+  if(tg?.showConfirm)tg.showConfirm("Bajarilsinmi?",ok=>{if(ok)run()});else run();}
 async function runSearch(q){const box=$("searchres");
   if((q||"").trim().length<2){box.innerHTML='<div class="srhint">Kamida 2 harf yozing</div>';return;}
   box.innerHTML='<div class="srhint">Qidirilmoqda…</div>';
@@ -459,12 +473,17 @@ let _chatBusy=false;
 async function sendChat(){if(_chatBusy)return;const inp=$("chatq");const q=(inp.value||"").trim();if(!q)return;
   inp.value="";appendMsg("u",q);const th=appendMsg("a","…");_chatBusy=true;
   try{const r=await api("/chat",{method:"POST",body:JSON.stringify({message:q})});
-    let txt=r.reply||"Bajarildi.";const c=r.created||{};const nm={task:"vazifa",meeting:"uchrashuv",note:"qayd",reminder:"eslatma"};
-    const bits=Object.keys(c).map(k=>c[k]+" "+(nm[k]||k));
-    if(bits.length){txt+="\n\n✓ "+bits.join(", ");render(VIEW);}
-    th.textContent=txt;
+    th.textContent=r.reply||"Bajarildi.";
+    if(r.confirm_token){
+      const doIt=async()=>{const r2=await api("/chat/confirm",{method:"POST",body:JSON.stringify({token:r.confirm_token})});
+        appendMsg("a",r2.reply+_summary(r2.created));render(VIEW);};
+      if(tg?.showConfirm)tg.showConfirm(r.confirm_prompt||"Bajarilsinmi?",ok=>{if(ok)doIt();else appendMsg("a","Bekor qilindi.");});
+      else if(confirm(r.confirm_prompt||"Bajarilsinmi?"))doIt();
+    }else{const s=_summary(r.created);if(s){th.textContent+=s;render(VIEW);}}
   }catch(e){th.textContent="⚠️ "+e.message;}
   _chatBusy=false;}
+function _summary(c){c=c||{};const nm={task:"vazifa",meeting:"uchrashuv",note:"qayd",reminder:"eslatma"};
+  const bits=Object.keys(c).map(k=>c[k]+" "+(nm[k]||k));return bits.length?"\n\n✓ "+bits.join(", "):"";}
 
 $("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
