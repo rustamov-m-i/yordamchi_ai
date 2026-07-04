@@ -86,6 +86,38 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .tsubi .st{flex:1;min-width:0;font-size:13px;line-height:1.35}
   .tsubi .sw{font-size:11px;color:var(--faint);margin-top:2px}
   .tsubi.done .st{color:var(--faint)}.tsubi.done .stt{text-decoration:line-through}
+  /* ── Uchrashuvlar tab — timeline + detail + bayonnoma ── */
+  .flt{display:flex;gap:8px;margin-bottom:15px}
+  .flt button{border:none;border-radius:20px;padding:8px 17px;font-size:13px;font-weight:600;background:var(--soft);color:var(--muted)}
+  .flt button.on{background:var(--brand);color:#fff}
+  .mtl{position:relative}
+  .grp{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.04em;text-transform:uppercase;margin:14px 0 9px 46px}
+  .grp:first-child{margin-top:2px}
+  .mrow{position:relative;display:flex;margin-bottom:10px}
+  .mtime{width:38px;flex:none;text-align:right;font-size:12px;font-weight:700;color:var(--muted);padding-top:12px}
+  .mrail{width:24px;flex:none;position:relative}
+  .mrail::before{content:"";position:absolute;left:11px;top:-11px;bottom:-11px;width:2px;background:var(--line)}
+  .mdot{position:absolute;left:5px;top:14px;width:13px;height:13px;border-radius:50%;border:2.5px solid var(--brand);background:var(--bg);box-sizing:border-box;z-index:1}
+  .mdot.done{background:var(--green);border-color:var(--green);display:flex;align-items:center;justify-content:center}
+  .mdot.done i{font-size:9px;color:#fff}
+  .mc{flex:1;background:var(--card);border-radius:14px;padding:11px 13px;border:.5px solid var(--line);min-width:0}
+  .mc.dim{opacity:.68}
+  .mt{font-size:14px;font-weight:600;color:var(--text);line-height:1.3}
+  .mm{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mm i{font-size:14px;color:var(--brand);opacity:.7;flex:none}
+  .mm+.mm{margin-top:3px}
+  .mbadges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip.green{background:#e1f5ee;color:#0f6e56}
+  .drow{display:flex;align-items:center;gap:11px;font-size:14px;color:var(--text);margin-bottom:11px}
+  .drow i{font-size:19px;color:var(--brand);flex:none}
+  .drow a{color:var(--brand);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dlbl{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 9px}
+  .ppl{display:flex;flex-wrap:wrap;gap:7px}
+  .pc{display:flex;align-items:center;gap:7px;background:var(--soft);border-radius:20px;padding:3px 12px 3px 3px;font-size:12.5px;color:var(--text)}
+  .av{width:23px;height:23px;border-radius:50%;background:var(--brand-soft);color:var(--brand-d);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
+  .dnote{font-size:13.5px;color:var(--muted);line-height:1.55;background:var(--soft);border-radius:12px;padding:11px 13px}
+  .protobox{background:var(--soft);border-radius:12px;padding:12px 13px;font-size:13px;color:var(--text);line-height:1.55;white-space:pre-wrap;max-height:210px;overflow:auto}
+  .dlrow{display:flex;gap:8px;margin-top:10px}
   .aibar{display:flex;align-items:center;gap:9px;background:var(--card);border:1.5px solid var(--brand-soft);
     border-radius:14px;padding:11px 13px;margin-bottom:14px;color:var(--brand-d);font-size:13px;box-shadow:0 1px 4px rgba(108,92,231,.1)}
   .aibar i{color:var(--brand);font-size:18px}.aibar span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -391,28 +423,40 @@ async function renderTasks(box){
 }
 function setTF(k){TFILTER=k;render("tasks")}
 
-function _isToday(ms){const d=new Date(ms),n=new Date();return d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate();}
-function _mcard(m,dim){const t=new Date(m.datetime_start).getTime(),now=Date.now();
-  const badge=m.completed_at?'<span class="chip" style="background:#e7f6ee;color:#1e7d4f">Bo\'ldi</span> '
-             :(t<now?'<span class="chip gray">O\'tgan</span> ':(_isToday(t)?'<span class="chip prog">Bugun</span> ':''));
-  return `<div class="card" style="${dim?'opacity:.62':''}">
-    <div onclick="openMeeting('${m.id}')" style="cursor:pointer">
-      <div style="font-size:15px;font-weight:500">${badge}${esc(m.title)}</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:5px"><i class="ti ti-calendar" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?` · <i class="ti ti-map-pin" style="vertical-align:-2px"></i> ${esc(m.location_or_link)}`:""}</div>
-      ${(m.participants&&m.participants.length)?`<div style="font-size:12px;color:var(--muted);margin-top:4px"><i class="ti ti-users" style="vertical-align:-2px"></i> ${esc(m.participants.join(", "))}</div>`:""}</div>
-    <div class="rowbtns">${m.completed_at?`<button class="btn" onclick="mReopen('${m.id}')">↩︎ Qayta ochish</button>`:`<button class="btn pri" onclick="mDone('${m.id}')">Bo'ldi</button>`}
-      <button class="btn" onclick="openMeeting('${m.id}')"><i class="ti ti-edit"></i></button>
-      <button class="btn dang" onclick="mCancel('${m.id}')">Bekor</button></div></div>`;}
+let MFILTER="yaqin";
+function setMF(k){MFILTER=k;render("meetings")}
+function _hm(iso){const d=new Date(iso);if(isNaN(d))return"";const p=n=>String(n).padStart(2,"0");return `${p(d.getHours())}:${p(d.getMinutes())}`}
+const _MON=["yanvar","fevral","mart","aprel","may","iyun","iyul","avgust","sentabr","oktabr","noyabr","dekabr"];
+const _WD=["Yakshanba","Dushanba","Seshanba","Chorshanba","Payshanba","Juma","Shanba"];
+function _dayLabel(iso){const d=new Date(iso);if(isNaN(d))return"";
+  const t=new Date();const s=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate());
+  const diff=Math.round((s(d)-s(t))/864e5);const dm=`${d.getDate()}-${_MON[d.getMonth()]}`;
+  if(diff===0)return `Bugun · ${dm}`;if(diff===1)return `Ertaga · ${dm}`;if(diff===-1)return `Kecha · ${dm}`;
+  return `${_WD[d.getDay()]} · ${dm}`}
+function _initials(n){const p=(n||"").trim().split(/\s+/);return (((p[0]||"")[0]||"")+((p[1]||"")[0]||"")||(n||"?").slice(0,2)).toUpperCase()}
+function _isLink(s){return /^https?:\/\/|zoom|meet\.|teams|t\.me/i.test(s||"")}
+function _hasProtocol(m){const fu=m&&m.follow_up_actions;const s=Array.isArray(fu)?(fu[0]||""):(typeof fu==="string"?fu:"");return typeof s==="string"&&s.trim().length>40&&s.includes(" ")}
+function _protoText(m){const fu=m&&m.follow_up_actions;return (Array.isArray(fu)?(fu[0]||""):(fu||"")).toString().trim()}
+function _meetRow(m){const done=!!m.completed_at;const loc=m.location_or_link||"";const ps=m.participants||[];
+  let metas="";
+  if(ps.length)metas+=`<div class="mm"><i class="ti ti-users"></i>${esc(ps.length>2?ps.slice(0,2).join(", ")+" +"+(ps.length-2):ps.join(", "))}</div>`;
+  if(loc)metas+=`<div class="mm"><i class="ti ti-${_isLink(loc)?'video':'map-pin'}"></i>${esc(loc)}</div>`;
+  let badges="";
+  if(done||_hasProtocol(m))badges='<div class="mbadges">'+(done?'<span class="chip green"><i class="ti ti-check" style="font-size:11px;vertical-align:-1px"></i> Bo\'ldi</span>':'')+(_hasProtocol(m)?'<span class="chip violet"><i class="ti ti-file-text" style="font-size:11px;vertical-align:-1px"></i> Bayonnoma</span>':'')+'</div>';
+  return `<div class="mrow"><div class="mtime">${_hm(m.datetime_start)}</div><div class="mrail"><div class="mdot ${done?'done':''}">${done?'<i class="ti ti-check"></i>':''}</div></div><div class="mc ${done?'dim':''}" onclick="meetingDetail('${m.id}')"><div class="mt">${esc(m.title)}</div>${metas}${badges}</div></div>`}
 async function renderMeetings(box){
   const d=await api("/meetings");const list=d.meetings||[];
   list.forEach(x=>CACHE.meetings[x.id]=x);
-  const now=Date.now(),up=[],past=[];
-  list.forEach(m=>{const t=new Date(m.datetime_start).getTime();((m.completed_at||t<now)?past:up).push(m);});
-  up.sort((a,b)=>new Date(a.datetime_start)-new Date(b.datetime_start));   // kelgusi: yaqinи birinchi
-  past.sort((a,b)=>new Date(b.datetime_start)-new Date(a.datetime_start)); // o'tган: eng yangisi birinchi
-  let html=up.map(m=>_mcard(m,false)).join("");
-  if(past.length)html+='<div class="sec" style="margin-top:14px"><h2 style="font-size:13px;color:var(--faint)">O\'tgan</h2></div>'+past.map(m=>_mcard(m,true)).join("");
-  box.innerHTML=hdr("Uchrashuvlar","")+(list.length?html:emptyBox("calendar-off","Uchrashuv yo'q"));
+  const now=Date.now();
+  const mf=m=>{if(MFILTER==="hammasi")return true;const past=!!(m.completed_at||new Date(m.datetime_start).getTime()<now);return MFILTER==="otgan"?past:!past;};
+  const sel=list.filter(mf).sort((a,b)=>MFILTER==="otgan"?(new Date(b.datetime_start)-new Date(a.datetime_start)):(new Date(a.datetime_start)-new Date(b.datetime_start)));
+  let rows="",lastKey="";
+  sel.forEach(m=>{const key=new Date(m.datetime_start).toDateString();
+    if(key!==lastKey){rows+=`<div class="grp">${_dayLabel(m.datetime_start)}</div>`;lastKey=key;}
+    rows+=_meetRow(m);});
+  const chip=(k,l)=>`<button class="${MFILTER===k?'on':''}" onclick="setMF('${k}')">${l}</button>`;
+  box.innerHTML=hdr("Uchrashuvlar","")+`<div class="flt">${chip("yaqin","Yaqin")}${chip("otgan","O'tgan")}${chip("hammasi","Hammasi")}</div>`+
+    (sel.length?`<div class="mtl">${rows}</div>`:emptyBox("calendar-off","Uchrashuv yo'q"));
 }
 async function renderNotes(box){
   const d=await api("/notes");const list=d.notes||[];
@@ -617,7 +661,41 @@ function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uc
   <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(", "))}">
   <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
-const openMeeting=x=>openM(meetingForm(typeof x==="object"?(x||{}):(CACHE.meetings[x]||{})));
+const editMeeting=m=>openM(meetingForm(typeof m==="object"?(m||{}):(CACHE.meetings[m]||{})));
+// Kartani bosish → tafsilot (o'qish) ekrani; yangi uchrashuv → tahrir formasi.
+const openMeeting=x=>(typeof x==="object")?editMeeting(x||{}):meetingDetail(x);
+function meetingDetailHtml(m){const done=!!m.completed_at;const loc=m.location_or_link||"";const ps=m.participants||[];const hasP=_hasProtocol(m);
+  const timeR=`${_dayLabel(m.datetime_start)}, ${_hm(m.datetime_start)}${m.datetime_end?` – ${_hm(m.datetime_end)}`:""}`;
+  let h=`<h3 style="margin-bottom:8px">${esc(m.title)}</h3>`;
+  if(done)h+='<div class="mbadges" style="margin:0 0 13px"><span class="chip green"><i class="ti ti-check" style="font-size:11px;vertical-align:-1px"></i> Yakunlandi</span></div>';
+  h+=`<div class="drow"><i class="ti ti-clock"></i>${timeR}</div>`;
+  if(loc)h+=`<div class="drow"><i class="ti ti-${_isLink(loc)?'video':'map-pin'}"></i>${_isLink(loc)?`<a href="${esc(loc)}" target="_blank" rel="noopener">${esc(loc)}</a>`:esc(loc)}</div>`;
+  if(ps.length)h+=`<div class="dlbl">Ishtirokchilar</div><div class="ppl">`+ps.map(p=>`<div class="pc"><div class="av">${esc(_initials(p))}</div>${esc(p)}</div>`).join("")+`</div>`;
+  if((m.agenda||"").trim())h+=`<div class="dlbl">Kun tartibi / izoh</div><div class="dnote">${esc(m.agenda)}</div>`;
+  h+=`<div class="dlbl">Bayonnoma</div>`;
+  if(hasP)h+=`<div class="protobox">${esc(_protoText(m))}</div><div class="dlrow"><button class="btn pri" onclick="download('/protocols/${m.id}/download?fmt=word','bayonnoma.docx')"><i class="ti ti-file-word"></i> Word</button><button class="btn" onclick="download('/protocols/${m.id}/download?fmt=pdf','bayonnoma.pdf')"><i class="ti ti-file-typography"></i> PDF</button><button class="btn" onclick="openProtocol('${m.id}')" title="Qayta yaratish"><i class="ti ti-refresh"></i></button></div>`;
+  else h+=`<button class="btn pri" style="width:100%" onclick="openProtocol('${m.id}')"><i class="ti ti-file-text"></i> Bayonnoma yaratish</button>`;
+  h+=`<div class="macts">${done?`<button class="btn" onclick="closeM();mReopen('${m.id}')"><i class="ti ti-rotate-2"></i> Qayta ochish</button>`:`<button class="btn pri" onclick="closeM();mDone('${m.id}')"><i class="ti ti-check"></i> Yakunlash</button>`}<button class="btn" onclick="editMeeting('${m.id}')"><i class="ti ti-edit"></i> Tahrir</button></div>`;
+  h+=`<div class="macts" style="margin-top:9px"><button class="btn dang" style="flex:1" onclick="closeM();mCancel('${m.id}')"><i class="ti ti-trash"></i> Bekor qilish</button></div>`;
+  return h}
+async function meetingDetail(id){let m=CACHE.meetings[id];
+  if(!m){try{m=(await api("/meetings/"+id)).meeting;if(m)CACHE.meetings[id]=m;}catch(e){return flash("Uchrashuv topilmadi");}}
+  if(!m)return flash("Uchrashuv topilmadi");
+  openM(meetingDetailHtml(m));}
+function openProtocol(id){const m=CACHE.meetings[id]||{};openM(`<h3>Bayonnoma yaratish</h3>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:6px">${esc(m.title||"")}</div>
+  <label>Uchrashuvda nimalar muhokama qilindi?</label>
+  <textarea id="f_pnotes" style="min-height:130px" placeholder="Muhokama mavzulari, qabul qilingan qarorlar, kim nima qiladi va qachonga..."></textarea>
+  <label style="display:flex;align-items:center;gap:9px;margin-top:12px;font-size:13.5px;color:var(--text)"><input type="checkbox" id="f_ptasks" style="width:auto" checked> Follow-up vazifalar avtomatik qo'shilsin</label>
+  <div class="macts"><button class="btn" onclick="meetingDetail('${id}')">Ortga</button><button class="btn pri" id="pgen" onclick="genProtocol('${id}')"><i class="ti ti-sparkles"></i> Bayonnoma yarat</button></div>`)}
+async function genProtocol(id){const notes=val("f_pnotes");if(!notes)return flash("Avval matn yozing");
+  const ct=!!($("f_ptasks")&&$("f_ptasks").checked);const btn=$("pgen");
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Tayyorlanmoqda…';}
+  try{const r=await api(`/meetings/${id}/protocol`,{method:"POST",body:JSON.stringify({notes,create_tasks:ct})});
+    if(r.meeting)CACHE.meetings[id]=r.meeting;
+    flash("Bayonnoma tayyor"+(r.tasks_created?` · ${r.tasks_created} vazifa qo'shildi`:(r.tasks_failed?" · vazifalarni qo'shib bo'lmadi":"")));
+    meetingDetail(id);render(VIEW);
+  }catch(e){flash("⚠️ "+e.message);if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-sparkles"></i> Bayonnoma yarat';}}}
 async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),datetime_end:fromLocal(val("f_end")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
   if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 

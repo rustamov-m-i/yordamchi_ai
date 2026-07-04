@@ -302,13 +302,25 @@ async def task_delete(request: web.Request) -> web.Response:
 
 async def meetings_list(request: web.Request) -> web.Response:
     # Recent + upcoming window so the app shows a useful slice, not the whole history.
+    # Wide enough that the "O'tgan" (past) filter in the mini app has real content;
+    # the client splits yaqin/o'tgan/hammasi.
     now = database.now_iso()
     start = database.parse_iso_dt(now)
     from datetime import timedelta
-    lo = (start - timedelta(days=7)).isoformat()
-    hi = (start + timedelta(days=60)).isoformat()
+    lo = (start - timedelta(days=90)).isoformat()
+    hi = (start + timedelta(days=90)).isoformat()
     rows = await database.list_meetings_in_window(lo, hi)
     return web.json_response({"meetings": rows})
+
+
+async def meeting_get(request: web.Request) -> web.Response:
+    """Single meeting (incl. participants + follow_up_actions/protocol) — used by
+    the detail view for meetings that fall outside the list window or need a
+    fresh copy after a protocol is generated."""
+    m = await database.get_meeting(request.match_info["id"])
+    if not m:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"meeting": m})
 
 
 async def meeting_create(request: web.Request) -> web.Response:
@@ -340,6 +352,56 @@ async def meeting_complete(request: web.Request) -> web.Response:
 async def meeting_uncomplete(request: web.Request) -> web.Response:
     ok = await database.uncomplete_meeting(request.match_info["id"])
     return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+_last_proto_ts = [0.0]
+
+
+async def meeting_protocol(request: web.Request) -> web.Response:
+    """Generate + save a meeting protocol (bayonnoma) from raw notes — mirrors the
+    bot exactly: same [INTERNAL] directive, same brain, saved to follow_up_actions.
+    Optionally creates the follow-up tasks Claude proposes."""
+    import time as _t
+    import handlers
+    mid = request.match_info["id"]
+    m = await database.get_meeting(mid)
+    if not m:
+        return web.json_response({"error": "not found"}, status=404)
+    data = await _json_body(request)
+    notes = (data.get("notes") or "").strip()
+    if not notes:
+        return web.json_response({"error": "notes required"}, status=400)
+    if len(notes) > 6000:
+        return web.json_response({"error": "notes too long"}, status=400)
+    now = _t.monotonic()
+    if now - _last_proto_ts[0] < 2.0:
+        return web.json_response({"error": "Biroz kuting — bir zumdan keyin qayting."}, status=429)
+    _last_proto_ts[0] = now
+    try:
+        directive = handlers._build_protocol_directive(m, notes)
+        resp = await claude_service.process_message("", internal_directive=directive)
+    except Exception:
+        logger.exception("webapp: protocol generation failed")
+        return web.json_response({"error": "Bayonnomani tuzib bo'lmadi. Qayta urining."}, status=502)
+    protocol_text = (resp.get("user_message") or "").strip()
+    if not protocol_text:
+        return web.json_response({"error": "Bayonnoma bo'sh chiqdi. Qayta urining."}, status=502)
+    await database.update_meeting(mid, {"follow_up_actions": [protocol_text]})
+    tasks_created = 0
+    tasks_failed = False
+    if data.get("create_tasks"):
+        creates = [a for a in (resp.get("actions") or []) if a.get("type") == "create_task"]
+        if creates:
+            try:
+                ids = await handlers._execute_actions(creates)
+                tasks_created = len(ids.get("task") or [])
+            except Exception:
+                # Protocol is already saved; only the optional follow-up tasks failed.
+                # Tell the client instead of silently reporting 0 created.
+                logger.exception("webapp: protocol follow-up tasks failed")
+                tasks_failed = True
+    return web.json_response({"protocol_text": protocol_text, "tasks_created": tasks_created,
+                              "tasks_failed": tasks_failed, "meeting": await database.get_meeting(mid)})
 
 
 # ───────────────────────── notes ─────────────────────────
@@ -945,10 +1007,12 @@ def create_app() -> web.Application:
         web.delete("/api/tasks/{id}", task_delete),
         web.get("/api/meetings", meetings_list),
         web.post("/api/meetings", meeting_create),
+        web.get("/api/meetings/{id}", meeting_get),
         web.patch("/api/meetings/{id}", meeting_update),
         web.post("/api/meetings/{id}/cancel", meeting_cancel),
         web.post("/api/meetings/{id}/complete", meeting_complete),
         web.post("/api/meetings/{id}/uncomplete", meeting_uncomplete),
+        web.post("/api/meetings/{id}/protocol", meeting_protocol),
         web.get("/api/notes", notes_list),
         web.post("/api/notes", note_create),
         web.patch("/api/notes/{id}", note_update),

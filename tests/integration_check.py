@@ -1845,6 +1845,49 @@ async def main():
         _pp = await _client.get(f"/api/protocols/{_pmid}/download?fmt=pdf", headers=_H)
         check("Protocols: PDF yuklab olinadi (reportlab)",
               _pp.status == 200 and "pdf" in _pp.headers.get("Content-Type", ""))
+        # ── Uchrashuv: detail (GET /api/meetings/{id}) + 90-kunlik oyna ──
+        _mget = await (await _client.get(f"/api/meetings/{_pmid}", headers=_H)).json()
+        check("MiniApp: GET /api/meetings/{id} → meeting (follow_up_actions bilan)",
+              _mget.get("meeting", {}).get("id") == _pmid
+              and isinstance(_mget["meeting"].get("follow_up_actions"), list))
+        check("MiniApp: GET /api/meetings/yoq → 404",
+              (await _client.get("/api/meetings/yoq-id", headers=_H)).status == 404)
+        _oldmid = await database.create_meeting({"title": "Eski uchrashuv",
+            "datetime_start": (datetime.now(TZ) - timedelta(days=30)).isoformat()})
+        _ml = await (await _client.get("/api/meetings", headers=_H)).json()
+        check("MiniApp: meetings oynasi o'tgan uchrashuvni ham qamraydi (O'tgan filtr uchun)",
+              any(x["id"] == _oldmid for x in _ml.get("meetings", [])))
+        # ── Uchrashuv: bayonnoma yaratish (POST /api/meetings/{id}/protocol, AI mirror) ──
+        _pm2 = await database.create_meeting({"title": "Bayonnoma sinovi",
+            "datetime_start": datetime.now(TZ).isoformat()})
+        import claude_service as _cs3
+        _orig_pm3 = _cs3.process_message
+        async def _fake_proto(text, internal_directive=None, **k):
+            return {"user_message": "BAYONNOMA\n\nMuhokama: reja ko'rib chiqildi. Qaror: tasdiqlandi.\nTOPSHIRIQ: Karimov — hujjatni tayyorlash",
+                    "actions": [{"type": "create_task", "data": {"title": "Bayonnomadan vazifa", "source": "webapp"}}]}
+        _cs3.process_message = _fake_proto
+        try:
+            _n0 = len(await database.list_tasks(limit=9999))
+            _pr = await (await _client.post(f"/api/meetings/{_pm2}/protocol", headers=_H,
+                json={"notes": "byudjet ko'rib chiqildi, karimov hujjat tayyorlaydi", "create_tasks": True})).json()
+            check("MiniApp: protocol → matn + follow-up vazifa yaratildi",
+                  "BAYONNOMA" in (_pr.get("protocol_text") or "") and _pr.get("tasks_created") == 1
+                  and len(await database.list_tasks(limit=9999)) == _n0 + 1)
+            _m2 = await database.get_meeting(_pm2)
+            check("MiniApp: protocol follow_up_actions'ga saqlandi",
+                  isinstance(_m2.get("follow_up_actions"), list) and _m2["follow_up_actions"]
+                  and "BAYONNOMA" in _m2["follow_up_actions"][0])
+            _dw = await _client.get(f"/api/protocols/{_pm2}/download?fmt=word", headers=_H)
+            check("MiniApp: yaratilgan bayonnoma Word yuklab olinadi",
+                  _dw.status == 200 and len(await _dw.read()) > 500)
+            check("MiniApp: protocol rate-limit (2s ichida ketma-ket) → 429",
+                  (await _client.post(f"/api/meetings/{_pm2}/protocol", headers=_H, json={"notes": "yana"})).status == 429)
+            check("MiniApp: protocol bo'sh notes → 400",
+                  (await _client.post(f"/api/meetings/{_pm2}/protocol", headers=_H, json={"notes": "  "})).status == 400)
+            check("MiniApp: protocol noma'lum uchrashuv → 404",
+                  (await _client.post("/api/meetings/yoq-id/protocol", headers=_H, json={"notes": "x"})).status == 404)
+        finally:
+            _cs3.process_message = _orig_pm3
         _ex = await _client.get("/api/export/tasks?filter=all", headers=_H)
         check("Export: Excel (xlsx) yuklab olinadi",
               _ex.status == 200 and "spreadsheet" in _ex.headers.get("Content-Type", "")
