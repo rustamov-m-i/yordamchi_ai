@@ -159,6 +159,8 @@ let VIEW="dash", META={categories:[],contacts:[]};
 const CACHE={tasks:{},meetings:{},notes:{},reminders:{}};
 const PRIO={P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
 const STAT={in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor",todo:""};
+const STATSEL={todo:"Rejada",in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor"};
+const RECUR={"":"Takrorlanmaydi",daily:"Har kuni",weekdays:"Ish kunlari",weekly:"Har hafta",monthly:"Har oy",quarterly:"Har chorak",yearly:"Har yil"};
 const PCLS={P0:"red",P1:"amber",P2:"violet",P3:"gray"};
 const PCOL={P0:"var(--red)",P1:"var(--amber)",P2:"var(--brand)",P3:"#b7b7c8"};
 
@@ -373,29 +375,40 @@ function openM(html){$("modal").innerHTML=html;mbg.classList.add("show")}
 function opts(list,sel){return list.map(v=>`<option ${v===sel?"selected":""}>${esc(v)}</option>`).join("")}
 function val(id){return ($(id)?.value||"").trim()}
 
-function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":"Yangi vazifa"}</h3>
+function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":(t.parent_id?"Yangi sub-vazifa":"Yangi vazifa")}</h3>
+  <input type="hidden" id="f_parent" value="${esc(t.parent_id||"")}">
   <label>Sarlavha</label><input id="f_title" value="${esc(t.title)}" placeholder="Nima qilinsin?">
   <label>Izoh</label><textarea id="f_desc">${esc(t.description)}</textarea>
   <label>Ijrochi</label><input id="f_asg" list="dl_c" value="${esc(t.assignee)}"><datalist id="dl_c">${opts(META.contacts)}</datalist>
   <label>Muddat</label><input type="datetime-local" id="f_dl" value="${toLocal(t.deadline)}">
-  <label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select></div>
+    <div style="flex:1"><label>Holat</label><select id="f_status">${Object.keys(STATSEL).map(s=>`<option value="${s}" ${(t.status||"todo")===s?"selected":""}>${STATSEL[s]}</option>`).join("")}</select></div></div>
   <label>Kategoriya</label><input id="f_cat" list="dl_cat" value="${esc(t.category)}"><datalist id="dl_cat">${opts(META.categories)}</datalist>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Takroriylik</label><select id="f_rec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(t.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select></div>
+    <div style="flex:1"><label>Teglar (vergul)</label><input id="f_tags" value="${esc((t.tags||[]).join(", "))}"></div></div>
+  ${t.id?`<button class="btn" style="margin-top:12px;width:100%" onclick="closeM();openTask({parent_id:'${t.id}'})"><i class="ti ti-subtask"></i> Sub-vazifa qo'shish</button>`:""}
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button>${t.id?`<button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
 const openTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));
 function delTask(id){const run=()=>{closeM();act(()=>api(`/tasks/${id}`,{method:"DELETE"}),"O'chirildi")};
   if(tg?.showConfirm)tg.showConfirm("Vazifa o'chirilsinmi?",ok=>{if(ok)run()});else run()}
-async function saveTask(id){const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),priority:val("f_prio"),category:val("f_cat")};
-  if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
+async function saveTask(id){
+  const tags=val("f_tags").split(",").map(s=>s.trim()).filter(Boolean);
+  const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),
+    priority:val("f_prio"),status:val("f_status"),category:val("f_cat"),recurrence_rule:val("f_rec"),tags};
+  const par=val("f_parent");if(par)b.parent_id=par;
+  if(!b.title)return flash("Sarlavha kerak");
+  await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uchrashuv"}</h3>
   <label>Sarlavha</label><input id="f_title" value="${esc(m.title)}">
-  <label>Boshlanish</label><input type="datetime-local" id="f_start" value="${toLocal(m.datetime_start)}">
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Boshlanish</label><input type="datetime-local" id="f_start" value="${toLocal(m.datetime_start)}"></div>
+    <div style="flex:1"><label>Tugash</label><input type="datetime-local" id="f_end" value="${toLocal(m.datetime_end)}"></div></div>
   <label>Joy / havola</label><input id="f_loc" value="${esc(m.location_or_link)}">
   <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(", "))}">
   <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
 const openMeeting=x=>openM(meetingForm(typeof x==="object"?(x||{}):(CACHE.meetings[x]||{})));
-async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
+async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),datetime_end:fromLocal(val("f_end")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag")};
   if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3>
