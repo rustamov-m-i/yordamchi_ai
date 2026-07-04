@@ -410,18 +410,35 @@ async def reminder_delete(request: web.Request) -> web.Response:
 # ───────────────────────── meta + health ─────────────────────────
 
 async def dashboard(request: web.Request) -> web.Response:
-    """Home-screen summary: this-week progress, headline counts, today's tasks."""
+    """Executive home: attention radar, today's agenda, priority tasks, delegation
+    oversight, weekly pulse. Assembled from existing DB functions in one call."""
     active = await database.list_tasks(status_in=["todo", "in_progress", "blocked"], limit=1000)
-    today = await database.list_today_tasks()
+    overdue = await database.list_overdue_tasks()
+    unassigned = await database.list_unassigned_tasks(limit=200)
+    today_tasks = await database.list_today_tasks()
+    today_meetings = await database.list_today_meetings()
     week = await database.completed_counts_by_day(7)
     done_week = sum(d["count"] for d in week)
-    active_n = len(active)
-    total = active_n + done_week
-    progress = round(done_week / total * 100) if total else 0
+    total = len(active)
+    blocked = sum(1 for t in active if t.get("status") == "blocked")
+    progress = round(done_week / (total + done_week) * 100) if (total + done_week) else 0
+    priority = [t for t in active if t.get("priority") in ("P0", "P1") and not t.get("parent_id")][:5]
+    load = await database.assignee_load_map()
+    ranked = sorted(load.values(), key=lambda x: -x.get("active", 0))
+    # Team oversight = delegatees only. Skip the unassigned bucket (covered by the
+    # "Ijrochisiz" radar tile) and the principal himself.
+    overloaded = [p for p in ranked
+                  if p.get("active", 0) >= 5
+                  and p.get("name") not in ("belgilanmagan", "Men")][:2]
+    stale = await database.list_stale_delegations(min_age_days=3, limit=5)
+    nxt = await database.next_first_meeting()
     return web.json_response({
-        "progress": progress,
-        "counts": {"total": total, "done": done_week, "pending": active_n},
-        "today": today,
+        "progress": progress,                                   # compat (Profil + pulse)
+        "counts": {"total": total, "done": done_week, "pending": total},
+        "radar": {"total": total, "overdue": len(overdue), "blocked": blocked, "unassigned": len(unassigned)},
+        "today": {"meetings": today_meetings, "tasks": today_tasks, "next": nxt},
+        "priority": priority,
+        "team": {"overloaded": overloaded, "stale": stale},
     })
 
 

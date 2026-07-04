@@ -1686,6 +1686,16 @@ async def main():
         _dj = await _r.json()
         check("MiniApp: /api/dashboard → progress+counts+today",
               _r.status == 200 and "progress" in _dj and "counts" in _dj and "today" in _dj)
+        _rd = _dj.get("radar", {})
+        check("MiniApp: dashboard radar → total/overdue/blocked/unassigned",
+              all(k in _rd for k in ("total", "overdue", "blocked", "unassigned")))
+        check("MiniApp: dashboard today → obyekt (meetings/tasks/next)",
+              isinstance(_dj.get("today"), dict)
+              and all(k in _dj["today"] for k in ("meetings", "tasks", "next")))
+        check("MiniApp: dashboard → priority ro'yxati + team oversight",
+              isinstance(_dj.get("priority"), list)
+              and isinstance(_dj.get("team", {}).get("overloaded"), list)
+              and isinstance(_dj.get("team", {}).get("stale"), list))
         _r = await _client.get("/api/insights", headers=_H)
         _ij = await _r.json()
         check("MiniApp: /api/insights → 7 kunlik bar + kategoriyalar",

@@ -71,6 +71,17 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .chatin input:focus{outline:none;border-color:var(--brand)}
   .chatin button{border:none;background:var(--brand);color:#fff;width:42px;border-radius:50%;font-size:18px;flex:none}
   .srhint{color:var(--faint);text-align:center;padding:30px 20px;font-size:13px}
+  .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin:2px 2px 8px}
+  .radar{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:16px}
+  .tile{background:var(--card);border-radius:14px;padding:12px;display:flex;align-items:center;gap:10px}
+  .tile .num{font-size:24px;font-weight:700;line-height:1}.tile .tl{font-size:12px;color:var(--muted)}
+  .rdot{width:8px;height:8px;border-radius:50%;flex:none}
+  .next{background:var(--brand);color:#fff;border-radius:14px;padding:13px;margin-bottom:9px}
+  .tl2{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .tl2:last-child{border:none}.tl2 .tm{font-size:11px;color:var(--faint);width:44px;flex:none}
+  .warn{background:var(--card);border-radius:14px;padding:11px 13px;margin-bottom:9px;display:flex;align-items:center;gap:10px;font-size:13px}
+  .pulse{background:var(--card);border-radius:14px;padding:13px;display:flex;align-items:center;gap:14px;margin-bottom:10px}
+  .qa{display:flex;gap:8px}.qa div{flex:1;background:var(--card);border-radius:12px;padding:10px;text-align:center;font-size:11px;color:var(--muted)}.qa i{font-size:19px;color:var(--brand);display:block;margin-bottom:3px}
   .rowbtns{display:flex;gap:7px;margin-top:10px}
   .btn{border:none;font-size:12px;padding:7px 11px;border-radius:10px;background:var(--soft);color:var(--text)}
   .btn.pri{background:var(--brand);color:#fff}
@@ -218,20 +229,44 @@ async function render(v){
 }
 
 async function renderDash(box){
-  const d=await api("/dashboard");const c=d.counts||{};
-  let h=`<div class="head"><div><h1>Salom, Maqsud</h1><div class="sub">Bugungi rejangiz</div></div>
+  const d=await api("/dashboard");const r=d.radar||{};const today=d.today||{};
+  const tm=today.meetings||[],tt=today.tasks||[];
+  tt.forEach(x=>CACHE.tasks[x.id]=x);tm.forEach(x=>CACHE.meetings[x.id]=x);
+  const dstr=new Date().toLocaleDateString("uz",{day:"numeric",month:"long",weekday:"long"});
+  let h=`<div class="head"><div><h1>Salom, Maqsud</h1><div class="sub">${dstr}</div></div>
     <div style="display:flex;gap:8px"><button class="icobtn" onclick="openSearch()"><i class="ti ti-search"></i></button>
     <button class="icobtn" onclick="go('reminders')"><i class="ti ti-bell"></i></button></div></div>
-    <div class="aibar" onclick="openChat()"><i class="ti ti-sparkles"></i><span>Yordamchidan so'rang — "ertaga Karimovga hisobot"</span></div>
-    <div class="hero"><div class="top"><span>Bu haftalik progress</span><span class="chip" style="background:rgba(255,255,255,.2);color:#fff">7 kun</span></div>
-      <div class="pct">${d.progress||0}%</div><div style="font-size:13px;opacity:.9">${(d.progress||0)>=70?"Zo'r ketyapti!":"Davom eting"}</div>
-      <div class="stats"><div><b>${c.total||0}</b><span>Jami</span></div><div><b>${c.done||0}</b><span>Bajarildi</span></div><div><b>${c.pending||0}</b><span>Qoldi</span></div></div></div>
-    <div class="sec"><h2>Bugungi vazifalar</h2><a onclick="go('tasks')">Barchasi</a></div>`;
-  const t=d.today||[]; t.forEach(x=>CACHE.tasks[x.id]=x);
-  h+= t.length? t.map(taskRow).join("") : emptyBox("checklist","Bugunga vazifa yo'q");
-  h+=`<div class="sec" style="margin-top:16px"><h2>Tezkor</h2></div>
-    <div class="grid2"><div class="qcard" onclick="go('notes')"><i class="ti ti-note"></i><div>Qaydlar</div></div>
-    <div class="qcard" onclick="go('insights')"><i class="ti ti-chart-bar"></i><div>Tahlil</div></div></div>`;
+    <div class="aibar" onclick="openChat()"><i class="ti ti-sparkles"></i><span>Yordamchidan so'rang yoki buyuring…</span></div>`;
+  // ── Diqqat radari ──
+  const tile=(n,l,col,dot,v)=>`<div class="tile" onclick="go('${v}')"><span class="rdot" style="background:${dot}"></span><div><div class="num" style="color:${col}">${n||0}</div><div class="tl">${l}</div></div></div>`;
+  h+=`<div class="lbl">Diqqat markazida</div><div class="radar">
+    ${tile(r.total,"Jami vazifalar","var(--brand)","#6C5CE7","tasks")}
+    ${tile(r.overdue,"Kechikkan","var(--red)","#d64545","risks")}
+    ${tile(r.blocked,"Bloklangan","var(--text)","#8a8a9e","tasks")}
+    ${tile(r.unassigned,"Ijrochisiz","var(--brand)","#6C5CE7","risks")}</div>`;
+  // ── Bugungi kun ──
+  h+=`<div class="sec"><h2>Bugungi kun</h2><a onclick="go('calendar')">To'liq →</a></div>`;
+  const nx=today.next;
+  if(nx&&nx.datetime_start){CACHE.meetings[nx.id]=nx;h+=`<div class="next" onclick="openMeeting('${nx.id}')"><div style="font-size:11px;opacity:.9">Keyingi uchrashuv</div><div style="font-size:16px;font-weight:600;margin:3px 0">${esc(nx.title)}</div><div style="font-size:12px;opacity:.9"><i class="ti ti-clock" style="vertical-align:-2px"></i> ${fmt(nx.datetime_start)}${nx.location_or_link?" · "+esc(nx.location_or_link):""}</div></div>`;}
+  const items=[...tm.map(m=>({t:m.datetime_start,k:"m",o:m})),...tt.map(x=>({t:x.deadline,k:"t",o:x}))].filter(i=>i.t).sort((a,b)=>new Date(a.t)-new Date(b.t));
+  if(items.length){h+='<div class="card">'+items.map(i=>{const dt=new Date(i.t);const hm=isNaN(dt)?"":dt.toLocaleTimeString("uz",{hour:"2-digit",minute:"2-digit"});
+    if(i.k==="m")return `<div class="tl2" onclick="openMeeting('${i.o.id}')"><span class="tm">${hm}</span><i class="ti ti-users" style="color:var(--brand)"></i>${esc(i.o.title)}</div>`;
+    const dn=i.o.status==="done";return `<div class="tl2" onclick="openTask('${i.o.id}')"><span class="tm">${hm}</span><i class="ti ti-${dn?'circle-check':'square'}" style="color:${dn?'var(--green)':(PCOL[i.o.priority]||'var(--brand)')}"></i><span style="${dn?'text-decoration:line-through;color:var(--faint)':''}">${esc(i.o.title)}</span></div>`;}).join("")+'</div>';}
+  else h+=emptyBox("calendar","Bugunga reja yo'q");
+  // ── Ustuvor vazifalar ──
+  const pr=d.priority||[];
+  if(pr.length){h+=`<div class="sec"><h2>Ustuvor vazifalar</h2><a onclick="go('tasks')">Barchasi →</a></div>`;pr.forEach(x=>{CACHE.tasks[x.id]=x;h+=taskRow(x);});}
+  // ── Jamoa nazorati ──
+  const team=d.team||{};const ol=team.overloaded||[],st=team.stale||[];
+  if(ol.length||st.length){h+=`<div class="lbl" style="margin-top:14px">Jamoa nazorati</div>`;
+    ol.forEach(p=>h+=`<div class="warn" onclick="go('team')"><i class="ti ti-user-exclamation" style="color:var(--amber);font-size:19px"></i><div><b style="font-weight:600">${esc(p.name)}</b> — ${p.active||0} aktiv${p.overdue?", "+p.overdue+" kechikkan":""} <span style="color:var(--faint)">(yuklama yuqori)</span></div></div>`);
+    st.forEach(x=>{CACHE.tasks[x.id]=x;h+=`<div class="warn" onclick="openTask('${x.id}')"><i class="ti ti-clock-pause" style="color:var(--red);font-size:19px"></i><div>«${esc((x.title||'').slice(0,28))}» — ${Math.round(x.age_days||0)} kun${x.assignee?" · "+esc(x.assignee):""} <span style="color:var(--faint)">(turg'un)</span></div></div>`;});}
+  // ── Haftalik pulse ──
+  const pg=d.progress||0;const c=d.counts||{};
+  h+=`<div class="pulse"><svg style="width:52px;height:52px;flex:none" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--soft)" stroke-width="4"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--brand)" stroke-width="4" stroke-dasharray="${pg} ${100-pg}" stroke-dashoffset="25" stroke-linecap="round"/><text x="18" y="21" text-anchor="middle" font-size="9" font-weight="700" fill="var(--text)">${pg}%</text></svg>
+    <div><div style="font-size:13px;font-weight:600">Haftalik pulse</div><div style="font-size:12px;color:var(--muted)">${c.done||0} bajarildi · ${c.pending||0} qoldi</div></div></div>`;
+  // ── Tezkor amallar ──
+  h+=`<div class="qa"><div onclick="openTask({})"><i class="ti ti-plus"></i>Vazifa</div><div onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnoma</div><div onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Eksport</div></div>`;
   box.innerHTML=h;
 }
 function taskRow(t,sub,nsub){const done=t.status==="done";const col=PCOL[t.priority]||"var(--brand)";
