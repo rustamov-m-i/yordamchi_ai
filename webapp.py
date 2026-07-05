@@ -988,11 +988,15 @@ async def category_create(request: web.Request) -> web.Response:
 
 
 async def category_delete(request: web.Request) -> web.Response:
+    """Bot bilan bir xil: avval vazifalardagi yorliqni tozalaymiz, keyin metadata
+    qatorini o'chiramiz. Aks holda list_categories (birlashgan ko'rinish) kategoriyani
+    faol vazifalardan qayta hosil qilib, o'chirish 'ishlamagandek' ko'rinadi."""
     name = (request.query.get("name") or "").strip()
     if not name:
         return web.json_response({"error": "name required"}, status=400)
-    await database.delete_category_record(name)   # metadata row only; tasks keep working
-    return web.json_response({"ok": True})
+    cleared = await database.clear_category(name)   # tasks lose the label, not deleted
+    await database.delete_category_record(name)
+    return web.json_response({"ok": True, "cleared": cleared})
 
 
 async def calendar(request: web.Request) -> web.Response:

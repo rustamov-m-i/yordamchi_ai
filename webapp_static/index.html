@@ -804,14 +804,16 @@ async function renderCategories(box){
   let h=hdr("Kategoriyalar","")+`<div class="card" style="display:flex;gap:8px"><input id="f_newcat" placeholder="Yangi kategoriya" style="flex:1"><button class="btn pri" onclick="addCat()">Qo'shish</button></div>`;
   h+= list.length? list.map((c,i)=>`<div class="card" style="display:flex;align-items:center;justify-content:space-between">
     <div><span style="font-size:15px">${esc(c.icon||"")} ${esc(c.name)}</span> <span class="cnt">${c.count||0}</span></div>
-    <button class="btn dang" onclick="delCat(${i})"><i class="ti ti-trash"></i></button></div>`).join("") : emptyBox("folder","Kategoriya yo'q");
+    ${c.name==="(boshqa)"?"":`<button class="btn dang" onclick="delCat(${i})"><i class="ti ti-trash"></i></button>`}</div>`).join("") : emptyBox("folder","Kategoriya yo'q");
   box.innerHTML=h;
 }
 async function addCat(){const n=val("f_newcat");if(!n)return flash("Nom kerak");
   try{await api("/categories",{method:"POST",body:JSON.stringify({name:n})});flash("Qo'shildi");render("categories");}catch(e){flash("⚠️ "+e.message);}}
 function delCat(i){const c=(CACHE.cats||[])[i];if(!c)return;
-  const run=async()=>{try{await api("/categories?name="+encodeURIComponent(c.name),{method:"DELETE"});flash("O'chirildi");render("categories");}catch(e){flash("⚠️ "+e.message);}};
-  if(tg?.showConfirm)tg.showConfirm("Ro'yxatдан o'chirilsinmi?",ok=>{if(ok)run()});else run();}
+  const run=async()=>{try{const r=await api("/categories?name="+encodeURIComponent(c.name),{method:"DELETE"});
+    flash(r.cleared?`O'chirildi · ${r.cleared} vazifadan yorliq olindi`:"O'chirildi");render("categories");}catch(e){flash("⚠️ "+e.message);}};
+  const msg=c.count?`«${c.name}» o'chirilsinmi? ${c.count} ta vazifadan kategoriya yorlig'i olib tashlanadi (vazifalar qoladi).`:`«${c.name}» ro'yxatdan o'chirilsinmi?`;
+  if(tg?.showConfirm)tg.showConfirm(msg,ok=>{if(ok)run()});else if(confirm(msg))run();}
 let _calYM=null;
 async function renderCalendar(box){
   const now=new Date();if(!_calYM)_calYM={y:now.getFullYear(),m:now.getMonth()+1};
