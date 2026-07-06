@@ -27,6 +27,7 @@ import aiohttp
 from aiohttp import web
 
 import config
+import config_marketing
 import database
 import claude_service
 
@@ -298,6 +299,8 @@ def _bad(msg: str) -> web.HTTPBadRequest:
 
 # List-shaped columns the DB layer coerces itself (via _as_list / json.dumps).
 _LIST_FIELDS = frozenset({"tags", "participants"})
+# Object-shaped columns passed straight through as dict (DB layer json.dumps'ini o'zi qiladi).
+_JSON_FIELDS = frozenset({"fields", "workflow"})
 # Per-field length caps — reject over-long strings so one request can't write a
 # multi-MB row (no rate limit; a buggy/compromised client could otherwise bloat the DB).
 _MAX_LEN = {"title": 512, "description": 8000, "content": 20000, "note": 4000,
@@ -318,6 +321,11 @@ def _pick(data: dict, fields: tuple[str, ...]) -> dict:
         v = data[k]
         if k in _LIST_FIELDS:
             out[k] = v            # DB coerces list/str → JSON list
+            continue
+        if k in _JSON_FIELDS:
+            if v is not None and not isinstance(v, dict):
+                raise _bad(f"'{k}' obyekt bo'lishi kerak")
+            out[k] = v            # DB layer json.dumps
             continue
         if isinstance(v, (dict, list)):
             raise _bad(f"'{k}' noto'g'ri turdagi qiymat")
@@ -990,7 +998,12 @@ async def contacts_delete(request: web.Request) -> web.Response:
 
 _CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags",
                    "project_id", "status", "assignee", "published_url", "published_at", "reject_reason")
-_PROJECT_FIELDS = ("name", "description", "color", "status")
+_PROJECT_FIELDS = ("name", "description", "color", "status", "type", "icon", "default_view", "workflow")
+_ITEM_FIELDS = ("type", "title", "description", "primary_date", "start_date", "end_date",
+                "deadline", "status", "priority", "assignee", "category", "stage",
+                "parent_id", "fields", "order_index", "project_id")
+_MAX_LEN.update({"type": 24, "title": 512, "topic": 512, "primary_date": 64, "stage": 64,
+                 "default_view": 24, "icon": 48, "start_date": 64, "end_date": 64})
 
 
 async def content_list(request: web.Request) -> web.Response:
@@ -1032,9 +1045,16 @@ async def projects_list(request: web.Request) -> web.Response:
 
 
 async def project_create(request: web.Request) -> web.Response:
-    data = _pick(await _json_body(request), _PROJECT_FIELDS)
+    body = await _json_body(request)
+    data = _pick(body, _PROJECT_FIELDS)
     if not (data.get("name") or "").strip():
         return web.json_response({"error": "name required"}, status=400)
+    # Shablon tanlangan bo'lsa — type/icon/color/default_view/workflow'ni to'ldiradi.
+    # Foydalanuvchi aniq bergan qiymatlar shablon default'idan ustun turadi.
+    tpl = body.get("template_id")
+    if tpl:
+        for k, v in config_marketing.apply_template(tpl).items():
+            data.setdefault(k, v)
     return web.json_response({"id": await database.create_project(data)}, status=201)
 
 
@@ -1051,6 +1071,77 @@ async def project_delete(request: web.Request) -> web.Response:
 
 async def project_dashboard(request: web.Request) -> web.Response:
     return web.json_response(await database.content_dashboard(request.match_info["id"]))
+
+
+# ───────────────────────── project items (universal ProjectItem) ─────────────────────────
+
+async def items_list(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    q = request.query
+    try:
+        year = int(q["year"]) if q.get("year") else None
+        month = int(q["month"]) if q.get("month") else None
+    except ValueError:
+        year = month = None
+    items = await database.list_project_items(
+        pid, type_=q.get("type") or None, status=q.get("status") or None,
+        assignee=q.get("assignee") or None, category=q.get("category") or None,
+        year=year, month=month, deadline=q.get("deadline") or None,
+        overdue=q.get("overdue") in ("1", "true", "yes"))
+    return web.json_response({"items": items})
+
+
+async def item_create(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    if await database.get_project(pid) is None:
+        return web.json_response({"error": "project not found"}, status=404)
+    data = _pick(await _json_body(request), _ITEM_FIELDS)
+    if not (data.get("title") or "").strip():
+        return web.json_response({"error": "title required"}, status=400)
+    iid = await database.create_project_item(pid, data)
+    return web.json_response({"id": iid}, status=201)
+
+
+async def item_update(request: web.Request) -> web.Response:
+    ok = await database.update_project_item(
+        request.match_info["id"], _pick(await _json_body(request), _ITEM_FIELDS))
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def item_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_project_item(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def item_move(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    status = (body.get("status") or "").strip()
+    if not status:
+        return web.json_response({"error": "status required"}, status=400)
+    oi = body.get("order_index")
+    if oi is not None and not isinstance(oi, bool) and not isinstance(oi, int):
+        try:
+            oi = int(oi)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "order_index must be int"}, status=400)
+    ok = await database.move_project_item(request.match_info["id"], status, oi)
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def templates_list(request: web.Request) -> web.Response:
+    return web.json_response({"templates": config_marketing.TEMPLATES})
+
+
+async def marketing_config(request: web.Request) -> web.Response:
+    """Frontend config'ini backend'dan yetkazadi (drift guard uchun; index.html mirror bilan)."""
+    return web.json_response({
+        "workflows": config_marketing.WORKFLOWS,
+        "project_types": config_marketing.PROJECT_TYPES,
+        "item_types": config_marketing.ITEM_TYPES,
+        "project_item_types": config_marketing.PROJECT_ITEM_TYPES,
+        "item_fields": config_marketing.ITEM_FIELDS,
+        "templates": config_marketing.TEMPLATES,
+    })
 
 
 async def categories_list(request: web.Request) -> web.Response:
@@ -1275,8 +1366,18 @@ async def auth_logout(request: web.Request) -> web.Response:
 
 async def me(request: web.Request) -> web.Response:
     """Reached only when authed (via initData or session) — the browser uses a 401
-    here as the 'show login page' signal."""
-    return web.json_response({"ok": True, "uid": request.get("uid")})
+    here as the 'show login page' signal. Also carries the profile-owner identity
+    (name/title/org) for the Mini App 'Profil' header; name/photo/@username come from
+    Telegram inside the app, so those stay client-side."""
+    return web.json_response({
+        "ok": True,
+        "uid": request.get("uid"),
+        "owner": {
+            "name": config.PRINCIPAL_NAME,
+            "title": config.PRINCIPAL_TITLE,
+            "org": config.PRINCIPAL_ORG,
+        },
+    })
 
 
 # ───────────────────────── app factory / runner ─────────────────────────
@@ -1321,6 +1422,13 @@ def create_app() -> web.Application:
         web.patch("/api/projects/{id}", project_update),
         web.delete("/api/projects/{id}", project_delete),
         web.get("/api/projects/{id}/dashboard", project_dashboard),
+        web.get("/api/projects/{id}/items", items_list),
+        web.post("/api/projects/{id}/items", item_create),
+        web.patch("/api/items/{id}", item_update),
+        web.delete("/api/items/{id}", item_delete),
+        web.post("/api/items/{id}/move", item_move),
+        web.get("/api/templates", templates_list),
+        web.get("/api/marketing-config", marketing_config),
         web.get("/api/risks", risks),
         web.get("/api/categories", categories_list),
         web.post("/api/categories", category_create),
