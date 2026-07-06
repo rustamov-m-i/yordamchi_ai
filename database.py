@@ -372,6 +372,13 @@ CREATE INDEX IF NOT EXISTS idx_pitems_project_date     ON project_items(project_
 CREATE INDEX IF NOT EXISTS idx_pitems_project_type     ON project_items(project_id, type);
 CREATE INDEX IF NOT EXISTS idx_pitems_project_category ON project_items(project_id, category);
 CREATE INDEX IF NOT EXISTS idx_pitems_assignee         ON project_items(assignee);
+
+-- Migratsiyalar jurnali — qaysi migratsiya qo'llanganini kuzatadi (idempotentlik uchun).
+-- Migratsiyalar `migrations.py`da QO'LDA ishga tushiriladi (init() ichida EMAS).
+CREATE TABLE IF NOT EXISTS schema_version (
+    name TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
 """
 
 
