@@ -426,19 +426,32 @@ async def meeting_get(request: web.Request) -> web.Response:
     return web.json_response({"meeting": m})
 
 
+async def _enroll_participants(participants) -> None:
+    """Ishtirokchi = ijrochi: har bir ishtirokchi ismini yagona Odamlar katalogiga
+    (contacts) qo'shamiz, shunda ular vazifa ijrochisi dropdown'ida ham chiqadi va
+    ikkita alohida ro'yxat hosil bo'lmaydi. save_contact idempotent (nom bo'yicha)."""
+    for name in (participants or []):
+        nm = str(name).strip()
+        if nm:
+            await database.save_contact({"name": nm})
+
+
 async def meeting_create(request: web.Request) -> web.Response:
     data = _pick(await _json_body(request), _MEETING_FIELDS)
     if not (data.get("title") or "").strip():
         return web.json_response({"error": "title required"}, status=400)
     mid = await database.create_meeting(data)
+    await _enroll_participants(data.get("participants"))
     return web.json_response({"id": mid, "meeting": await database.get_meeting(mid)}, status=201)
 
 
 async def meeting_update(request: web.Request) -> web.Response:
     mid = request.match_info["id"]
-    ok = await database.update_meeting(mid, _pick(await _json_body(request), _MEETING_FIELDS))
+    data = _pick(await _json_body(request), _MEETING_FIELDS)
+    ok = await database.update_meeting(mid, data)
     if not ok:
         return web.json_response({"error": "not found"}, status=404)
+    await _enroll_participants(data.get("participants"))
     return web.json_response({"meeting": await database.get_meeting(mid)})
 
 

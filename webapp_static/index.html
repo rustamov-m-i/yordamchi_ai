@@ -333,6 +333,10 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .kpi .kn{font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:1}
   .kpi .kl{font-size:12px;color:var(--muted);margin-top:4px}
   @media(min-width:720px){.kpis{grid-template-columns:repeat(4,1fr)}}
+  /* ── Ishtirokchi/ijrochi tanlash chiplari ── */
+  .pchips{display:flex;flex-wrap:wrap;gap:7px;min-height:22px}
+  .pchip{font-size:13px;padding:6px 12px;border-radius:20px;background:var(--soft);color:var(--muted);cursor:pointer;border:1.5px solid transparent;user-select:none}
+  .pchip.on{background:var(--brand-soft);color:var(--brand-d);border-color:var(--brand)}
 </style>
 </head>
 <body>
@@ -931,11 +935,30 @@ function meetingForm(m={}){return `<h3>${m.id?"Uchrashuvni tahrirlash":"Yangi uc
   <label>Boshlanish</label>${dtField("f_start",m.datetime_start)}
   <label>Tugash</label>${dtField("f_end",m.datetime_end)}
   <label>Joy / havola</label><input id="f_loc" value="${esc(m.location_or_link)}">
-  <label>Ishtirokchilar (vergul bilan)</label><input id="f_part" value="${esc((m.participants||[]).join(", "))}">
+  <label>Ishtirokchilar</label><div id="mp_chips" class="pchips"></div>
+  <div class="addrow" style="margin-top:7px"><input id="mp_new" placeholder="Yangi ishtirokchi" onkeydown="if(event.key==='Enter'){event.preventDefault();mpAdd()}"><button type="button" class="btn" onclick="mpAdd()"><i class="ti ti-plus"></i> Qo'shish</button></div>
   <label>Kun tartibi</label><textarea id="f_ag">${esc(m.agenda)}</textarea>
   <label>Takroriylik</label><select id="f_mrec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(m.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select>
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="saveMeeting('${m.id||""}')">Saqlash</button></div>`}
-const editMeeting=m=>openM(meetingForm(typeof m==="object"?(m||{}):(CACHE.meetings[m]||{})));
+// Ishtirokchilar = Ijrochilar (yagona Odamlar katalogi: META.contacts). Chip-tanlov;
+// "+ Qo'shish" yangi odamni tanlaydi VA katalogga (/contacts) qo'shadi — dublikat bo'lmaydi.
+let _MP={pool:[],sel:new Set()};
+function _mpInit(participants){
+  const sel=new Set((participants||[]).map(s=>String(s).trim()).filter(Boolean));
+  const pool=[...new Set([...(META.contacts||[]),...sel])].sort((a,b)=>a.localeCompare(b));
+  _MP={pool,sel};
+}
+function mpRender(){const el=$("mp_chips");if(!el)return;
+  el.innerHTML=_MP.pool.length
+    ? _MP.pool.map(n=>`<span class="pchip ${_MP.sel.has(n)?'on':''}" data-n="${esc(n)}" onclick="mpToggle(this)">${_MP.sel.has(n)?'<i class="ti ti-check" style="font-size:12px;vertical-align:-1px"></i> ':''}${esc(n)}</span>`).join("")
+    : '<span style="color:var(--faint);font-size:13px">Hali odam yo\'q — pastdan qo\'shing</span>';}
+function mpToggle(el){const n=el.getAttribute("data-n");_MP.sel.has(n)?_MP.sel.delete(n):_MP.sel.add(n);mpRender();}
+async function mpAdd(){const inp=$("mp_new");const n=(inp.value||"").trim();if(!n)return;
+  if(!_MP.pool.includes(n))_MP.pool.push(n);
+  _MP.sel.add(n);_MP.pool.sort((a,b)=>a.localeCompare(b));inp.value="";mpRender();
+  try{await api("/contacts",{method:"POST",body:JSON.stringify({name:n})});META.contacts=(await api("/meta")).contacts||META.contacts;}catch(e){}}
+function mpValues(){return [..._MP.sel];}
+const editMeeting=m=>{const mm=typeof m==="object"?(m||{}):(CACHE.meetings[m]||{});_mpInit(mm.participants);openM(meetingForm(mm));mpRender();};
 // Kartani bosish → tafsilot (o'qish) ekrani; yangi uchrashuv → tahrir formasi.
 const openMeeting=x=>(typeof x==="object")?editMeeting(x||{}):meetingDetail(x);
 function meetingDetailHtml(m){const done=!!m.completed_at;const loc=m.location_or_link||"";const ps=m.participants||[];const hasP=_hasProtocol(m);
@@ -970,7 +993,7 @@ async function genProtocol(id){const notes=val("f_pnotes");if(!notes)return flas
     flash("Bayonnoma tayyor"+(r.tasks_created?` · ${r.tasks_created} vazifa qo'shildi`:(r.tasks_failed?" · vazifalarni qo'shib bo'lmadi":"")));
     meetingDetail(id);render(VIEW);
   }catch(e){flash("⚠️ "+e.message);if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-sparkles"></i> Bayonnoma yarat';}}}
-async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),datetime_end:fromLocal(val("f_end")),location_or_link:val("f_loc"),participants:val("f_part").split(",").map(s=>s.trim()).filter(Boolean),agenda:val("f_ag"),recurrence_rule:val("f_mrec")};
+async function saveMeeting(id){const b={title:val("f_title"),datetime_start:fromLocal(val("f_start")),datetime_end:fromLocal(val("f_end")),location_or_link:val("f_loc"),participants:mpValues(),agenda:val("f_ag"),recurrence_rule:val("f_mrec")};
   if(!b.title)return flash("Sarlavha kerak");await act(()=>api(id?`/meetings/${id}`:"/meetings",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}
 
 function noteForm(n={}){return `<h3>${n.id?"Qaydni tahrirlash":"Yangi qayd"}</h3>
