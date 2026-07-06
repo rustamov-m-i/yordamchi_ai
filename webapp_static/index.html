@@ -187,8 +187,13 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .tile .num{font-size:24px;font-weight:700;line-height:1}.tile .tl{font-size:12px;color:var(--muted)}
   .rdot{width:8px;height:8px;border-radius:50%;flex:none}
   .next{background:var(--brand);color:#fff;border-radius:14px;padding:13px;margin-bottom:9px}
-  .tl2{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
-  .tl2:last-child{border:none}.tl2 .tm{font-size:11px;color:var(--faint);width:44px;flex:none}
+  .tl2{display:flex;gap:13px;align-items:center;padding:13px 4px;border-bottom:1px solid var(--line);font-size:16px;line-height:1.35;transition:background .15s}
+  .tl2:first-child{padding-top:6px}.tl2:last-child{border:none;padding-bottom:6px}
+  .tl2:active{background:var(--line)}
+  .tl2 .tm{font-size:14px;font-weight:600;color:var(--muted);width:52px;flex:none;font-variant-numeric:tabular-nums}
+  .tl2 .ic{width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center}
+  .tl2 .ic i{font-size:20px}
+  .tl2 .tx{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis}
   .warn{background:var(--card);border-radius:14px;padding:11px 13px;margin-bottom:9px;display:flex;align-items:center;gap:10px;font-size:13px}
   .pulse{background:var(--card);border-radius:14px;padding:13px;display:flex;align-items:center;gap:14px;margin-bottom:10px}
   .qa{display:flex;gap:8px}.qa div{flex:1;background:var(--card);border-radius:12px;padding:10px;text-align:center;font-size:11px;color:var(--muted)}.qa i{font-size:19px;color:var(--brand);display:block;margin-bottom:3px}
@@ -559,8 +564,8 @@ async function renderDash(box){
   if(nx&&nx.datetime_start){CACHE.meetings[nx.id]=nx;h+=`<div class="next" onclick="openMeeting('${nx.id}')"><div style="font-size:11px;opacity:.9">Keyingi uchrashuv</div><div style="font-size:16px;font-weight:600;margin:3px 0">${esc(nx.title)}</div><div style="font-size:12px;opacity:.9"><i class="ti ti-clock" style="vertical-align:-2px"></i> ${fmt(nx.datetime_start)}${nx.location_or_link?" · "+esc(nx.location_or_link):""}</div></div>`;}
   const items=[...tm.map(m=>({t:m.datetime_start,k:"m",o:m})),...tt.map(x=>({t:x.deadline,k:"t",o:x}))].filter(i=>i.t).sort((a,b)=>new Date(a.t)-new Date(b.t));
   if(items.length){h+='<div class="card">'+items.map(i=>{const dt=new Date(i.t);const hm=isNaN(dt)?"":dt.toLocaleTimeString("uz",{hour:"2-digit",minute:"2-digit"});
-    if(i.k==="m")return `<div class="tl2" onclick="openMeeting('${i.o.id}')"><span class="tm">${hm}</span><i class="ti ti-users" style="color:var(--brand)"></i>${esc(i.o.title)}</div>`;
-    const dn=i.o.status==="done";return `<div class="tl2" onclick="openTask('${i.o.id}')"><span class="tm">${hm}</span><i class="ti ti-${dn?'circle-check':'square'}" style="color:${dn?'var(--green)':(PCOL[i.o.priority]||'var(--brand)')}"></i><span style="${dn?'text-decoration:line-through;color:var(--faint)':''}">${esc(i.o.title)}</span></div>`;}).join("")+'</div>';}
+    if(i.k==="m")return `<div class="tl2" onclick="openMeeting('${i.o.id}')"><span class="tm">${hm}</span><span class="ic"><i class="ti ti-users" style="color:var(--brand)"></i></span><span class="tx">${esc(i.o.title)}</span></div>`;
+    const dn=i.o.status==="done";return `<div class="tl2" onclick="openTask('${i.o.id}')"><span class="tm">${hm}</span><span class="ic"><i class="ti ti-${dn?'circle-check':'square'}" style="color:${dn?'var(--green)':(PCOL[i.o.priority]||'var(--brand)')}"></i></span><span class="tx" style="${dn?'text-decoration:line-through;color:var(--faint)':''}">${esc(i.o.title)}</span></div>`;}).join("")+'</div>';}
   else h+=emptyBox("calendar","Bugunga reja yo'q");
   // ── Ustuvor vazifalar ──
   const pr=d.priority||[];
