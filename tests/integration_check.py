@@ -2111,6 +2111,48 @@ async def main():
         _mt = await (await _client.get("/api/meta", headers=_H)).json()
         check("Full CRUD: /api/meta (kategoriya+kontakt+ustuvorlik)",
               "categories" in _mt and "contacts" in _mt and "priorities" in _mt)
+
+        # ── Marketing Hub: /api/marketing-config + loyiha turi + item CRUD/move ──
+        _mc = await (await _client.get("/api/marketing-config", headers=_H)).json()
+        check("MHub: /api/marketing-config (workflows+project_types+item_types+templates)",
+              all(k in _mc for k in ("workflows", "project_types", "item_types", "templates")))
+        _tpl = await (await _client.get("/api/templates", headers=_H)).json()
+        check("MHub: /api/templates ro'yxati bo'sh emas",
+              isinstance(_tpl.get("templates"), list) and len(_tpl["templates"]) > 0)
+        _pjid = (await (await _client.post("/api/projects", headers=_H,
+                 json={"name": "Kampaniya", "type": "campaign"})).json())["id"]
+        _pobj = next((p for p in (await (await _client.get("/api/projects", headers=_H)).json())["projects"]
+                      if p["id"] == _pjid), None)
+        check("MHub: loyiha type=campaign + kanban default_view + workflow",
+              _pobj and _pobj["type"] == "campaign" and _pobj["default_view"] == "kanban" and _pobj.get("workflow"))
+        _icr = await _client.post(f"/api/projects/{_pjid}/items", headers=_H, json={
+            "type": "media_placement", "title": "TV rolik", "status": "brif",
+            "primary_date": "2026-07-05", "fields": {"channel": "TV", "budget": 5000}})
+        check("MHub: POST item → 201", _icr.status == 201)
+        _iid = (await _icr.json())["id"]
+        _it = next((x for x in (await (await _client.get(
+            f"/api/projects/{_pjid}/items", headers=_H)).json())["items"] if x["id"] == _iid), None)
+        check("MHub: GET items → fields dict + title qaytadi",
+              _it and _it["fields"].get("channel") == "TV" and _it["title"] == "TV rolik")
+        check("MHub: item title bo'sh → 400",
+              (await _client.post(f"/api/projects/{_pjid}/items", headers=_H, json={"title": " "})).status == 400)
+        check("MHub: mavjud bo'lmagan loyihaga item → 404",
+              (await _client.post("/api/projects/pr-yoq/items", headers=_H, json={"title": "X"})).status == 404)
+        _pu = await _client.patch(f"/api/items/{_iid}", headers=_H,
+                                  json={"status": "tasdiqlash", "fields": {"budget": 8000, "channel": None}})
+        _it2 = next(x for x in (await (await _client.get(
+            f"/api/projects/{_pjid}/items", headers=_H)).json())["items"] if x["id"] == _iid)
+        check("MHub: PATCH item → 200 + fields merge (budget=8000, channel o'chdi)",
+              _pu.status == 200 and _it2["status"] == "tasdiqlash"
+              and _it2["fields"].get("budget") == 8000 and "channel" not in _it2["fields"])
+        check("MHub: POST item/move → 200",
+              (await _client.post(f"/api/items/{_iid}/move", headers=_H,
+               json={"status": "ishlab_chiqarish", "order_index": 0})).status == 200)
+        check("MHub: move status yo'q → 400",
+              (await _client.post(f"/api/items/{_iid}/move", headers=_H, json={})).status == 400)
+        check("MHub: DELETE item → 200", (await _client.delete(f"/api/items/{_iid}", headers=_H)).status == 200)
+        check("MHub: DELETE mavjud bo'lmagan item → 404",
+              (await _client.delete("/api/items/pi-yoq", headers=_H)).status == 404)
     finally:
         await _client.close()
 

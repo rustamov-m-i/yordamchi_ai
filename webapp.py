@@ -27,6 +27,7 @@ import aiohttp
 from aiohttp import web
 
 import config
+import config_marketing
 import database
 import claude_service
 
@@ -298,6 +299,8 @@ def _bad(msg: str) -> web.HTTPBadRequest:
 
 # List-shaped columns the DB layer coerces itself (via _as_list / json.dumps).
 _LIST_FIELDS = frozenset({"tags", "participants"})
+# JSON-shaped columns (dict/list allowed; DB layer json.dumps them).
+_JSON_FIELDS = frozenset({"fields", "workflow"})
 # Per-field length caps — reject over-long strings so one request can't write a
 # multi-MB row (no rate limit; a buggy/compromised client could otherwise bloat the DB).
 _MAX_LEN = {"title": 512, "description": 8000, "content": 20000, "note": 4000,
@@ -305,6 +308,9 @@ _MAX_LEN = {"title": 512, "description": 8000, "content": 20000, "note": 4000,
             "assignee": 256, "category": 128, "priority": 8, "status": 20,
             "recurrence_rule": 32, "deadline": 64, "datetime_start": 64,
             "datetime_end": 64, "remind_at": 64, "task_id": 64, "parent_id": 64}
+# Marketing Hub (project_items / projects) qo'shimcha ustunlari.
+_MAX_LEN.update({"type": 24, "topic": 512, "primary_date": 64, "stage": 64,
+                 "default_view": 24, "icon": 48, "start_date": 64, "end_date": 64})
 
 
 def _pick(data: dict, fields: tuple[str, ...]) -> dict:
@@ -318,6 +324,11 @@ def _pick(data: dict, fields: tuple[str, ...]) -> dict:
         v = data[k]
         if k in _LIST_FIELDS:
             out[k] = v            # DB coerces list/str → JSON list
+            continue
+        if k in _JSON_FIELDS:
+            if v is not None and not isinstance(v, (dict, list)):
+                raise _bad(f"'{k}' JSON obyekt bo'lishi kerak")
+            out[k] = v            # dict/list — DB layer json.dumps
             continue
         if isinstance(v, (dict, list)):
             raise _bad(f"'{k}' noto'g'ri turdagi qiymat")
@@ -990,7 +1001,11 @@ async def contacts_delete(request: web.Request) -> web.Response:
 
 _CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags",
                    "project_id", "status", "assignee", "published_url", "published_at", "reject_reason")
-_PROJECT_FIELDS = ("name", "description", "color", "status")
+_PROJECT_FIELDS = ("name", "description", "color", "status",
+                   "type", "icon", "default_view", "workflow", "template_id")
+_ITEM_FIELDS = ("type", "title", "description", "primary_date", "start_date", "end_date",
+                "deadline", "status", "priority", "assignee", "category", "stage",
+                "parent_id", "fields", "order_index", "project_id")
 
 
 async def content_list(request: web.Request) -> web.Response:
@@ -1051,6 +1066,79 @@ async def project_delete(request: web.Request) -> web.Response:
 
 async def project_dashboard(request: web.Request) -> web.Response:
     return web.json_response(await database.content_dashboard(request.match_info["id"]))
+
+
+# ───────────────────────── project items (universal) ─────────────────────────
+
+async def items_list(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    q = request.query
+    try:
+        year = int(q["year"]) if q.get("year") else None
+        month = int(q["month"]) if q.get("month") else None
+    except ValueError:
+        year = month = None
+    items = await database.list_project_items(
+        pid, type_=q.get("type") or None, status=q.get("status") or None,
+        assignee=q.get("assignee") or None, category=q.get("category") or None,
+        year=year, month=month, deadline=q.get("deadline") or None,
+        overdue=q.get("overdue") in ("1", "true", "yes"))
+    return web.json_response({"items": items})
+
+
+async def item_create(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    if await database.get_project(pid) is None:
+        return web.json_response({"error": "project not found"}, status=404)
+    data = _pick(await _json_body(request), _ITEM_FIELDS)
+    if not (data.get("title") or "").strip():
+        return web.json_response({"error": "title required"}, status=400)
+    iid = await database.create_project_item(pid, data)
+    return web.json_response({"id": iid}, status=201)
+
+
+async def item_update(request: web.Request) -> web.Response:
+    ok = await database.update_project_item(
+        request.match_info["id"], _pick(await _json_body(request), _ITEM_FIELDS))
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def item_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_project_item(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def item_move(request: web.Request) -> web.Response:
+    body = await _json_body(request)
+    status = (body.get("status") or "").strip()
+    if not status:
+        return web.json_response({"error": "status required"}, status=400)
+    oi = body.get("order_index")
+    if oi is not None and not isinstance(oi, bool):
+        try:
+            oi = int(oi)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "order_index must be int"}, status=400)
+    else:
+        oi = None
+    ok = await database.move_project_item(request.match_info["id"], status, oi)
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def templates_list(request: web.Request) -> web.Response:
+    return web.json_response({"templates": config_marketing.TEMPLATES})
+
+
+async def marketing_config(request: web.Request) -> web.Response:
+    """Marketing Hub konfiguratsiyasini frontendga yetkazadi — YAGONA manba (JS'da dublikat yo'q)."""
+    return web.json_response({
+        "workflows": config_marketing.WORKFLOWS,
+        "project_types": config_marketing.PROJECT_TYPES,
+        "item_types": config_marketing.ITEM_TYPES,
+        "project_item_types": config_marketing.PROJECT_ITEM_TYPES,
+        "item_fields": config_marketing.ITEM_FIELDS,
+        "templates": config_marketing.TEMPLATES,
+    })
 
 
 async def categories_list(request: web.Request) -> web.Response:
@@ -1331,6 +1419,13 @@ def create_app() -> web.Application:
         web.patch("/api/projects/{id}", project_update),
         web.delete("/api/projects/{id}", project_delete),
         web.get("/api/projects/{id}/dashboard", project_dashboard),
+        web.get("/api/projects/{id}/items", items_list),
+        web.post("/api/projects/{id}/items", item_create),
+        web.patch("/api/items/{id}", item_update),
+        web.delete("/api/items/{id}", item_delete),
+        web.post("/api/items/{id}/move", item_move),
+        web.get("/api/templates", templates_list),
+        web.get("/api/marketing-config", marketing_config),
         web.get("/api/risks", risks),
         web.get("/api/categories", categories_list),
         web.post("/api/categories", category_create),
