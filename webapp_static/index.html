@@ -357,6 +357,25 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .crow b{color:var(--text);font-weight:600}
   .cmsg{font-size:12.5px;color:var(--text);margin-top:6px;line-height:1.45}
   .chash{font-size:11.5px;color:var(--brand-d);margin-top:6px;font-weight:600}
+  /* ── Loyihalar ── */
+  .projcard{display:flex;align-items:center;gap:12px}
+  .projdot{width:12px;height:12px;border-radius:50%;flex:none}
+  .projname{font-size:15px;font-weight:600}
+  .projmeta{font-size:12px;color:var(--muted);margin-top:2px}
+  .ptabs{display:flex;gap:8px;margin-bottom:14px}
+  .ptabs button{flex:1;border:none;border-radius:12px;padding:9px;font-size:13px;font-weight:600;background:var(--soft);color:var(--muted);display:flex;align-items:center;justify-content:center;gap:6px}
+  .ptabs button.on{background:var(--brand);color:#fff}
+  .stbadge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;padding:2px 9px;border-radius:20px;color:#fff}
+  .stbadge i{font-size:12px}
+  .clink{font-size:12px;color:var(--brand-d);font-weight:600;margin-top:6px;word-break:break-all}
+  .creject{font-size:12px;color:var(--red);margin-top:6px;background:rgba(214,69,69,.1);padding:6px 9px;border-radius:8px}
+  .cstsel{margin-top:9px;font-size:12px;padding:6px 9px;border-radius:9px;width:auto}
+  .donutleg{display:flex;flex-direction:column;gap:6px;flex:1}
+  .donutleg .li{display:flex;align-items:center;gap:8px;font-size:12.5px}
+  .donutleg .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .pcolors{display:flex;gap:9px;flex-wrap:wrap}
+  .pcol{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2.5px solid transparent}
+  .pcol.on{border-color:var(--text);box-shadow:0 0 0 2px var(--bg) inset}
 </style>
 </head>
 <body>
@@ -762,7 +781,7 @@ async function renderProfile(box){
       <div class="mi" onclick="go('team')"><i class="ti ti-users"></i>Jamoa yuklamasi<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('risks')"><i class="ti ti-alert-triangle"></i>Risklar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('calendar')"><i class="ti ti-calendar-month"></i>Kalendar<i class="ti ti-chevron-right ch"></i></div>
-      <div class="mi" onclick="go('content')"><i class="ti ti-brand-instagram"></i>SMM kontent-reja<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('content')"><i class="ti ti-folders"></i>Loyihalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('categories')"><i class="ti ti-folder"></i>Kategoriyalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnomalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Excel eksport (vazifalar)<i class="ti ti-download ch"></i></div>
@@ -855,16 +874,73 @@ async function renderCalendar(box){
 }
 function calNav(delta){_calYM.m+=delta;if(_calYM.m<1){_calYM.m=12;_calYM.y--;}if(_calYM.m>12){_calYM.m=1;_calYM.y++;}render("calendar");}
 
-// ── SMM kontent-reja (Agrobank dashboard integratsiyasi) ──
+// ══ LOYIHALAR + KONTENT PLAN (SMM) ══
 const CATCOL={biznes:"#16A34A",jamoa:"#7C3AED",bank:"#2f7ae5",chakana:"#E8A317"};
 const CATLBL={biznes:"Biznes",jamoa:"Jamoa (ichki)",bank:"Bank xizmatlari",chakana:"Chakana"};
 const _catCol=c=>CATCOL[c]||"#8a8a9e";
 const _catLbl=c=>CATLBL[c]||c;
-let _cYM=null,_cOff=new Set();
-async function renderContent(box){
+const STCOL={reja:"#B45309",jarayonda:"#2f7ae5",tekshiruvda:"#7C3AED",joylandi:"#16A34A",rad_etildi:"#d64545",bekor:"#8a8a9e"};
+const STLBL={reja:"Reja",jarayonda:"Jarayonda",tekshiruvda:"Tekshiruvda",joylandi:"Joylandi",rad_etildi:"Rad etildi",bekor:"Bekor"};
+const STICON={reja:"clipboard-list",jarayonda:"progress",tekshiruvda:"eye",joylandi:"circle-check-filled",rad_etildi:"circle-x-filled",bekor:"ban"};
+const STOPA={joylandi:1,tekshiruvda:.82,jarayonda:.7,reja:.5,rad_etildi:.28,bekor:.28};
+const _stCol=s=>STCOL[s]||"#8a8a9e";
+const _stLbl=s=>STLBL[s]||s;
+let _proj=null,_projTab="cal",_cYM=null,_cOff=new Set(),_PROJS=[];
+
+// ── dispatcher: loyiha tanlanmagan → ro'yxat; tanlangan → detal ──
+async function renderContent(box){ return _proj ? renderProjDetail(box) : renderProjList(box); }
+
+async function renderProjList(box){
+  _PROJS=(await api("/projects")).projects||[];
+  let h=hdr("Loyihalar","");
+  h+=_PROJS.length?_PROJS.map(p=>`<div class="card projcard" onclick="openProj('${p.id}')">
+    <div class="projdot" style="background:${esc(p.color||'#6C5CE7')}"></div>
+    <div style="flex:1;min-width:0">
+      <div class="projname">${esc(p.name)}</div>
+      <div class="projmeta">${p.post_count} post · ${p.progress}% bajarildi${p.status==='archived'?" · <span style='color:var(--faint)'>arxiv</span>":""}</div>
+      <div class="tbar" style="margin-top:8px"><i style="width:${p.progress}%;background:${esc(p.color||'var(--brand)')}"></i></div>
+    </div><i class="ti ti-chevron-right" style="color:var(--faint)"></i></div>`).join(""):emptyBox("folders","Loyiha yo'q");
+  h+=`<button class="btn pri" style="width:100%;margin-top:8px" onclick="projEdit({})"><i class="ti ti-plus"></i> Loyiha qo'shish</button>`;
+  box.innerHTML=h;
+}
+function openProj(id){_proj=(_PROJS.find(p=>p.id===id))||{id,name:"Loyiha"};_projTab="cal";render("content");}
+function backToProjects(){_proj=null;render("content");}
+function projTab(t){_projTab=t;render("content");}
+async function renderProjDetail(box){
+  box.innerHTML=`<div class="head"><div style="display:flex;align-items:center;gap:10px;min-width:0">
+      <button class="icobtn" onclick="backToProjects()"><i class="ti ti-arrow-left"></i></button>
+      <h1 style="font-size:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(_proj.name||"Loyiha")}</h1></div>
+      <button class="icobtn" onclick="projEdit(_proj)" title="Tahrir"><i class="ti ti-edit"></i></button></div>
+    <div class="ptabs">
+      <button class="${_projTab==='dash'?'on':''}" onclick="projTab('dash')"><i class="ti ti-chart-pie"></i> Dashboard</button>
+      <button class="${_projTab==='cal'?'on':''}" onclick="projTab('cal')"><i class="ti ti-calendar-month"></i> Kalendar</button></div>
+    <div id="ptb"></div>`;
+  const tb=$("ptb");
+  if(_projTab==="dash")await renderProjDash(tb);else await renderProjCal(tb);
+}
+// ── LOYIHA FORMASI ──
+const PCOLORS=["#6C5CE7","#16A34A","#2f7ae5","#E8A317","#d64545","#0C4A6E","#b060d0","#E8557F"];
+function projEdit(p){p=p||{};const cur=p.color||"#6C5CE7";openM(`<h3>${p.id?"Loyihani tahrirlash":"Yangi loyiha"}</h3>
+  <label>Nomi</label><input id="p_name" value="${esc(p.name)}" placeholder="Masalan: Agrobank SMM">
+  <label>Tavsif</label><textarea id="p_desc">${esc(p.description)}</textarea>
+  <label>Rang</label><div class="pcolors" id="p_colors">${PCOLORS.map(c=>`<span class="pcol ${c===cur?'on':''}" style="background:${c}" data-c="${c}" onclick="pPickColor(this)"></span>`).join("")}</div>
+  <input type="hidden" id="p_color" value="${esc(cur)}">
+  <label>Holat</label><select id="p_status"><option value="active" ${(p.status||'active')==='active'?'selected':''}>Faol</option><option value="archived" ${p.status==='archived'?'selected':''}>Arxiv</option></select>
+  <div class="macts">${p.id?`<button class="btn dang" onclick="projDel('${p.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="projSave('${p.id||""}')">Saqlash</button></div>`);}
+function pPickColor(el){document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.remove("on"));el.classList.add("on");$("p_color").value=el.getAttribute("data-c");}
+async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status")};
+  if(!b.name)return flash("Nom kerak");
+  try{const r=await api(id?`/projects/${id}`:"/projects",{method:id?"PATCH":"POST",body:JSON.stringify(b)});
+    flash("Saqlandi");closeM();if(_proj)_proj={..._proj,...b};render("content");}catch(e){flash("⚠️ "+e.message);}}
+function projDel(id){const run=async()=>{try{await api(`/projects/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();_proj=null;render("content");}catch(e){flash("⚠️ "+e.message);}};
+  const msg="Loyiha o'chirilsinmi? (postlar saqlanadi, faqat bog'lanish olib tashlanadi)";
+  if(tg?.showConfirm)tg.showConfirm(msg,ok=>{if(ok)run()});else if(confirm(msg))run();}
+
+// ── KALENDAR TAB ──
+async function renderProjCal(box){
   const now=new Date();
-  if(!_cYM)_cYM={y:now.getFullYear(),m:now.getMonth()};   // m:0-11
-  const posts=(await api(`/content?year=${_cYM.y}&month=${_cYM.m+1}`)).posts||[];
+  if(!_cYM)_cYM={y:now.getFullYear(),m:now.getMonth()};
+  const posts=(await api(`/content?project=${encodeURIComponent(_proj.id)}&year=${_cYM.y}&month=${_cYM.m+1}`)).posts||[];
   posts.forEach(p=>CACHE.content[p.id]=p);
   const counts={};posts.forEach(p=>counts[p.category]=(counts[p.category]||0)+1);
   const cats=[...new Set([...Object.keys(CATCOL),...posts.map(p=>p.category)])];
@@ -877,54 +953,110 @@ async function renderContent(box){
   for(let i=0;i<lead;i++)cells+='<div class="cday mut"></div>';
   for(let dd=1;dd<=dim;dd++){
     const ps=(byDay[dd]||[]).filter(p=>!_cOff.has(p.category));
-    const bars=ps.slice(0,4).map(p=>`<div class="cbar" style="background:${_catCol(p.category)}"></div>`).join("")
+    const bars=ps.slice(0,4).map(p=>`<div class="cbar" style="background:${_catCol(p.category)};opacity:${STOPA[p.status]??.6}"></div>`).join("")
       +(ps.length>4?`<div class="cmore">+${ps.length-4}</div>`:"");
     cells+=`<div class="cday ${(isCur&&dd===now.getDate())?'today':''}" onclick="cOpenDay(${dd})"><div class="cd">${dd}</div>${bars}</div>`;
   }
-  const shown=posts.filter(p=>!_cOff.has(p.category)).length;
-  box.innerHTML=hdr("Kontent-reja","SMM · "+shown+" post")+
-    `<div class="calh"><button class="icobtn" onclick="cNav(-1)"><i class="ti ti-chevron-left"></i></button>
+  box.innerHTML=`<div class="calh"><button class="icobtn" onclick="cNav(-1)"><i class="ti ti-chevron-left"></i></button>
       <b>${_UZMON[_cYM.m]} ${_cYM.y}</b>
       <button class="icobtn" onclick="cNav(1)"><i class="ti ti-chevron-right"></i></button></div>
     <div class="cflt">${chips}</div>
     <div class="cgrid">${_UZWD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
-    <button class="btn pri" style="width:100%;margin-top:14px" onclick="cEdit({date:'${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-15'})"><i class="ti ti-plus"></i> Post qo'shish</button>`;
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">To'q rang — joylangan, ochroq — rejadagi/jarayonda</div>
+    <button class="btn pri" style="width:100%;margin-top:12px" onclick="cEdit({date:'${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-15'})"><i class="ti ti-plus"></i> Post qo'shish</button>`;
 }
 function cNav(delta){_cYM.m+=delta;if(_cYM.m<0){_cYM.m=11;_cYM.y--}if(_cYM.m>11){_cYM.m=0;_cYM.y++}render("content");}
 function cToggle(c){_cOff.has(c)?_cOff.delete(c):_cOff.add(c);render("content");}
 function cOpenDay(dd){
   const ds=`${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
-  const ps=Object.values(CACHE.content).filter(p=>p.date===ds&&!_cOff.has(p.category)).sort((a,b)=>a.category.localeCompare(b.category));
+  const ps=Object.values(CACHE.content).filter(p=>p.date===ds&&p.project_id===_proj.id&&!_cOff.has(p.category)).sort((a,b)=>a.category.localeCompare(b.category));
   const wd=_WD[new Date(_cYM.y,_cYM.m,dd).getDay()];
   let h=`<h3>${dd}-${_UZMON[_cYM.m].toLowerCase()}, ${_cYM.y}</h3>
     <div style="font-size:12px;color:var(--muted);margin:2px 0 13px;font-weight:600">${wd} · ${ps.length} ta kontent</div>`;
   if(!ps.length)h+=`<div style="color:var(--muted);font-size:13px;margin-bottom:8px">Bu kunda kontent yo'q</div>`;
-  ps.forEach(p=>{h+=`<div class="ccard" style="border-left-color:${_catCol(p.category)}">
-    <span class="ctag" style="background:${_catCol(p.category)}">${esc(_catLbl(p.category))}</span>
-    <div class="ctopic">${esc(p.topic)}</div>
-    ${p.format?`<div class="crow"><b>Format:</b> ${esc(p.format)}</div>`:''}
-    ${p.platform?`<div class="crow"><b>Platforma:</b> ${esc(p.platform)}</div>`:''}
-    ${p.message?`<div class="cmsg">${esc(p.message)}</div>`:''}
-    ${p.hashtags?`<div class="chash">${esc(p.hashtags)}</div>`:''}
-    <div class="rowbtns"><button class="btn" onclick="cEdit(CACHE.content['${p.id}'])"><i class="ti ti-edit"></i> Tahrir</button>
-      <button class="btn dang" onclick="cDel('${p.id}')"><i class="ti ti-trash"></i></button></div></div>`;});
+  ps.forEach(p=>{h+=smmCard(p);});
   h+=`<button class="btn pri" style="width:100%;margin-top:4px" onclick="cEdit({date:'${ds}'})"><i class="ti ti-plus"></i> Shu kunga post</button>`;
   openM(h);
 }
-function cEdit(p){p=p||{};openM(`<h3>${p.id?"Postni tahrirlash":"Yangi post"}</h3>
+// ── PROFESSIONAL SMM KARTOCHKA ──
+function smmCard(p){const st=p.status||"reja";
+  return `<div class="ccard" style="border-left-color:${_catCol(p.category)}">
+    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px">
+      <span class="stbadge" style="background:${_stCol(st)}"><i class="ti ti-${STICON[st]||'circle'}"></i>${_stLbl(st)}</span>
+      <span class="ctag" style="background:${_catCol(p.category)};margin:0">${esc(_catLbl(p.category))}</span></div>
+    <div class="ctopic">${esc(p.topic)}</div>
+    ${p.format?`<div class="crow"><b>Format:</b> ${esc(p.format)}</div>`:''}
+    ${p.platform?`<div class="crow"><b>Platforma:</b> ${esc(p.platform)}</div>`:''}
+    ${p.assignee?`<div class="crow"><b>Mas'ul:</b> ${esc(p.assignee)}</div>`:''}
+    ${p.message?`<div class="cmsg">${esc(p.message)}</div>`:''}
+    ${p.hashtags?`<div class="chash">${esc(p.hashtags)}</div>`:''}
+    ${(st==='joylandi'&&p.published_url)?`<div class="clink"><i class="ti ti-link" style="vertical-align:-2px"></i> <a href="${esc(p.published_url)}" target="_blank" style="color:var(--brand-d)">${esc(p.published_url)}</a>${p.published_at?` · ${esc(String(p.published_at).slice(0,10))}`:''}</div>`:''}
+    ${(st==='rad_etildi'&&p.reject_reason)?`<div class="creject"><b>Rad sababi:</b> ${esc(p.reject_reason)}</div>`:''}
+    <label style="margin-top:9px">Holatni o'zgartirish</label>
+    <select class="cstsel" onchange="cSetStatus('${p.id}',this.value)">${Object.keys(STLBL).map(s=>`<option value="${s}" ${s===st?"selected":""}>${_stLbl(s)}</option>`).join("")}</select>
+    <div class="rowbtns"><button class="btn" onclick="cEdit(CACHE.content['${p.id}'])"><i class="ti ti-edit"></i> Tahrir</button>
+      <button class="btn dang" onclick="cDel('${p.id}')"><i class="ti ti-trash"></i></button></div></div>`;
+}
+async function cSetStatus(id,st){const p=CACHE.content[id];const patch={status:st};
+  if(st==='joylandi'&&p&&!p.published_at)patch.published_at=new Date().toISOString().slice(0,10);
+  try{await api(`/content/${id}`,{method:"PATCH",body:JSON.stringify(patch)});
+    if(p)Object.assign(p,patch);flash("Holat: "+_stLbl(st));
+    closeM();await render("content");if(p)cOpenDay(parseInt(String(p.date).slice(8,10),10));
+  }catch(e){flash("⚠️ "+e.message);}}
+// ── POST FORMASI (status/mas'ul/havola/sabab) ──
+function cEdit(p){p=p||{};const st=p.status||"reja";openM(`<h3>${p.id?"Postni tahrirlash":"Yangi post"}</h3>
   <label>Sana</label><input type="date" id="c_date" value="${esc(p.date||"")}">
-  <label>Kategoriya</label><select id="c_cat">${Object.keys(CATCOL).map(c=>`<option value="${c}" ${(p.category||"biznes")===c?"selected":""}>${esc(_catLbl(c))}</option>`).join("")}</select>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Kategoriya</label><select id="c_cat">${Object.keys(CATCOL).map(c=>`<option value="${c}" ${(p.category||"biznes")===c?"selected":""}>${esc(_catLbl(c))}</option>`).join("")}</select></div>
+    <div style="flex:1"><label>Holat</label><select id="c_status">${Object.keys(STLBL).map(s=>`<option value="${s}" ${s===st?"selected":""}>${_stLbl(s)}</option>`).join("")}</select></div></div>
   <label>Mavzu</label><input id="c_topic" value="${esc(p.topic)}" placeholder="Post mavzusi">
-  <label>Format</label><input id="c_format" value="${esc(p.format)}" placeholder="Post / Reels / Stori…">
-  <label>Platforma</label><input id="c_platform" value="${esc(p.platform)}" placeholder="Instagram, Telegram…">
+  <label>Mas'ul</label><select id="c_asg">${selOpts(META.contacts,p.assignee,"— Mas'ulsiz —")}</select>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Format</label><input id="c_format" value="${esc(p.format)}" placeholder="Reels / Post…"></div>
+    <div style="flex:1"><label>Platforma</label><input id="c_platform" value="${esc(p.platform)}" placeholder="Instagram…"></div></div>
   <label>Xabar mazmuni</label><textarea id="c_msg">${esc(p.message)}</textarea>
   <label>Hashteglar</label><input id="c_hash" value="${esc(p.hashtags)}" placeholder="#tag1 #tag2">
+  <label>Joylangan post havolasi</label><input id="c_url" value="${esc(p.published_url)}" placeholder="https://…">
+  <label>Rad sababi (rad etilsa)</label><input id="c_rej" value="${esc(p.reject_reason)}" placeholder="Nega rad etildi?">
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="cSave('${p.id||""}')">Saqlash</button></div>`);}
-async function cSave(id){const b={date:val("c_date"),category:val("c_cat"),topic:val("c_topic"),format:val("c_format"),platform:val("c_platform"),message:val("c_msg"),hashtags:val("c_hash")};
+async function cSave(id){const b={date:val("c_date"),category:val("c_cat"),status:val("c_status"),topic:val("c_topic"),assignee:val("c_asg"),format:val("c_format"),platform:val("c_platform"),message:val("c_msg"),hashtags:val("c_hash"),published_url:val("c_url"),reject_reason:val("c_rej"),project_id:_proj?_proj.id:null};
   if(!b.date)return flash("Sana kerak");if(!b.topic)return flash("Mavzu kerak");
+  if(b.status==='joylandi'&&b.published_url&&!id)b.published_at=b.date;
   try{await api(id?`/content/${id}`:"/content",{method:id?"PATCH":"POST",body:JSON.stringify(b)});flash("Saqlandi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}}
 function cDel(id){const run=async()=>{try{await api(`/content/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}};
   if(tg?.showConfirm)tg.showConfirm("Post o'chirilsinmi?",ok=>{if(ok)run()});else if(confirm("Post o'chirilsinmi?"))run();}
+
+// ── DASHBOARD TAB ──
+function _donut(data,colorFn,labelFn){const total=data.reduce((s,d)=>s+d[1],0)||1;let acc=0;
+  const segs=data.filter(d=>d[1]>0).map(([l,n])=>{const frac=n/total;const dash=`${(frac*100).toFixed(2)} ${100-frac*100}`;const off=25-acc*100;acc+=frac;return `<circle r="15.915" cx="18" cy="18" fill="none" stroke="${colorFn(l)}" stroke-width="6" stroke-dasharray="${dash}" stroke-dashoffset="${off}"></circle>`;}).join("");
+  const leg=data.filter(d=>d[1]>0).map(([l,n])=>`<div class="li"><span class="dot" style="background:${colorFn(l)}"></span>${esc(labelFn(l))}<span style="margin-left:auto;color:var(--faint)">${n} · ${Math.round(n/total*100)}%</span></div>`).join("");
+  return `<div style="display:flex;align-items:center;gap:16px"><svg viewBox="0 0 36 36" style="width:100px;height:100px;flex:none">${segs||'<circle r="15.915" cx="18" cy="18" fill="none" stroke="var(--soft)" stroke-width="6"/>'}</svg><div class="donutleg">${leg||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div></div>`;
+}
+function _hbars(data,labelFn){const max=Math.max(1,...data.map(d=>d[1]));
+  return data.slice(0,6).map(([l,n])=>`<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px"><span>${esc(labelFn?labelFn(l):l)}</span><b style="color:var(--brand)">${n}</b></div><div class="tbar"><i style="width:${Math.round(n/max*100)}%;background:var(--brand)"></i></div></div>`).join("");
+}
+async function renderProjDash(box){
+  const d=await api(`/projects/${encodeURIComponent(_proj.id)}/dashboard`);
+  const st=d.status||{};const kpi=(n,l,col)=>`<div class="kpi"><div class="kn" style="color:${col||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
+  const wd=["Yak","Du","Se","Ch","Pa","Ju","Sh"];
+  const wmax=Math.max(1,...(d.weekly_published||[]).map(w=>w.count));
+  const wbars=(d.weekly_published||[]).map(w=>{const dt=new Date(w.week+"T00:00");const lbl=isNaN(dt)?"":(dt.getDate()+"/"+(dt.getMonth()+1));
+    return `<div class="col"><div class="b" style="height:${Math.round(w.count/wmax*100)}px" title="${w.count}"></div><small>${lbl}</small></div>`}).join("");
+  box.innerHTML=`<div class="kpis">
+      ${kpi(d.total||0,"Jami post")}
+      ${kpi(st.joylandi||0,"Joylandi","var(--green)")}
+      ${kpi(st.jarayonda||0,"Jarayonda","#2f7ae5")}
+      ${kpi(st.reja||0,"Reja","#B45309")}
+      ${kpi(st.rad_etildi||0,"Rad etildi","var(--red)")}
+      ${kpi((d.progress||0)+"%","Bajarilish","var(--brand)")}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Holatlar bo'yicha</div>
+      ${_donut(Object.keys(STLBL).map(s=>[s,st[s]||0]),_stCol,_stLbl)}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar</div>
+      ${_donut(d.by_category||[],_catCol,_catLbl)}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Joylangan postlar (haftalik)</div>
+      <div class="bar">${wbars}</div></div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Formatlar</div>${_hbars(d.by_format||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Platformalar</div>${_hbars(d.by_platform||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
+    ${(d.by_assignee&&d.by_assignee.filter(a=>a[0]!=='—').length)?`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Mas'ullar yuklamasi</div>${_hbars(d.by_assignee.filter(a=>a[0]!=='—'))}</div>`:''}`;
+}
 
 function pickImport(){const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx,.csv";
   inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;flash("Import qilinmoqda…");

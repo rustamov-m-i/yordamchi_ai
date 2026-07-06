@@ -988,17 +988,22 @@ async def contacts_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok}, status=(200 if ok else 404))
 
 
-_CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags")
+_CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags",
+                   "project_id", "status", "assignee", "published_url", "published_at", "reject_reason")
+_PROJECT_FIELDS = ("name", "description", "color", "status")
 
 
 async def content_list(request: web.Request) -> web.Response:
-    """SMM kontent-reja postlari — year+month bo'yicha (yoki hammasi)."""
+    """SMM postlari — year+month / project / status bo'yicha filtr."""
+    q = request.query
     try:
-        year = int(request.query.get("year")) if request.query.get("year") else None
-        month = int(request.query.get("month")) if request.query.get("month") else None
+        year = int(q["year"]) if q.get("year") else None
+        month = int(q["month"]) if q.get("month") else None
     except ValueError:
         year = month = None
-    return web.json_response({"posts": await database.list_content_posts(year, month)})
+    posts = await database.list_content_posts(
+        year, month, project_id=q.get("project") or None, status=q.get("status") or None)
+    return web.json_response({"posts": posts})
 
 
 async def content_create(request: web.Request) -> web.Response:
@@ -1018,6 +1023,34 @@ async def content_update(request: web.Request) -> web.Response:
 async def content_delete(request: web.Request) -> web.Response:
     ok = await database.delete_content_post(request.match_info["id"])
     return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+# ───────────────────────── loyihalar (projects) ─────────────────────────
+
+async def projects_list(request: web.Request) -> web.Response:
+    return web.json_response({"projects": await database.list_projects()})
+
+
+async def project_create(request: web.Request) -> web.Response:
+    data = _pick(await _json_body(request), _PROJECT_FIELDS)
+    if not (data.get("name") or "").strip():
+        return web.json_response({"error": "name required"}, status=400)
+    return web.json_response({"id": await database.create_project(data)}, status=201)
+
+
+async def project_update(request: web.Request) -> web.Response:
+    ok = await database.update_project(
+        request.match_info["id"], _pick(await _json_body(request), _PROJECT_FIELDS))
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def project_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_project(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def project_dashboard(request: web.Request) -> web.Response:
+    return web.json_response(await database.content_dashboard(request.match_info["id"]))
 
 
 async def categories_list(request: web.Request) -> web.Response:
@@ -1283,6 +1316,11 @@ def create_app() -> web.Application:
         web.post("/api/content", content_create),
         web.patch("/api/content/{id}", content_update),
         web.delete("/api/content/{id}", content_delete),
+        web.get("/api/projects", projects_list),
+        web.post("/api/projects", project_create),
+        web.patch("/api/projects/{id}", project_update),
+        web.delete("/api/projects/{id}", project_delete),
+        web.get("/api/projects/{id}/dashboard", project_dashboard),
         web.get("/api/risks", risks),
         web.get("/api/categories", categories_list),
         web.post("/api/categories", category_create),
