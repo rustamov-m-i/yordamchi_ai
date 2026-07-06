@@ -337,6 +337,26 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .pchips{display:flex;flex-wrap:wrap;gap:7px;min-height:22px}
   .pchip{font-size:13px;padding:6px 12px;border-radius:20px;background:var(--soft);color:var(--muted);cursor:pointer;border:1.5px solid transparent;user-select:none}
   .pchip.on{background:var(--brand-soft);color:var(--brand-d);border-color:var(--brand)}
+  /* ── SMM kontent-reja ── */
+  .cflt{display:flex;gap:7px;flex-wrap:wrap;margin:2px 0 12px}
+  .cflt .cf{font-size:12px;font-weight:600;padding:6px 11px;border-radius:20px;background:var(--soft);color:var(--text);cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+  .cflt .cf .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .cflt .cf.off{opacity:.38}
+  .cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .cgrid .wd{font-size:10.5px;color:var(--faint);font-weight:600;text-align:center;padding:2px 0}
+  .cday{min-height:66px;border-radius:9px;background:var(--card);padding:5px 4px;display:flex;flex-direction:column;gap:2px;cursor:pointer}
+  .cday.mut{background:transparent;cursor:default}
+  .cday.today{box-shadow:inset 0 0 0 1.5px var(--brand)}
+  .cday .cd{font-size:11px;font-weight:700;color:var(--muted);margin-bottom:1px}
+  .cbar{height:5px;border-radius:3px}
+  .cmore{font-size:9px;color:var(--faint);font-weight:700;line-height:1}
+  .ccard{border:1px solid var(--line);border-left:4px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+  .ctag{display:inline-block;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:20px;color:#fff;margin-bottom:7px}
+  .ctopic{font-weight:700;font-size:14.5px;margin-bottom:5px;line-height:1.3}
+  .crow{font-size:12.5px;color:var(--muted);margin-bottom:2px}
+  .crow b{color:var(--text);font-weight:600}
+  .cmsg{font-size:12.5px;color:var(--text);margin-top:6px;line-height:1.45}
+  .chash{font-size:11.5px;color:var(--brand-d);margin-top:6px;font-weight:600}
 </style>
 </head>
 <body>
@@ -353,6 +373,7 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
 <div class="screen" id="v-risks"></div>
 <div class="screen" id="v-categories"></div>
 <div class="screen" id="v-calendar"></div>
+<div class="screen" id="v-content"></div>
 
 <button class="fab" id="fab"><i class="ti ti-plus"></i></button>
 <nav>
@@ -390,7 +411,7 @@ const AUTH="tma "+(tg?.initData||"");
 let VIEW="dash", META={categories:[],contacts:[]};
 // Row items are cached by id so edit handlers pass only the (safe) id in onclick —
 // embedding JSON in an attribute breaks on the apostrophes that fill Uzbek text (o', g').
-const CACHE={tasks:{},meetings:{},notes:{},reminders:{}};
+const CACHE={tasks:{},meetings:{},notes:{},reminders:{},content:{}};
 const PRIO={P0:"Shoshilinch",P1:"Muhim",P2:"Rejadagi",P3:"Past"};
 const STAT={in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor",todo:""};
 const STATSEL={todo:"Rejada",in_progress:"Jarayonda",blocked:"Bloklangan",done:"Bajarildi",cancelled:"Bekor"};
@@ -470,7 +491,7 @@ async function refreshView(btn){if(btn)btn.classList.add("spin");
   try{await render(VIEW);}finally{if(btn)setTimeout(()=>btn.classList.remove("spin"),350);}}
 function emptyBox(icon,txt){return `<div class="empty"><i class="ti ti-${icon}"></i>${esc(txt)}</div>`}
 
-const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols",team:"team",risks:"risks",categories:"categories",calendar:"calendar"};
+const _VIEWS={dash:"dash",tasks:"tasks",meetings:"meetings",notes:"notes",reminders:"reminders",insights:"insights",profile:"profile",protocols:"protocols",team:"team",risks:"risks",categories:"categories",calendar:"calendar",content:"content"};
 function switchView(v){VIEW=v;document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on"));
   el(_VIEWS[v]).classList.add("on");
   document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
@@ -493,6 +514,7 @@ async function render(v){
     else if(v==="risks")await renderRisks(box);
     else if(v==="categories")await renderCategories(box);
     else if(v==="calendar")await renderCalendar(box);
+    else if(v==="content")await renderContent(box);
   }catch(e){box.innerHTML=hdr("Xatolik","")+emptyBox("alert-triangle",e.message)}
 }
 
@@ -740,6 +762,7 @@ async function renderProfile(box){
       <div class="mi" onclick="go('team')"><i class="ti ti-users"></i>Jamoa yuklamasi<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('risks')"><i class="ti ti-alert-triangle"></i>Risklar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('calendar')"><i class="ti ti-calendar-month"></i>Kalendar<i class="ti ti-chevron-right ch"></i></div>
+      <div class="mi" onclick="go('content')"><i class="ti ti-brand-instagram"></i>SMM kontent-reja<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('categories')"><i class="ti ti-folder"></i>Kategoriyalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('protocols')"><i class="ti ti-file-text"></i>Bayonnomalar<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="download('/export/tasks?filter=active','vazifalar.xlsx')"><i class="ti ti-file-spreadsheet"></i>Excel eksport (vazifalar)<i class="ti ti-download ch"></i></div>
@@ -831,6 +854,77 @@ async function renderCalendar(box){
   box.innerHTML=h;
 }
 function calNav(delta){_calYM.m+=delta;if(_calYM.m<1){_calYM.m=12;_calYM.y--;}if(_calYM.m>12){_calYM.m=1;_calYM.y++;}render("calendar");}
+
+// ── SMM kontent-reja (Agrobank dashboard integratsiyasi) ──
+const CATCOL={biznes:"#16A34A",jamoa:"#7C3AED",bank:"#2f7ae5",chakana:"#E8A317"};
+const CATLBL={biznes:"Biznes",jamoa:"Jamoa (ichki)",bank:"Bank xizmatlari",chakana:"Chakana"};
+const _catCol=c=>CATCOL[c]||"#8a8a9e";
+const _catLbl=c=>CATLBL[c]||c;
+let _cYM=null,_cOff=new Set();
+async function renderContent(box){
+  const now=new Date();
+  if(!_cYM)_cYM={y:now.getFullYear(),m:now.getMonth()};   // m:0-11
+  const posts=(await api(`/content?year=${_cYM.y}&month=${_cYM.m+1}`)).posts||[];
+  posts.forEach(p=>CACHE.content[p.id]=p);
+  const counts={};posts.forEach(p=>counts[p.category]=(counts[p.category]||0)+1);
+  const cats=[...new Set([...Object.keys(CATCOL),...posts.map(p=>p.category)])];
+  const chips=cats.map(c=>`<span class="cf ${_cOff.has(c)?'off':''}" onclick="cToggle('${esc(c)}')"><span class="dot" style="background:${_catCol(c)}"></span>${esc(_catLbl(c))} <b style="color:${_catCol(c)}">${counts[c]||0}</b></span>`).join("");
+  const byDay={};posts.forEach(p=>{const dd=parseInt(String(p.date).slice(8,10),10);(byDay[dd]=byDay[dd]||[]).push(p);});
+  const first=new Date(_cYM.y,_cYM.m,1);let lead=(first.getDay()+6)%7;
+  const dim=new Date(_cYM.y,_cYM.m+1,0).getDate();
+  const isCur=(_cYM.y===now.getFullYear()&&_cYM.m===now.getMonth());
+  let cells="";
+  for(let i=0;i<lead;i++)cells+='<div class="cday mut"></div>';
+  for(let dd=1;dd<=dim;dd++){
+    const ps=(byDay[dd]||[]).filter(p=>!_cOff.has(p.category));
+    const bars=ps.slice(0,4).map(p=>`<div class="cbar" style="background:${_catCol(p.category)}"></div>`).join("")
+      +(ps.length>4?`<div class="cmore">+${ps.length-4}</div>`:"");
+    cells+=`<div class="cday ${(isCur&&dd===now.getDate())?'today':''}" onclick="cOpenDay(${dd})"><div class="cd">${dd}</div>${bars}</div>`;
+  }
+  const shown=posts.filter(p=>!_cOff.has(p.category)).length;
+  box.innerHTML=hdr("Kontent-reja","SMM · "+shown+" post")+
+    `<div class="calh"><button class="icobtn" onclick="cNav(-1)"><i class="ti ti-chevron-left"></i></button>
+      <b>${_UZMON[_cYM.m]} ${_cYM.y}</b>
+      <button class="icobtn" onclick="cNav(1)"><i class="ti ti-chevron-right"></i></button></div>
+    <div class="cflt">${chips}</div>
+    <div class="cgrid">${_UZWD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
+    <button class="btn pri" style="width:100%;margin-top:14px" onclick="cEdit({date:'${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-15'})"><i class="ti ti-plus"></i> Post qo'shish</button>`;
+}
+function cNav(delta){_cYM.m+=delta;if(_cYM.m<0){_cYM.m=11;_cYM.y--}if(_cYM.m>11){_cYM.m=0;_cYM.y++}render("content");}
+function cToggle(c){_cOff.has(c)?_cOff.delete(c):_cOff.add(c);render("content");}
+function cOpenDay(dd){
+  const ds=`${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+  const ps=Object.values(CACHE.content).filter(p=>p.date===ds&&!_cOff.has(p.category)).sort((a,b)=>a.category.localeCompare(b.category));
+  const wd=_WD[new Date(_cYM.y,_cYM.m,dd).getDay()];
+  let h=`<h3>${dd}-${_UZMON[_cYM.m].toLowerCase()}, ${_cYM.y}</h3>
+    <div style="font-size:12px;color:var(--muted);margin:2px 0 13px;font-weight:600">${wd} · ${ps.length} ta kontent</div>`;
+  if(!ps.length)h+=`<div style="color:var(--muted);font-size:13px;margin-bottom:8px">Bu kunda kontent yo'q</div>`;
+  ps.forEach(p=>{h+=`<div class="ccard" style="border-left-color:${_catCol(p.category)}">
+    <span class="ctag" style="background:${_catCol(p.category)}">${esc(_catLbl(p.category))}</span>
+    <div class="ctopic">${esc(p.topic)}</div>
+    ${p.format?`<div class="crow"><b>Format:</b> ${esc(p.format)}</div>`:''}
+    ${p.platform?`<div class="crow"><b>Platforma:</b> ${esc(p.platform)}</div>`:''}
+    ${p.message?`<div class="cmsg">${esc(p.message)}</div>`:''}
+    ${p.hashtags?`<div class="chash">${esc(p.hashtags)}</div>`:''}
+    <div class="rowbtns"><button class="btn" onclick="cEdit(CACHE.content['${p.id}'])"><i class="ti ti-edit"></i> Tahrir</button>
+      <button class="btn dang" onclick="cDel('${p.id}')"><i class="ti ti-trash"></i></button></div></div>`;});
+  h+=`<button class="btn pri" style="width:100%;margin-top:4px" onclick="cEdit({date:'${ds}'})"><i class="ti ti-plus"></i> Shu kunga post</button>`;
+  openM(h);
+}
+function cEdit(p){p=p||{};openM(`<h3>${p.id?"Postni tahrirlash":"Yangi post"}</h3>
+  <label>Sana</label><input type="date" id="c_date" value="${esc(p.date||"")}">
+  <label>Kategoriya</label><select id="c_cat">${Object.keys(CATCOL).map(c=>`<option value="${c}" ${(p.category||"biznes")===c?"selected":""}>${esc(_catLbl(c))}</option>`).join("")}</select>
+  <label>Mavzu</label><input id="c_topic" value="${esc(p.topic)}" placeholder="Post mavzusi">
+  <label>Format</label><input id="c_format" value="${esc(p.format)}" placeholder="Post / Reels / Stori…">
+  <label>Platforma</label><input id="c_platform" value="${esc(p.platform)}" placeholder="Instagram, Telegram…">
+  <label>Xabar mazmuni</label><textarea id="c_msg">${esc(p.message)}</textarea>
+  <label>Hashteglar</label><input id="c_hash" value="${esc(p.hashtags)}" placeholder="#tag1 #tag2">
+  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="cSave('${p.id||""}')">Saqlash</button></div>`);}
+async function cSave(id){const b={date:val("c_date"),category:val("c_cat"),topic:val("c_topic"),format:val("c_format"),platform:val("c_platform"),message:val("c_msg"),hashtags:val("c_hash")};
+  if(!b.date)return flash("Sana kerak");if(!b.topic)return flash("Mavzu kerak");
+  try{await api(id?`/content/${id}`:"/content",{method:id?"PATCH":"POST",body:JSON.stringify(b)});flash("Saqlandi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}}
+function cDel(id){const run=async()=>{try{await api(`/content/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}};
+  if(tg?.showConfirm)tg.showConfirm("Post o'chirilsinmi?",ok=>{if(ok)run()});else if(confirm("Post o'chirilsinmi?"))run();}
 
 function pickImport(){const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx,.csv";
   inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;flash("Import qilinmoqda…");

@@ -6,6 +6,7 @@ All datetime fields are stored as ISO 8601 strings in Asia/Tashkent timezone.
 
 import json
 import logging
+import os
 import uuid
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -305,6 +306,20 @@ CREATE TABLE IF NOT EXISTS self_improvement_audit (
     detail TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_si_audit_ts ON self_improvement_audit(ts DESC);
+
+CREATE TABLE IF NOT EXISTS content_posts (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,            -- YYYY-MM-DD (SMM kontent-reja sanasi)
+    category TEXT NOT NULL,        -- biznes | jamoa | bank | chakana (yoki boshqa)
+    topic TEXT NOT NULL,
+    format TEXT,
+    platform TEXT,
+    message TEXT,
+    hashtags TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_content_date ON content_posts(date);
 """
 
 
@@ -386,6 +401,18 @@ async def init() -> None:
             pass
 
         await db.commit()
+
+    # Bir martalik: SMM kontent-rejasi bo'sh bo'lsa, Agrobank iyul-2026 urug'ini import
+    # qilamiz (content_seed.json). Jadval to'lgan bo'lsa — hech narsa qilmaydi.
+    try:
+        seed_path = os.path.join(os.path.dirname(__file__), "content_seed.json")
+        if os.path.exists(seed_path):
+            with open(seed_path, encoding="utf-8") as f:
+                n = await seed_content_posts(json.load(f))
+            if n:
+                logger.info("Seeded %d content posts (SMM kontent-reja)", n)
+    except Exception:
+        logger.exception("Content seed skipped")
 
 
 # ─────────────────────────────────────────── TASKS ───────────────────────────────────────────
@@ -891,6 +918,90 @@ async def delete_contact(name: str) -> bool:
             "DELETE FROM contacts WHERE lower(name) = lower(?)", (name,))
         await db.commit()
         return cur.rowcount > 0
+
+
+# ─────────────────────────────── SMM KONTENT-REJA ───────────────────────────────
+
+_CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags")
+
+
+async def list_content_posts(year: int | None = None, month: int | None = None) -> list[dict]:
+    """Kontent postlari. year+month berilsa — o'sha oy; aks holda barchasi (sana bo'yicha)."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if year and month:
+            like = f"{int(year):04d}-{int(month):02d}-%"
+            cur = await db.execute(
+                "SELECT * FROM content_posts WHERE date LIKE ? ORDER BY date, category", (like,))
+        else:
+            cur = await db.execute("SELECT * FROM content_posts ORDER BY date, category")
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def create_content_post(data: dict) -> str:
+    cid = new_id("cp-")
+    now = now_iso()
+    vals = {k: (data.get(k) or "").strip() if isinstance(data.get(k), str) else data.get(k)
+            for k in _CONTENT_FIELDS}
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO content_posts (id, date, category, topic, format, platform,
+                                          message, hashtags, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cid, vals["date"], vals["category"] or "biznes", vals["topic"] or "Post",
+             vals["format"], vals["platform"], vals["message"], vals["hashtags"], now, now))
+        await db.commit()
+    return cid
+
+
+async def update_content_post(post_id: str, data: dict) -> bool:
+    fields, values = [], []
+    for k in _CONTENT_FIELDS:
+        if k in data:
+            fields.append(f"{k} = ?")
+            v = data[k]
+            values.append(v.strip() if isinstance(v, str) else v)
+    if not fields:
+        return False
+    fields.append("updated_at = ?")
+    values.append(now_iso())
+    values.append(post_id)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute(
+            f"UPDATE content_posts SET {', '.join(fields)} WHERE id = ?", values)
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def delete_content_post(post_id: str) -> bool:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM content_posts WHERE id = ?", (post_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def count_content_posts() -> int:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM content_posts")
+        return (await cur.fetchone())[0]
+
+
+async def seed_content_posts(posts: list[dict]) -> int:
+    """Bir martalik urug'lantirish: jadval bo'sh bo'lsagina to'ldiradi (idempotent).
+    Agrobank iyul-2026 kontent-rejasini ilk ishga tushirishda import qiladi."""
+    if await count_content_posts() > 0:
+        return 0
+    now = now_iso()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        for p in posts:
+            await db.execute(
+                """INSERT INTO content_posts (id, date, category, topic, format, platform,
+                                              message, hashtags, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (new_id("cp-"), p.get("date"), p.get("category"), p.get("topic"),
+                 p.get("format"), p.get("platform"), p.get("message"), p.get("hashtags"), now, now))
+        await db.commit()
+    return len(posts)
 
 
 async def count_table(table: str) -> int:

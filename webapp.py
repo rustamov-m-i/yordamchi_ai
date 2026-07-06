@@ -988,6 +988,38 @@ async def contacts_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok}, status=(200 if ok else 404))
 
 
+_CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags")
+
+
+async def content_list(request: web.Request) -> web.Response:
+    """SMM kontent-reja postlari — year+month bo'yicha (yoki hammasi)."""
+    try:
+        year = int(request.query.get("year")) if request.query.get("year") else None
+        month = int(request.query.get("month")) if request.query.get("month") else None
+    except ValueError:
+        year = month = None
+    return web.json_response({"posts": await database.list_content_posts(year, month)})
+
+
+async def content_create(request: web.Request) -> web.Response:
+    data = _pick(await _json_body(request), _CONTENT_FIELDS)
+    if not (data.get("date") or "").strip():
+        return web.json_response({"error": "date required"}, status=400)
+    cid = await database.create_content_post(data)
+    return web.json_response({"id": cid}, status=201)
+
+
+async def content_update(request: web.Request) -> web.Response:
+    ok = await database.update_content_post(
+        request.match_info["id"], _pick(await _json_body(request), _CONTENT_FIELDS))
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
+async def content_delete(request: web.Request) -> web.Response:
+    ok = await database.delete_content_post(request.match_info["id"])
+    return web.json_response({"ok": ok}, status=(200 if ok else 404))
+
+
 async def categories_list(request: web.Request) -> web.Response:
     return web.json_response({"categories": await database.list_categories()})
 
@@ -1247,6 +1279,10 @@ def create_app() -> web.Application:
         web.get("/api/team", team),
         web.post("/api/contacts", contacts_create),
         web.delete("/api/contacts", contacts_delete),
+        web.get("/api/content", content_list),
+        web.post("/api/content", content_create),
+        web.patch("/api/content/{id}", content_update),
+        web.delete("/api/content/{id}", content_delete),
         web.get("/api/risks", risks),
         web.get("/api/categories", categories_list),
         web.post("/api/categories", category_create),

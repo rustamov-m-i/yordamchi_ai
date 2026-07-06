@@ -14,11 +14,16 @@ public. Press Ctrl+C to stop. Override the port with WEB_DEV_PORT (default 8080)
 """
 import os
 
+import asyncio
+
 from aiohttp import web
 
+import database
 import webapp
 
 if __name__ == "__main__":
     port = int(os.getenv("WEB_DEV_PORT", "8080"))
+    # Prod'da bot.py init qiladi; dev'da migratsiya + seed ishlashi uchun shu yerda.
+    asyncio.run(database.init())
     print(f"→ Mini App (dev): http://localhost:{port}   (Ctrl+C to stop)")
     web.run_app(webapp.create_app(), host="127.0.0.1", port=port)
