@@ -74,6 +74,18 @@ WORKFLOWS: dict[str, list[dict]] = {
 }
 
 
+# "Yopiq" (yakunlangan/bekor qilingan) statuslar — overdue/progress hisobida "tugagan"
+# deb sanaladi. Har workflow'ning yakuniy holatlaridan yig'ilgan (SMM: joylandi tugatadi,
+# rad_etildi/bekor yopadi). Markazlashtirilgan — database.py'da literal tarqatilmaydi.
+TERMINAL_STATUSES: frozenset[str] = frozenset({
+    "joylandi", "rad_etildi", "bekor",   # smm
+    "hisobot",                           # campaign, roadmap (yakuniy)
+    "chop_etildi", "qamrov",             # pr
+    "foto_hisobot",                      # branding
+    "done",                              # simple
+})
+
+
 # ─────────────────────────── PROJECT_TYPES ───────────────────────────
 # Har loyiha turi — icon, dastlabki view, va qaysi workflow'ni ishlatishi.
 PROJECT_TYPES: dict[str, dict] = {

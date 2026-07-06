@@ -16,6 +16,7 @@ import aiosqlite
 import pytz
 
 import config
+import config_marketing
 
 logger = logging.getLogger(__name__)
 TZ = pytz.timezone(config.TIMEZONE)
@@ -1152,8 +1153,197 @@ async def list_projects(include_archived: bool = True) -> list[dict]:
         n, done = stats.get(p["id"], (0, 0))
         p["post_count"] = n
         p["progress"] = round(done / n * 100) if n else 0
-        out.append(p)
+        out.append(_normalize_project(p))
     return out
+
+
+# ═══════════════════ Marketing Hub: universal ProjectItem CRUD ═══════════════════
+# project_items ustidan CRUD. ADDITIVE — content_posts / content_* yo'liga tegmaydi.
+_ITEM_UPDATE_SCALAR = ("title", "description", "status", "priority", "assignee",
+                       "category", "stage", "primary_date", "start_date", "end_date",
+                       "deadline", "parent_id", "order_index", "project_id")
+
+
+def _row_to_item(r) -> dict:
+    d = dict(r)
+    raw = d.get("fields")
+    try:
+        d["fields"] = json.loads(raw) if raw else {}
+    except (ValueError, TypeError):
+        d["fields"] = {}
+    return d
+
+
+async def list_project_items(project_id: str | None, *, type_: str | None = None,
+                             status: str | None = None, assignee: str | None = None,
+                             category: str | None = None, year: int | None = None,
+                             month: int | None = None, deadline: str | None = None,
+                             overdue: bool = False) -> list[dict]:
+    """Loyiha itemlari — filtrlar bilan. project_id=None → barcha loyihalardan."""
+    where, params = ["1=1"], []
+    if project_id is not None:
+        where.append("project_id = ?"); params.append(project_id)
+    if type_:
+        where.append("type = ?"); params.append(type_)
+    if status:
+        where.append("status = ?"); params.append(status)
+    if assignee:
+        where.append("assignee = ?"); params.append(assignee)
+    if category:
+        where.append("category = ?"); params.append(category)
+    if year and month:
+        where.append("primary_date LIKE ?"); params.append(f"{int(year):04d}-{int(month):02d}-%")
+    if deadline:
+        where.append("primary_date LIKE ?"); params.append(f"{deadline}%")
+    if overdue:
+        terminal = sorted(config_marketing.TERMINAL_STATUSES)
+        where.append("primary_date < ?"); params.append(datetime.now(TZ).date().isoformat())
+        where.append(f"status NOT IN ({','.join('?' * len(terminal))})"); params.extend(terminal)
+    sql = ("SELECT * FROM project_items WHERE " + " AND ".join(where)
+           + " ORDER BY status, order_index, primary_date, title")
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(sql, params)
+        return [_row_to_item(r) for r in await cur.fetchall()]
+
+
+async def get_project_item(item_id: str) -> dict | None:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM project_items WHERE id = ?", (item_id,))
+        row = await cur.fetchone()
+        return _row_to_item(row) if row else None
+
+
+async def create_project_item(project_id: str | None, data: dict) -> str:
+    iid = new_id("pi-")
+    now = now_iso()
+    typ = data.get("type")
+    if typ not in config_marketing.ITEM_TYPES:
+        typ = "task"
+    title = (data.get("title") or "").strip() or "Item"
+    status = data.get("status") or "reja"
+    fields_json = json.dumps(data.get("fields") or {}, ensure_ascii=False)
+
+    def _s(k):
+        v = data.get(k)
+        return v.strip() if isinstance(v, str) else v
+
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        # order_index — maqsad (project_id, status) ustunida oxiriga qo'shiladi.
+        cur = await db.execute(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM project_items "
+            "WHERE project_id IS ? AND status = ?", (project_id, status))
+        order_index = (await cur.fetchone())[0]
+        await db.execute(
+            """INSERT INTO project_items
+               (id, project_id, type, title, description, status, priority, assignee,
+                category, stage, primary_date, start_date, end_date, deadline,
+                order_index, parent_id, fields, created_by, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (iid, project_id, typ, title, _s("description"), status, _s("priority"),
+             _s("assignee"), _s("category"), _s("stage"), _s("primary_date"),
+             _s("start_date"), _s("end_date"), _s("deadline"), order_index,
+             _s("parent_id"), fields_json, _s("created_by"), now, now))
+        await db.commit()
+    return iid
+
+
+async def update_project_item(item_id: str, data: dict) -> bool:
+    """Atomik shallow-merge: scalar ustunlar + `fields` blob (null qiymat → kalitni o'chirish).
+    BEGIN IMMEDIATE yozuv-lock ostida read-modify-write — bir vaqtli PATCH'lar seriyalanadi."""
+    scalars = {}
+    for k in _ITEM_UPDATE_SCALAR:
+        if k in data:
+            v = data[k]
+            scalars[k] = v.strip() if isinstance(v, str) else v
+    has_fields = isinstance(data.get("fields"), dict)
+    if not scalars and not has_fields:
+        return False
+    async with aiosqlite.connect(config.DATABASE_PATH, isolation_level=None) as db:
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute("SELECT fields FROM project_items WHERE id = ?", (item_id,))
+            row = await cur.fetchone()
+            if row is None:
+                await db.execute("ROLLBACK")
+                return False
+            sets, vals = [], []
+            for k, v in scalars.items():
+                sets.append(f"{k} = ?"); vals.append(v)
+            if has_fields:
+                cur_fields = {}
+                if row[0]:
+                    try:
+                        cur_fields = json.loads(row[0])
+                    except (ValueError, TypeError):
+                        cur_fields = {}
+                for fk, fv in data["fields"].items():
+                    if fv is None:
+                        cur_fields.pop(fk, None)
+                    else:
+                        cur_fields[fk] = fv
+                sets.append("fields = ?"); vals.append(json.dumps(cur_fields, ensure_ascii=False))
+            sets.append("updated_at = ?"); vals.append(now_iso())
+            vals.append(item_id)
+            cur = await db.execute(f"UPDATE project_items SET {', '.join(sets)} WHERE id = ?", vals)
+            await db.execute("COMMIT")
+            return cur.rowcount > 0
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+async def delete_project_item(item_id: str) -> bool:
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM project_items WHERE id = ?", (item_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def move_project_item(item_id: str, status: str, order_index: int | None = None) -> bool:
+    """Kanban ko'chirish: status o'zgartirish + maqsad ustunni 0..n atomik qayta raqamlash."""
+    async with aiosqlite.connect(config.DATABASE_PATH, isolation_level=None) as db:
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT project_id FROM project_items WHERE id = ?", (item_id,))
+            row = await cur.fetchone()
+            if row is None:
+                await db.execute("ROLLBACK")
+                return False
+            project_id = row["project_id"]
+            await db.execute("UPDATE project_items SET status = ?, updated_at = ? WHERE id = ?",
+                             (status, now_iso(), item_id))
+            cur = await db.execute(
+                "SELECT id FROM project_items WHERE project_id IS ? AND status = ? "
+                "ORDER BY order_index, updated_at", (project_id, status))
+            ids = [r["id"] for r in await cur.fetchall()]
+            if item_id in ids:
+                ids.remove(item_id)
+            pos = order_index if order_index is not None else len(ids)
+            pos = max(0, min(pos, len(ids)))
+            ids.insert(pos, item_id)
+            for idx, iid in enumerate(ids):
+                await db.execute("UPDATE project_items SET order_index = ? WHERE id = ?", (idx, iid))
+            await db.execute("COMMIT")
+            return True
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
+
+
+def _normalize_project(p: dict) -> dict:
+    """Eski (type NULL) loyihalar uchun read-side zaxira — type/default_view/workflow to'ldiradi."""
+    if not p.get("type"):
+        p["type"] = "smm"
+    if not p.get("default_view"):
+        p["default_view"] = "calendar"
+    if not p.get("workflow"):
+        p["workflow"] = json.dumps(config_marketing.default_workflow(p["type"]), ensure_ascii=False)
+    return p
 
 
 async def get_project(project_id: str) -> dict | None:
@@ -1161,29 +1351,48 @@ async def get_project(project_id: str) -> dict | None:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
         row = await cur.fetchone()
-        return dict(row) if row else None
+        return _normalize_project(dict(row)) if row else None
 
 
 async def create_project(data: dict) -> str:
     pid = new_id("pr-")
     now = now_iso()
+    # Shablon (agar berilgan) type/icon/color/default_view/workflow'ni to'ldiradi;
+    # data'dagi aniq qiymatlar ustun turadi. Tur berilmasa — 'smm' (legacy standart).
+    tpl = config_marketing.apply_template(data.get("template_id") or "") or {}
+    ptype = data.get("type") or tpl.get("type") or "smm"
+    if ptype not in config_marketing.PROJECT_TYPES:
+        ptype = "custom"
+    cfg = config_marketing.PROJECT_TYPES[ptype]
+    icon = data.get("icon") or tpl.get("icon") or cfg["icon"]
+    default_view = data.get("default_view") or tpl.get("default_view") or cfg["default_view"]
+    color = data.get("color") or tpl.get("color") or "#6C5CE7"
+    workflow = data.get("workflow")
+    if isinstance(workflow, (dict, list)):
+        workflow = json.dumps(workflow, ensure_ascii=False)
+    if not workflow:
+        workflow = json.dumps(config_marketing.default_workflow(ptype), ensure_ascii=False)
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
-            """INSERT INTO projects (id, name, description, color, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO projects
+               (id, name, description, color, status, type, icon, default_view, workflow,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (pid, (data.get("name") or "Loyiha").strip(), (data.get("description") or "").strip(),
-             data.get("color") or "#6C5CE7", data.get("status") or "active", now, now))
+             color, data.get("status") or "active", ptype, icon, default_view, workflow, now, now))
         await db.commit()
     return pid
 
 
 async def update_project(project_id: str, data: dict) -> bool:
-    allowed = ("name", "description", "color", "status")
+    allowed = ("name", "description", "color", "status", "type", "icon", "default_view", "workflow")
     fields, values = [], []
     for k in allowed:
         if k in data:
-            fields.append(f"{k} = ?")
             v = data[k]
+            if k == "workflow" and isinstance(v, (dict, list)):
+                v = json.dumps(v, ensure_ascii=False)
+            fields.append(f"{k} = ?")
             values.append(v.strip() if isinstance(v, str) else v)
     if not fields:
         return False

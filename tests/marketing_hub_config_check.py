@@ -96,6 +96,11 @@ check("map_legacy_post_status(joylandi) → joylandi", M.map_legacy_post_status(
 check("map_legacy_post_status(axlat) → reja", M.map_legacy_post_status("axlat") == "reja")
 check("map_legacy_post_status(None) → reja", M.map_legacy_post_status(None) == "reja")
 
+# ── TERMINAL_STATUSES ──
+_all_status_keys = {s["key"] for wf in M.WORKFLOWS.values() for s in wf}
+check("TERMINAL_STATUSES: hammasi biror workflow statusiga tegishli",
+      set(M.TERMINAL_STATUSES) <= _all_status_keys)
+
 print("\n" + "=" * 48)
 print(f"NATIJA:  ✅ {_pass} o'tdi   ❌ {_fail} yiqildi")
 print("=" * 48)
