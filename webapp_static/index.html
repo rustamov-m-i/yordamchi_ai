@@ -447,7 +447,7 @@ window.addEventListener("unhandledrejection",e=>_fatal("promise: "+((e.reason&&e
 
 async function api(p,o={}){const r=await fetch("/api"+p,{credentials:"same-origin",...o,headers:{"Authorization":AUTH,"Content-Type":"application/json",...(o.headers||{})}});
   if(!r.ok){let e="Xato "+r.status;try{e=(await r.json()).error||e}catch{}throw new Error(e)}return r.status===204?{}:r.json()}
-function esc(s){return(s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+function esc(s){return(s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function flash(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1700)}
 function fmt(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return iso;return d.toLocaleString("uz",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
 function toLocal(iso){if(!iso)return"";const d=new Date(iso);if(isNaN(d))return"";const p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
