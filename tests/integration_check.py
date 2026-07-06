@@ -1309,6 +1309,24 @@ async def main():
     check("D: database.list_stale_delegations", hasattr(database, "list_stale_delegations"))
     check("D: scheduler._stale_delegation_digest", hasattr(_sch.YordamchiScheduler, "_stale_delegation_digest"))
 
+    # ── iCloud sync: failure paths must return a (imported, conflicts) TUPLE ──
+    # Bug: _sync_events_to_db_sync returned bare `0` when the client/calendar was
+    # unavailable, so the scheduler's `imported, conflicts = await ...` raised
+    # TypeError on every iCloud connection hiccup (swallowed as "sync failed").
+    import calendar_service as _cal
+    _orig_conn = _cal._connect
+    try:
+        _cal._connect = lambda: None      # simulate no iCloud client
+        _r = _cal._sync_events_to_db_sync()
+        check("iCloud: klient yo'q → (0, []) tuple qaytadi (int emas)",
+              isinstance(_r, tuple) and _r == (0, []))
+        _i, _c = _r  # must unpack cleanly like the scheduler does
+        check("iCloud: natija (imported, conflicts) sifatida ochiladi", _i == 0 and _c == [])
+    finally:
+        _cal._connect = _orig_conn
+    check("iCloud: sync_events_to_db o'chiq holatda ham (0, []) qaytaradi",
+          (await _cal.sync_events_to_db()) == (0, []))
+
     print("\n── Bayonnomalar markaziy ro'yxati (oy bo'yicha) ──")
     check("Bayonnoma: database.list_meetings_with_protocol", hasattr(database, "list_meetings_with_protocol"))
     check("Bayonnoma: heuristika — uzun matn = protokol",

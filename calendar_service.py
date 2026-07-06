@@ -321,10 +321,10 @@ async def sync_events_to_db() -> tuple:
 def _sync_events_to_db_sync() -> tuple:
     client = _connect()
     if not client:
-        return 0
+        return 0, []
     cal = _get_calendar(client)
     if not cal:
-        return 0
+        return 0, []
 
     now = datetime.now(database.TZ)
     end = now + timedelta(days=30)
@@ -343,7 +343,7 @@ def _sync_events_to_db_sync() -> tuple:
         else:
             logger.warning("iCloud date_search failed: %s: %s",
                            type(e).__name__, str(e)[:160])
-        return 0
+        return 0, []
 
     imported = 0
     conflicts: list = []
