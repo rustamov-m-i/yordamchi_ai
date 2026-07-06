@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # nothing here touches the DB, but keeps the real data file safe regardless).
 import config
 config.DATABASE_PATH = "/tmp/yordamchi_docroute_test.db"
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 
 import document_service  # noqa: E402
 import handlers  # noqa: E402

@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 config.DATABASE_PATH = "/tmp/yd_feedback_test/yordamchi.db"
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 os.makedirs("/tmp/yd_feedback_test", exist_ok=True)
 for _f in ("/tmp/yd_feedback_test/yordamchi.db", "/tmp/yd_feedback_test/si_baselines.json"):
     if os.path.exists(_f):

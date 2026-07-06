@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 config.DATABASE_PATH = "/tmp/yordamchi_devagent_test.db"
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 if os.path.exists(config.DATABASE_PATH):
     os.remove(config.DATABASE_PATH)
 

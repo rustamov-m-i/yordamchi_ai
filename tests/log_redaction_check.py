@@ -10,6 +10,8 @@ sys.path.insert(0, str(ROOT))
 
 import config  # noqa: E402
 config.DATABASE_PATH = "/tmp/yd_logredact_test.db"
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 import redaction  # noqa: E402
 
 _P = _F = 0

@@ -19,6 +19,8 @@ _TMP = "/tmp/yordamchi_integration_test.db"
 if os.path.exists(_TMP):
     os.remove(_TMP)
 config.DATABASE_PATH = _TMP
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 
 import database  # noqa: E402
 import handlers  # noqa: E402

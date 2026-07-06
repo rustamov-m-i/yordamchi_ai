@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(ROOT, "deploy"))
 
 import config
 config.DATABASE_PATH = "/tmp/yd_dep_test/yordamchi.db"
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 os.makedirs("/tmp/yd_dep_test", exist_ok=True)
 
 import deployer     # noqa: E402  (deploy/deployer.py — standalone, stdlib only)

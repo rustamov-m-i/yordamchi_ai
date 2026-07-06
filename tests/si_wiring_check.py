@@ -16,6 +16,8 @@ import config  # noqa: E402
 _TMP = "/tmp/yd_si_wiring"
 os.makedirs(_TMP, exist_ok=True)
 config.DATABASE_PATH = os.path.join(_TMP, "yordamchi.db")
+config.ICLOUD_ENABLED = False  # tests must NEVER push to the real iCloud calendar
+config.APPLE_ID = ""; config.APPLE_APP_SPECIFIC_PASSWORD = ""
 config.PRINCIPAL_USER_ID = 424242
 if os.path.exists(config.DATABASE_PATH):
     os.remove(config.DATABASE_PATH)
