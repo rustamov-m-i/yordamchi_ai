@@ -748,8 +748,9 @@ async function renderReminders(box){
 }
 
 async function renderInsights(box){
-  const [d,dash]=await Promise.all([api("/insights"),api("/dashboard").catch(()=>({}))]);
+  const [d,dash,tm]=await Promise.all([api("/insights"),api("/dashboard").catch(()=>({})),api("/team").catch(()=>({}))]);
   const days=d.by_day||[];const cats=(d.categories||[]).slice(0,6);
+  const team=(tm.team||[]).filter(p=>p.name&&p.name!=="belgilanmagan").slice(0,6);
   const r=dash.radar||{};const c=dash.counts||{};const pg=dash.progress||0;
   const doneWeek=days.reduce((s,x)=>s+x.count,0);
   const max=Math.max(1,...days.map(x=>x.count));const wd=["Yak","Du","Se","Ch","Pa","Ju","Sh"];
@@ -760,7 +761,10 @@ async function renderInsights(box){
     const off=25-acc*100;acc+=frac;return `<circle r="15.915" cx="18" cy="18" fill="none" stroke="${cols[i%cols.length]}" stroke-width="6" stroke-dasharray="${dash}" stroke-dashoffset="${off}"></circle>`}).join("");
   const legend=cats.map((c,i)=>`<div class="li"><span class="dot" style="background:${cols[i%cols.length]}"></span>${esc(c.name)} <span style="margin-left:auto;color:var(--faint)">${Math.round(c.count/total*100)}%</span></div>`).join("");
   const kpi=(n,l,col)=>`<div class="kpi"><div class="kn" style="color:${col||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
-  box.innerHTML=hdr("Tahlil","So'nggi 7 kun")+
+  const mxA=Math.max(1,...team.map(p=>p.active||0));
+  const wl=team.length?team.map(p=>{const w=Math.round((p.active||0)/mxA*100);
+    return `<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;font-size:13.5px;margin-bottom:5px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.name)}${p.overdue?` <span class="chip red" style="font-size:10px;padding:1px 7px">${p.overdue} kechikkan</span>`:""}</span><b style="flex:none;margin-left:8px">${p.active||0}</b></div><div style="height:8px;background:var(--soft);border-radius:6px;overflow:hidden"><i style="display:block;height:100%;width:${w}%;background:linear-gradient(90deg,var(--brand),#8a7bf0);border-radius:6px"></i></div></div>`;}).join(""):emptyBox("users","Jamoa ma'lumoti yo'q");
+  box.innerHTML=`<div class="head"><div><h1 class="grad">Tahlil</h1><div class="sub">So'nggi 7 kun</div></div><button class="icobtn" onclick="render(VIEW)" title="Yangilash"><i class="ti ti-refresh"></i></button></div>`+
     `<div class="kpis">
       ${kpi(doneWeek,"Bajarildi (7 kun)","var(--green)")}
       ${kpi(pg+"%","Bajarilish darajasi","var(--brand)")}
@@ -771,7 +775,10 @@ async function renderInsights(box){
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px">So'nggi 7 kun kesimida</div>
       <div class="bar">${bars}</div></div>
     <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar bo'yicha yuklama</div>
-      ${cats.length?`<div style="display:flex;align-items:center;gap:18px"><svg viewBox="0 0 36 36" style="width:110px;height:110px;flex:none">${segs}</svg><div class="legend" style="flex:1">${legend}</div></div>`:emptyBox("chart-donut","Ma'lumot yo'q")}</div>`;
+      ${cats.length?`<div style="display:flex;align-items:center;gap:18px"><svg viewBox="0 0 36 36" style="width:110px;height:110px;flex:none">${segs}</svg><div class="legend" style="flex:1">${legend}</div></div>`:emptyBox("chart-donut","Ma'lumot yo'q")}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:2px">Jamoa yuklamasi</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Ijrochilar bo'yicha faol vazifalar</div>
+      ${wl}</div>`;
 }
 
 async function renderProfile(box){
