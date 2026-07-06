@@ -249,7 +249,17 @@ class YordamchiScheduler:
                 replace_existing=True,
                 next_run_time=datetime.now(database.TZ) + timedelta(minutes=1),
             )
-            logger.info("iCloud sync enabled (every %d min) + retry queue (every 2 min)",
+            # Backfill push: any upcoming bot meeting NOT yet on iCloud (created before
+            # sync was on, imported-then-edited, or a failed push) is pushed to the
+            # principal's calendar — so every bot meeting shows up on their phone.
+            self.scheduler.add_job(
+                self._icloud_push_backfill,
+                IntervalTrigger(minutes=max(5, config.ICLOUD_SYNC_INTERVAL_MIN)),
+                id="icloud_push_backfill",
+                replace_existing=True,
+                next_run_time=datetime.now(database.TZ) + timedelta(seconds=35),
+            )
+            logger.info("iCloud sync enabled (every %d min) + retry queue + push-backfill",
                         config.ICLOUD_SYNC_INTERVAL_MIN)
 
         self.scheduler.start()
@@ -834,6 +844,34 @@ class YordamchiScheduler:
                     "ustma-ust tushdi — ko'rib chiqing.")
         except Exception:
             logger.exception("iCloud sync failed (non-fatal)")
+
+    async def _icloud_push_backfill(self) -> None:
+        """Push every upcoming bot meeting that isn't on iCloud yet → principal's
+        calendar. Idempotent: a pushed meeting gets its icloud_uid, so it's not
+        pushed again. Failures go to the retry queue (via push_meeting)."""
+        import asyncio
+        try:
+            pending = await database.list_meetings_to_push(days=60, limit=100)
+            pushed = 0
+            for m in pending:
+                try:
+                    start_dt = database.parse_iso_dt(m.get("datetime_start"))
+                    if not start_dt:
+                        continue
+                    end_dt = database.parse_iso_dt(m.get("datetime_end")) or (start_dt + timedelta(hours=1))
+                    uid = await asyncio.to_thread(
+                        calendar_service.push_meeting,
+                        m["id"], m.get("title") or "Uchrashuv", start_dt, end_dt,
+                        m.get("participants") or [], m.get("location_or_link"), m.get("agenda"))
+                    if uid:
+                        await database.set_meeting_icloud_uid(m["id"], uid)
+                        pushed += 1
+                except Exception:
+                    logger.exception("iCloud backfill push failed for %s", m.get("id"))
+            if pushed:
+                logger.info("iCloud push-backfill: %d meeting(s) added to calendar", pushed)
+        except Exception:
+            logger.exception("iCloud push-backfill sweep failed")
 
     async def _icloud_retry_sweep(self) -> None:
         """Retry queued iCloud operations whose backoff has elapsed."""

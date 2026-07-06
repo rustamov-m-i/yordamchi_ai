@@ -1327,6 +1327,23 @@ async def main():
     check("iCloud: sync_events_to_db o'chiq holatda ham (0, []) qaytaradi",
           (await _cal.sync_events_to_db()) == (0, []))
 
+    # ── iCloud push-backfill: botdagi uchrashuvni kalendarga yuborish uchun tanlash ──
+    check("iCloud: database.list_meetings_to_push mavjud", hasattr(database, "list_meetings_to_push"))
+    check("iCloud: scheduler._icloud_push_backfill mavjud",
+          hasattr(_sch.YordamchiScheduler, "_icloud_push_backfill"))
+    _pnow = datetime.now(TZ)
+    _pm_up = await database.create_meeting({"title": "PUSH_up", "datetime_start": (_pnow + timedelta(days=2)).isoformat()})
+    _pm_done = await database.create_meeting({"title": "PUSH_done", "datetime_start": (_pnow + timedelta(days=2)).isoformat()})
+    await database.complete_meeting(_pm_done)
+    _pm_synced = await database.create_meeting({"title": "PUSH_synced", "datetime_start": (_pnow + timedelta(days=2)).isoformat()})
+    await database.set_meeting_icloud_uid(_pm_synced, "yordamchi-x@a")
+    _pm_past = await database.create_meeting({"title": "PUSH_past", "datetime_start": (_pnow - timedelta(days=2)).isoformat()})
+    _pids = {x["id"] for x in await database.list_meetings_to_push(days=60)}
+    check("iCloud push-backfill: kelgusi+yuborilmagan tanlanadi; bajarilgan/yuborilgan/o'tgan chiqmaydi",
+          _pm_up in _pids and _pm_done not in _pids and _pm_synced not in _pids and _pm_past not in _pids)
+    for _x in (_pm_up, _pm_done, _pm_synced, _pm_past):
+        await database.cancel_meeting(_x)
+
     print("\n── Bayonnomalar markaziy ro'yxati (oy bo'yicha) ──")
     check("Bayonnoma: database.list_meetings_with_protocol", hasattr(database, "list_meetings_with_protocol"))
     check("Bayonnoma: heuristika — uzun matn = protokol",

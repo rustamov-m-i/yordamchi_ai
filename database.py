@@ -2740,6 +2740,33 @@ async def list_meetings_in_window(start_iso: str, end_iso: str) -> list[dict]:
         return [_row_to_meeting(r) for r in rows]
 
 
+async def list_meetings_to_push(days: int = 60, limit: int = 200) -> list[dict]:
+    """Upcoming, active meetings NOT yet on iCloud — i.e. bot meetings that should be
+    backfilled to the principal's calendar. Excludes completed and already-synced
+    (icloud_uid set → either pushed or imported FROM iCloud) so we never re-push or
+    push imported events back."""
+    now = now_iso()
+    hi = (datetime.now(TZ) + timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM meetings
+               WHERE datetime_start >= ? AND datetime_start <= ?
+                 AND completed_at IS NULL
+                 AND (icloud_uid IS NULL OR icloud_uid = '')
+               ORDER BY datetime_start ASC LIMIT ?""",
+            (now, hi, limit),
+        )
+        return [_row_to_meeting(r) for r in await cur.fetchall()]
+
+
+async def set_meeting_icloud_uid(meeting_id: str, uid: str) -> None:
+    """Tag a meeting with its iCloud event UID (so it isn't re-pushed / re-imported)."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute("UPDATE meetings SET icloud_uid = ? WHERE id = ?", (uid, meeting_id))
+        await db.commit()
+
+
 async def list_meetings_with_protocol(limit: int = 100) -> list[dict]:
     """Meetings whose follow_up_actions hold a saved protocol (bayonnoma) — newest
     meeting first. The caller filters protocol-text from task-id lists (the same
