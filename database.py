@@ -313,6 +313,10 @@ CREATE TABLE IF NOT EXISTS projects (
     description TEXT,
     color TEXT,                   -- HEX (kalendar/badge rangi)
     status TEXT NOT NULL DEFAULT 'active',   -- active | archived
+    type TEXT,                    -- Marketing Hub: smm|campaign|pr|branding|... (NULL = legacy SMM)
+    icon TEXT,                    -- Tabler icon nomi
+    default_view TEXT NOT NULL DEFAULT 'calendar',  -- calendar|kanban|table|dashboard
+    workflow TEXT,                -- JSON: {"statuses":[{key,label,color},...]}
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -336,6 +340,38 @@ CREATE TABLE IF NOT EXISTS content_posts (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_content_date ON content_posts(date);
+
+-- ── Marketing Hub: universal ProjectItem modeli ──
+-- Har loyiha item'i (post/task/milestone/media_placement/...) shu jadvalda saqlanadi.
+-- 1st-class ustunlar filtrlanadi/indekslanadi; turga-xos qo'shimchalar `fields` JSON'da.
+-- (Bosqich 1: faqat sxema — hali hech qayerda o'qilmaydi/yozilmaydi, xatti-harakat o'zgarmaydi.)
+CREATE TABLE IF NOT EXISTS project_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,                   -- qaysi loyiha (NULL = bog'lanmagan; FK yo'q)
+    type TEXT NOT NULL DEFAULT 'post', -- post|task|milestone|note|media_placement|...
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'reja',
+    priority TEXT,                     -- P0|P1|P2|P3 (ixtiyoriy)
+    assignee TEXT,
+    category TEXT,                     -- 1st-class scalar (kalendar/filtr uchun)
+    stage TEXT,                        -- roadmap bosqichi (ixtiyoriy)
+    primary_date TEXT,                 -- YYYY-MM-DD (kalendar/timeline asosiy sanasi)
+    start_date TEXT,
+    end_date TEXT,
+    deadline TEXT,
+    order_index INTEGER NOT NULL DEFAULT 0,   -- kanban ustun ichidagi tartib
+    parent_id TEXT,                    -- subtask/related
+    fields TEXT,                       -- JSON: turga xos qo'shimcha maydonlar
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pitems_project_status   ON project_items(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_pitems_project_date     ON project_items(project_id, primary_date);
+CREATE INDEX IF NOT EXISTS idx_pitems_project_type     ON project_items(project_id, type);
+CREATE INDEX IF NOT EXISTS idx_pitems_project_category ON project_items(project_id, category);
+CREATE INDEX IF NOT EXISTS idx_pitems_assignee         ON project_items(assignee);
 """
 
 
@@ -429,6 +465,18 @@ async def init() -> None:
                 await db.execute("ALTER TABLE content_posts ADD COLUMN status TEXT NOT NULL DEFAULT 'reja'")
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_content_project ON content_posts(project_id, date)")
+
+        # projects: Marketing Hub type-aware ustunlari (mavjud DB'lar uchun).
+        # (Bosqich 1: ustunlar qo'shiladi, lekin hali o'qilmaydi — xatti-harakat o'zgarmaydi.)
+        cur = await db.execute("PRAGMA table_info(projects)")
+        proj_cols = {row[1] for row in await cur.fetchall()}
+        if proj_cols:
+            for col in ("type", "icon", "workflow"):
+                if col not in proj_cols:
+                    await db.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
+            if "default_view" not in proj_cols:
+                await db.execute(
+                    "ALTER TABLE projects ADD COLUMN default_view TEXT NOT NULL DEFAULT 'calendar'")
 
         await db.commit()
 
