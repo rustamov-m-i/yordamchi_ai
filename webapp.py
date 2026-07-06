@@ -1138,6 +1138,7 @@ async def marketing_config(request: web.Request) -> web.Response:
         "project_item_types": config_marketing.PROJECT_ITEM_TYPES,
         "item_fields": config_marketing.ITEM_FIELDS,
         "templates": config_marketing.TEMPLATES,
+        "terminal_statuses": sorted(config_marketing.TERMINAL_STATUSES),
     })
 
 

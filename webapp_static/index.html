@@ -385,6 +385,33 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   /* ── Loyihalar ── */
   .projcard{display:flex;align-items:center;gap:12px}
   .projdot{width:12px;height:12px;border-radius:50%;flex:none}
+  .projicon{width:40px;height:40px;border-radius:12px;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px}
+  /* Kanban */
+  .kbwrap{overflow-x:auto;margin:0 -2px 2px}
+  .kboard{display:flex;gap:10px;min-width:min-content;padding:0 2px 6px;align-items:flex-start}
+  .kcol{flex:0 0 200px;width:200px;background:var(--soft);border-radius:13px;padding:9px}
+  .kcol.over{outline:2px dashed var(--brand);outline-offset:-3px}
+  .khead{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;padding:2px 3px 9px}
+  .khead .kdot{width:9px;height:9px;border-radius:50%;flex:none}
+  .khead b{margin-left:auto;color:var(--faint);font-weight:700}
+  .kcards{display:flex;flex-direction:column;gap:7px;min-height:8px}
+  .kcard{background:var(--card);border-radius:10px;padding:9px 10px;box-shadow:0 1px 2px rgba(20,20,45,.06);cursor:grab}
+  .kcard:active{cursor:grabbing}
+  .kcard.dragging{opacity:.5}
+  .kct{font-size:13px;font-weight:600;line-height:1.32}
+  .kct i{color:var(--brand);font-size:14px;vertical-align:-2px}
+  .kcm{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px}
+  .kcm i{font-size:11px;vertical-align:-1px}
+  .kaddi{width:100%;margin-top:7px;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;font-size:12px;font-weight:600;padding:7px;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
+  .kaddi:hover{border-color:var(--brand);color:var(--brand)}
+  /* Jadval */
+  .grp{font-size:12px;color:var(--muted);display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  .ptable{width:100%;min-width:460px;border-collapse:collapse;font-size:13px}
+  .ptable th{text-align:left;padding:9px 10px;font-size:11px;font-weight:700;color:var(--muted);background:var(--soft);white-space:nowrap;text-transform:uppercase;letter-spacing:.3px}
+  .ptable td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:middle;cursor:pointer}
+  .ptable tr:hover td{background:var(--soft)}
+  .ptable .tgrp td{background:var(--soft);font-weight:700;font-size:12px;cursor:default}
   .projname{font-size:15px;font-weight:600}
   .projmeta{font-size:12px;color:var(--muted);margin-top:2px}
   .ptabs{display:flex;gap:8px;margin-bottom:14px}
@@ -946,188 +973,264 @@ async function renderCalendar(box){
 }
 function calNav(delta){_calYM.m+=delta;if(_calYM.m<1){_calYM.m=12;_calYM.y--;}if(_calYM.m>12){_calYM.m=1;_calYM.y++;}render("calendar");}
 
-// ══ LOYIHALAR + KONTENT PLAN (SMM) ══
+// ══ LOYIHALAR — Marketing Hub (universal ProjectItem) ══
 const CATCOL={biznes:"#16A34A",jamoa:"#7C3AED",bank:"#2f7ae5",chakana:"#E8A317"};
 const CATLBL={biznes:"Biznes",jamoa:"Jamoa (ichki)",bank:"Bank xizmatlari",chakana:"Chakana"};
 const _catCol=c=>CATCOL[c]||"#8a8a9e";
-const _catLbl=c=>CATLBL[c]||c;
-const STCOL={reja:"#B45309",jarayonda:"#2f7ae5",tekshiruvda:"#7C3AED",joylandi:"#16A34A",rad_etildi:"#d64545",bekor:"#8a8a9e"};
-const STLBL={reja:"Reja",jarayonda:"Jarayonda",tekshiruvda:"Tekshiruvda",joylandi:"Joylandi",rad_etildi:"Rad etildi",bekor:"Bekor"};
-const STICON={reja:"clipboard-list",jarayonda:"progress",tekshiruvda:"eye",joylandi:"circle-check-filled",rad_etildi:"circle-x-filled",bekor:"ban"};
-const STOPA={joylandi:1,tekshiruvda:.82,jarayonda:.7,reja:.5,rad_etildi:.28,bekor:.28};
-const _stCol=s=>STCOL[s]||"#8a8a9e";
-const _stLbl=s=>STLBL[s]||s;
-let _proj=null,_projTab="cal",_cYM=null,_cOff=new Set(),_PROJS=[];
+const _catLbl=c=>CATLBL[c]||(c||"—");
+let _proj=null,_projTab=null,_cYM=null,_cOff=new Set(),_PROJS=[],_grp="none",_TERM=new Set(),_dragId=null;
 
-// ── dispatcher: loyiha tanlanmagan → ro'yxat; tanlangan → detal ──
-async function renderContent(box){ return _proj ? renderProjDetail(box) : renderProjList(box); }
+// Marketing Hub konfiguratsiyasi — /api/marketing-config'dan BIR MARTA (JS'da dublikat SAQLANMAYDI).
+let _MCFG=null;
+async function mcfg(){
+  if(!_MCFG){
+    try{_MCFG=await api("/marketing-config");}
+    catch(e){_MCFG={workflows:{},project_types:{},item_types:{},project_item_types:{},item_fields:{},templates:[],terminal_statuses:[]};}
+    _TERM=new Set(_MCFG.terminal_statuses||[]);
+  }
+  return _MCFG;
+}
+const _ptype=t=>(_MCFG&&_MCFG.project_types[t])||{label:"Loyiha",icon:"folder",default_view:"kanban",workflow:"simple"};
+const _itype=t=>(_MCFG&&_MCFG.item_types[t])||{label:t,icon:"circle"};
+function _wf(p){try{return (JSON.parse((p&&p.workflow)||"{}").statuses)||[];}catch(e){return [];}}
+function _stMapP(p){const m={};_wf(p).forEach(s=>m[s.key]=s);return m;}
+const _stColP=(p,k)=>{const s=_stMapP(p)[k];return s?s.color:"#8a8a9e";};
+const _stLblP=(p,k)=>{const s=_stMapP(p)[k];return s?s.label:k;};
+function _noData(){return '<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>';}
+const _ctitle=t=>`<div style="font-size:15px;font-weight:600;margin-bottom:12px">${t}</div>`;
+
+// ── dispatcher: config yuklab, ro'yxat yoki detal ──
+async function renderContent(box){ await mcfg(); return _proj ? renderProjDetail(box) : renderProjList(box); }
 
 async function renderProjList(box){
   _PROJS=(await api("/projects")).projects||[];
   let h=hdr("Loyihalar","");
-  h+=_PROJS.length?_PROJS.map(p=>`<div class="card projcard" onclick="openProj('${p.id}')">
-    <div class="projdot" style="background:${esc(p.color||'#6C5CE7')}"></div>
-    <div style="flex:1;min-width:0">
-      <div class="projname">${esc(p.name)}</div>
-      <div class="projmeta">${p.post_count} post · ${p.progress}% bajarildi${p.status==='archived'?" · <span style='color:var(--faint)'>arxiv</span>":""}</div>
-      <div class="tbar" style="margin-top:8px"><i style="width:${p.progress}%;background:${esc(p.color||'var(--brand)')}"></i></div>
-    </div><i class="ti ti-chevron-right" style="color:var(--faint)"></i></div>`).join(""):emptyBox("folders","Loyiha yo'q");
+  h+=_PROJS.length?_PROJS.map(p=>{const pt=_ptype(p.type);const ic=p.icon||pt.icon||"folder";const col=p.color||"#6C5CE7";
+    return `<div class="card projcard" onclick="openProj('${p.id}')">
+      <span class="projicon" style="background:${esc(col)}1f;color:${esc(col)}"><i class="ti ti-${esc(ic)}"></i></span>
+      <div style="flex:1;min-width:0"><div class="projname">${esc(p.name)}</div>
+        <div class="projmeta">${esc(pt.label)} · ${p.item_count||0} item · ${p.progress||0}%${p.status==='archived'?" · <span style='color:var(--faint)'>arxiv</span>":""}</div>
+        <div class="tbar" style="margin-top:8px"><i style="width:${p.progress||0}%;background:${esc(col)}"></i></div>
+      </div><i class="ti ti-chevron-right" style="color:var(--faint)"></i></div>`;}).join(""):emptyBox("folders","Loyiha yo'q");
   h+=`<button class="btn pri" style="width:100%;margin-top:8px" onclick="projEdit({})"><i class="ti ti-plus"></i> Loyiha qo'shish</button>`;
   box.innerHTML=h;
 }
-function openProj(id){_proj=(_PROJS.find(p=>p.id===id))||{id,name:"Loyiha"};_projTab="cal";render("content");}
-function backToProjects(){_proj=null;render("content");}
+const _VIEWTAB={dashboard:"dash",calendar:"cal",kanban:"kanban",table:"table"};
+function openProj(id){_proj=(_PROJS.find(p=>p.id===id))||{id,name:"Loyiha",type:"smm"};_projTab=_VIEWTAB[_proj.default_view]||"kanban";_cYM=null;render("content");}
+function backToProjects(){_proj=null;_projTab=null;render("content");}
 function projTab(t){_projTab=t;render("content");}
+
 async function renderProjDetail(box){
+  const t=_proj.type||"smm";
+  const dateCentric=(t==="smm"||t==="media_plan"||t==="event");   // sana-markazli turlar Kalendar oladi
+  const tabs=[["dash","Overview","chart-pie"]];
+  if(dateCentric)tabs.push(["cal","Kalendar","calendar-month"]);
+  tabs.push(["kanban","Kanban","layout-kanban"],["table","Jadval","table"]);
+  if(!tabs.find(x=>x[0]===_projTab))_projTab=tabs[0][0];
   box.innerHTML=`<div class="head"><div style="display:flex;align-items:center;gap:10px;min-width:0">
       <button class="icobtn" onclick="backToProjects()"><i class="ti ti-arrow-left"></i></button>
       <h1 style="font-size:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(_proj.name||"Loyiha")}</h1></div>
       <button class="icobtn" onclick="projEdit(_proj)" title="Tahrir"><i class="ti ti-edit"></i></button></div>
-    <div class="ptabs">
-      <button class="${_projTab==='dash'?'on':''}" onclick="projTab('dash')"><i class="ti ti-chart-pie"></i> Dashboard</button>
-      <button class="${_projTab==='cal'?'on':''}" onclick="projTab('cal')"><i class="ti ti-calendar-month"></i> Kalendar</button></div>
+    <div class="ptabs">${tabs.map(x=>`<button class="${_projTab===x[0]?'on':''}" onclick="projTab('${x[0]}')"><i class="ti ti-${x[2]}"></i> ${x[1]}</button>`).join("")}</div>
     <div id="ptb"></div>`;
-  const tb=$("ptb");
-  if(_projTab==="dash")await renderProjDash(tb);else await renderProjCal(tb);
+  const R={dash:renderProjOverview,cal:renderProjCal,kanban:renderProjKanban,table:renderProjTable};
+  await (R[_projTab]||renderProjKanban)($("ptb"));
 }
-// ── LOYIHA FORMASI ──
+
+// item'larni olib + CACHE'ga solish (itemOpen cache'dan o'qiydi)
+async function _items(extra){
+  const list=(await api(`/projects/${encodeURIComponent(_proj.id)}/items${extra||""}`)).items||[];
+  list.forEach(it=>CACHE.content[it.id]=it);
+  return list;
+}
+
+// ── OVERVIEW (item-asosli agregatsiya) ──
+async function renderProjOverview(box){
+  const items=await _items();const wf=_wf(_proj);
+  const bySt={};wf.forEach(s=>bySt[s.key]=0);const byType={},byAsg={};let done=0;
+  items.forEach(it=>{bySt[it.status]=(bySt[it.status]||0)+1;
+    const tl=_itype(it.type).label;byType[tl]=(byType[tl]||0)+1;
+    if(it.assignee)byAsg[it.assignee]=(byAsg[it.assignee]||0)+1;
+    if(_TERM.has(it.status))done++;});
+  const total=items.length,prog=total?Math.round(done/total*100):0;
+  const kpi=(n,l,c)=>`<div class="kpi"><div class="kn" style="color:${c||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
+  box.innerHTML=`<div class="kpis">${kpi(total,"Jami item")}${kpi(done,"Yakunlangan","var(--green)")}${kpi(prog+"%","Bajarilish","var(--brand)")}</div>
+    <div class="card">${_ctitle("Holatlar bo'yicha")}${_donut(wf.map(s=>[s.key,bySt[s.key]||0]),k=>_stColP(_proj,k),k=>_stLblP(_proj,k))}</div>
+    <div class="card">${_ctitle("Turlar bo'yicha")}${_hbars(Object.entries(byType).sort((a,b)=>b[1]-a[1]))||_noData()}</div>
+    ${Object.keys(byAsg).length?`<div class="card">${_ctitle("Mas'ullar yuklamasi")}${_hbars(Object.entries(byAsg).sort((a,b)=>b[1]-a[1]))}</div>`:""}`;
+}
+
+// ── KANBAN (drag-drop → move) ──
+async function renderProjKanban(box){
+  const wf=_wf(_proj);const items=await _items();
+  const by={};wf.forEach(s=>by[s.key]=[]);items.forEach(it=>{(by[it.status]=by[it.status]||[]).push(it);});
+  const card=it=>{const meta=[it.assignee?`<span><i class="ti ti-user"></i> ${esc(it.assignee)}</span>`:"",
+      it.primary_date?`<span><i class="ti ti-calendar"></i> ${esc(String(it.primary_date).slice(5))}</span>`:""].filter(Boolean).join("");
+    return `<div class="kcard" draggable="true" data-id="${it.id}" onclick="itemOpen('${it.id}')">
+      <div class="kct"><i class="ti ti-${_itype(it.type).icon}"></i> ${esc(it.title)}</div>${meta?`<div class="kcm">${meta}</div>`:""}</div>`;};
+  const cols=wf.map(s=>`<div class="kcol" data-st="${s.key}">
+      <div class="khead"><span class="kdot" style="background:${s.color}"></span>${esc(s.label)}<b>${(by[s.key]||[]).length}</b></div>
+      <div class="kcards">${(by[s.key]||[]).map(card).join("")}</div>
+      <button class="kaddi" onclick="itemEdit({status:'${s.key}'})"><i class="ti ti-plus"></i> Item</button></div>`).join("");
+  box.innerHTML=`<div class="kbwrap"><div class="kboard">${cols}</div></div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Kartani ustunlar orasida suring — holat o'zgaradi. Mobil: kartani ochib holatni tanlang.</div>`;
+  box.querySelectorAll(".kcard").forEach(el=>{
+    el.addEventListener("dragstart",e=>{_dragId=el.dataset.id;el.classList.add("dragging");e.dataTransfer.effectAllowed="move";});
+    el.addEventListener("dragend",()=>{el.classList.remove("dragging");box.querySelectorAll(".kcol.over").forEach(c=>c.classList.remove("over"));_dragId=null;});});
+  box.querySelectorAll(".kcol").forEach(col=>{
+    col.addEventListener("dragover",e=>{e.preventDefault();col.classList.add("over");});
+    col.addEventListener("dragleave",e=>{if(!col.contains(e.relatedTarget))col.classList.remove("over");});
+    col.addEventListener("drop",e=>{e.preventDefault();col.classList.remove("over");if(_dragId)itemMove(_dragId,col.dataset.st);});});
+}
+async function itemMove(id,status){try{await api(`/items/${id}/move`,{method:"POST",body:JSON.stringify({status})});
+  const it=CACHE.content[id];if(it)it.status=status;render("content");}catch(e){flash("⚠️ "+e.message);}}
+
+// ── JADVAL (guruhlash + tartib) ──
+async function renderProjTable(box){
+  const items=await _items();
+  const gf={none:null,status:it=>_stLblP(_proj,it.status),assignee:it=>it.assignee||"—",type:it=>_itype(it.type).label}[_grp];
+  const row=it=>`<tr onclick="itemOpen('${it.id}')"><td>${esc(it.title)}</td><td>${esc(_itype(it.type).label)}</td>
+     <td><span class="stbadge" style="background:${_stColP(_proj,it.status)}">${esc(_stLblP(_proj,it.status))}</span></td>
+     <td>${esc(it.assignee||"—")}</td><td style="white-space:nowrap">${esc(it.primary_date||"")}</td></tr>`;
+  let body="";
+  if(gf){const g={};items.forEach(it=>{const k=gf(it);(g[k]=g[k]||[]).push(it);});
+    Object.keys(g).sort().forEach(k=>{body+=`<tr class="tgrp"><td colspan="5">${esc(k)} · ${g[k].length}</td></tr>`+g[k].map(row).join("");});}
+  else body=items.map(row).join("");
+  const chip=(k,l)=>`<span class="cf ${_grp===k?'on':''}" onclick="_grp='${k}';render('content')">${l}</span>`;
+  box.innerHTML=`<div class="grp">Guruh: ${chip('none',"Yo'q")}${chip('status',"Holat")}${chip('assignee',"Mas'ul")}${chip('type',"Tur")}</div>
+    <div class="tblwrap"><table class="ptable"><thead><tr><th>Nomi</th><th>Tur</th><th>Holat</th><th>Mas'ul</th><th>Sana</th></tr></thead>
+      <tbody>${body||'<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:16px">Item yo\'q</td></tr>'}</tbody></table></div>
+    <button class="btn pri" style="width:100%;margin-top:10px" onclick="itemEdit({})"><i class="ti ti-plus"></i> Item qo'shish</button>`;
+}
+
+// ── KALENDAR (sana-markazli item'lar) ──
+async function renderProjCal(box){
+  const now=new Date();if(!_cYM)_cYM={y:now.getFullYear(),m:now.getMonth()};
+  const items=await _items(`?year=${_cYM.y}&month=${_cYM.m+1}`);
+  const counts={};items.forEach(it=>{const c=it.category||"—";counts[c]=(counts[c]||0)+1;});
+  const cats=[...new Set([...Object.keys(CATCOL),...items.map(it=>it.category||"—")])];
+  const chips=cats.map(c=>`<span class="cf ${_cOff.has(c)?'off':''}" onclick="cToggle('${esc(c)}')"><span class="dot" style="background:${_catCol(c)}"></span>${esc(_catLbl(c))} <b style="color:${_catCol(c)}">${counts[c]||0}</b></span>`).join("");
+  const byDay={};items.forEach(it=>{if(!it.primary_date)return;const dd=parseInt(String(it.primary_date).slice(8,10),10);(byDay[dd]=byDay[dd]||[]).push(it);});
+  const first=new Date(_cYM.y,_cYM.m,1);const lead=(first.getDay()+6)%7;const dim=new Date(_cYM.y,_cYM.m+1,0).getDate();
+  const isCur=(_cYM.y===now.getFullYear()&&_cYM.m===now.getMonth());
+  let cells="";for(let i=0;i<lead;i++)cells+='<div class="cday mut"></div>';
+  for(let dd=1;dd<=dim;dd++){const ps=(byDay[dd]||[]).filter(it=>!_cOff.has(it.category||"—"));
+    const bars=ps.slice(0,4).map(it=>`<div class="cbar" style="background:${_catCol(it.category)};opacity:${_TERM.has(it.status)?1:.5}"></div>`).join("")+(ps.length>4?`<div class="cmore">+${ps.length-4}</div>`:"");
+    cells+=`<div class="cday ${(isCur&&dd===now.getDate())?'today':''}" onclick="cOpenDay(${dd})"><div class="cd">${dd}</div>${bars}</div>`;}
+  box.innerHTML=`<div class="calh"><button class="icobtn" onclick="cNav(-1)"><i class="ti ti-chevron-left"></i></button><b>${_UZMON[_cYM.m]} ${_cYM.y}</b><button class="icobtn" onclick="cNav(1)"><i class="ti ti-chevron-right"></i></button></div>
+    <div class="cflt">${chips}</div>
+    <div class="cgrid">${_UZWD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">To'q rang — yakunlangan, ochroq — jarayonda/reja</div>
+    <button class="btn pri" style="width:100%;margin-top:12px" onclick="itemEdit({primary_date:'${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-15'})"><i class="ti ti-plus"></i> Item qo'shish</button>`;
+}
+function cNav(delta){_cYM.m+=delta;if(_cYM.m<0){_cYM.m=11;_cYM.y--;}if(_cYM.m>11){_cYM.m=0;_cYM.y++;}render("content");}
+function cToggle(c){_cOff.has(c)?_cOff.delete(c):_cOff.add(c);render("content");}
+function cOpenDay(dd){
+  const ds=`${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+  const ps=Object.values(CACHE.content).filter(it=>it.primary_date===ds&&it.project_id===_proj.id&&!_cOff.has(it.category||"—"));
+  let h=`<h3>${dd}-${_UZMON[_cYM.m].toLowerCase()}, ${_cYM.y}</h3><div style="font-size:12px;color:var(--muted);margin:2px 0 13px;font-weight:600">${ps.length} ta item</div>`;
+  if(!ps.length)h+=`<div style="color:var(--muted);font-size:13px;margin-bottom:8px">Bu kunda item yo'q</div>`;
+  ps.forEach(it=>{h+=itemCardHtml(it);});
+  h+=`<button class="btn pri" style="width:100%;margin-top:4px" onclick="itemEdit({primary_date:'${ds}'})"><i class="ti ti-plus"></i> Shu kunga item</button>`;
+  openM(h);
+}
+
+// ── ITEM KARTOCHKA + DETAL ──
+function itemCardHtml(it){const f=it.fields||{};
+  const flds=(_MCFG.item_fields[it.type]||[]).filter(fd=>f[fd.key]).map(fd=>`<div class="crow"><b>${esc(fd.label)}:</b> ${fd.kind==='url'?`<a href="${esc(f[fd.key])}" target="_blank" style="color:var(--brand-d)">${esc(f[fd.key])}</a>`:esc(f[fd.key])}</div>`).join("");
+  return `<div class="ccard" style="border-left-color:${_stColP(_proj,it.status)}">
+    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px">
+      <span class="stbadge" style="background:${_stColP(_proj,it.status)}"><i class="ti ti-${_itype(it.type).icon}"></i>${esc(_stLblP(_proj,it.status))}</span>
+      ${it.category?`<span class="ctag" style="background:${_catCol(it.category)};margin:0">${esc(_catLbl(it.category))}</span>`:""}
+      <span style="font-size:11px;color:var(--faint);margin-left:auto">${esc(_itype(it.type).label)}</span></div>
+    <div class="ctopic">${esc(it.title)}</div>
+    ${it.assignee?`<div class="crow"><b>Mas'ul:</b> ${esc(it.assignee)}</div>`:""}
+    ${it.description?`<div class="cmsg">${esc(it.description)}</div>`:""}${flds}
+    <label style="margin-top:9px">Holatni o'zgartirish</label>
+    <select class="cstsel" onchange="itemMove('${it.id}',this.value)">${_wf(_proj).map(s=>`<option value="${s.key}" ${s.key===it.status?"selected":""}>${esc(s.label)}</option>`).join("")}</select>
+    <div class="rowbtns"><button class="btn" onclick="itemEdit(CACHE.content['${it.id}'])"><i class="ti ti-edit"></i> Tahrir</button>
+      <button class="btn dang" onclick="itemDel('${it.id}')"><i class="ti ti-trash"></i></button></div></div>`;
+}
+function itemOpen(id){const it=CACHE.content[id];if(!it)return;openM(itemCardHtml(it));}
+
+// ── ITEM FORMASI (turga-xos maydonlar config'dan) ──
+function itemEdit(it){it=it||{};const isNew=!it.id;
+  const types=(_MCFG.project_item_types[_proj.type]||Object.keys(_MCFG.item_types||{}));
+  const t=it.type||types[0]||"task";const wf=_wf(_proj);
+  const typeOpts=types.map(k=>`<option value="${k}" ${k===t?"selected":""}>${esc(_itype(k).label)}</option>`).join("");
+  const curSt=it.status||(wf[0]&&wf[0].key);
+  const stOpts=wf.map(s=>`<option value="${s.key}" ${s.key===curSt?"selected":""}>${esc(s.label)}</option>`).join("");
+  const catOpts=`<option value="">—</option>`+Object.keys(CATCOL).map(c=>`<option value="${c}" ${it.category===c?"selected":""}>${esc(_catLbl(c))}</option>`).join("");
+  window._iFldVals=it.fields||{};
+  openM(`<h3>${isNew?"Yangi item":"Itemni tahrirlash"}</h3>
+    <div style="display:flex;gap:10px"><div style="flex:1"><label>Tur</label><select id="i_type" onchange="itemFldsRender()">${typeOpts}</select></div>
+      <div style="flex:1"><label>Holat</label><select id="i_status">${stOpts}</select></div></div>
+    <label>Sarlavha</label><input id="i_title" value="${esc(it.title)}" placeholder="Item nomi">
+    <div style="display:flex;gap:10px"><div style="flex:1"><label>Sana</label><input type="date" id="i_date" value="${esc(it.primary_date||"")}"></div>
+      <div style="flex:1"><label>Kategoriya</label><select id="i_cat">${catOpts}</select></div></div>
+    <label>Mas'ul</label><select id="i_asg">${selOpts(META.contacts,it.assignee,"— Mas'ulsiz —")}</select>
+    <label>Tavsif</label><textarea id="i_desc">${esc(it.description)}</textarea>
+    <div id="i_flds"></div>
+    <div class="macts">${!isNew?`<button class="btn dang" onclick="itemDel('${it.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="itemSave('${it.id||""}')">Saqlash</button></div>`);
+  itemFldsRender();
+}
+function itemFldsRender(){const t=val("i_type");const defs=(_MCFG.item_fields[t]||[]);const f=window._iFldVals||{};
+  $("i_flds").innerHTML=defs.map(fd=>{const v=f[fd.key]!=null?f[fd.key]:"";
+    if(fd.kind==="select")return `<label>${esc(fd.label)}</label><select id="if_${fd.key}"><option value=""></option>${(fd.options||[]).map(o=>`<option value="${esc(o)}" ${String(v)===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+    if(fd.kind==="textarea")return `<label>${esc(fd.label)}</label><textarea id="if_${fd.key}">${esc(v)}</textarea>`;
+    const typ=fd.kind==="number"?"number":(fd.kind==="date"?"date":(fd.kind==="url"?"url":"text"));
+    return `<label>${esc(fd.label)}</label><input type="${typ}" id="if_${fd.key}" value="${esc(v)}">`;}).join("");
+}
+async function itemSave(id){const t=val("i_type");const defs=(_MCFG.item_fields[t]||[]);const fields={};
+  defs.forEach(fd=>{const el=$("if_"+fd.key);if(!el)return;const raw=el.value;
+    fields[fd.key]=raw===""?null:(fd.kind==="number"?Number(raw):raw);});
+  const b={type:t,status:val("i_status"),title:val("i_title"),primary_date:val("i_date")||null,
+    category:val("i_cat")||null,assignee:val("i_asg")||null,description:val("i_desc"),fields};
+  if(!b.title)return flash("Sarlavha kerak");
+  try{await api(id?`/items/${id}`:`/projects/${_proj.id}/items`,{method:id?"PATCH":"POST",body:JSON.stringify(b)});
+    flash("Saqlandi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}}
+function itemDel(id){const run=async()=>{try{await api(`/items/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}};
+  if(tg?.showConfirm)tg.showConfirm("Item o'chirilsinmi?",ok=>{if(ok)run();});else if(confirm("Item o'chirilsinmi?"))run();}
+
+// ── LOYIHA FORMASI (tur + shablon) ──
 const PCOLORS=["#6C5CE7","#16A34A","#2f7ae5","#E8A317","#d64545","#0C4A6E","#b060d0","#E8557F"];
-function projEdit(p){p=p||{};const cur=p.color||"#6C5CE7";openM(`<h3>${p.id?"Loyihani tahrirlash":"Yangi loyiha"}</h3>
-  <label>Nomi</label><input id="p_name" value="${esc(p.name)}" placeholder="Masalan: Agrobank SMM">
+function projEdit(p){p=p||{};const isNew=!p.id;const cur=p.color||"#6C5CE7";
+  const typeOpts=Object.entries(_MCFG.project_types||{}).map(([k,v])=>`<option value="${k}" ${p.type===k?"selected":""}>${esc(v.label)}</option>`).join("");
+  const tplOpts=`<option value="">— Shablonsiz —</option>`+(_MCFG.templates||[]).map(t=>`<option value="${t.id}">${esc(t.label)}</option>`).join("");
+  openM(`<h3>${isNew?"Yangi loyiha":"Loyihani tahrirlash"}</h3>
+  ${isNew?`<label>Shablon</label><select id="p_tpl" onchange="pTplPick()">${tplOpts}</select>`:""}
+  <label>Nomi</label><input id="p_name" value="${esc(p.name)}" placeholder="Masalan: Ipoteka kampaniyasi">
+  <label>Turi</label><select id="p_type">${typeOpts}</select>
   <label>Tavsif</label><textarea id="p_desc">${esc(p.description)}</textarea>
   <label>Rang</label><div class="pcolors" id="p_colors">${PCOLORS.map(c=>`<span class="pcol ${c===cur?'on':''}" style="background:${c}" data-c="${c}" onclick="pPickColor(this)"></span>`).join("")}</div>
   <input type="hidden" id="p_color" value="${esc(cur)}">
   <label>Holat</label><select id="p_status"><option value="active" ${(p.status||'active')==='active'?'selected':''}>Faol</option><option value="archived" ${p.status==='archived'?'selected':''}>Arxiv</option></select>
   <div class="macts">${p.id?`<button class="btn dang" onclick="projDel('${p.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="projSave('${p.id||""}')">Saqlash</button></div>`);}
+function pTplPick(){const t=(_MCFG.templates||[]).find(x=>x.id===val("p_tpl"));if(!t)return;
+  const ts=$("p_type");if(ts)ts.value=t.type;
+  const cc=$("p_color");if(cc){cc.value=t.color;document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.toggle("on",x.getAttribute("data-c")===t.color));}}
 function pPickColor(el){document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.remove("on"));el.classList.add("on");$("p_color").value=el.getAttribute("data-c");}
-async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status")};
+async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status"),type:val("p_type")};
   if(!b.name)return flash("Nom kerak");
-  try{const r=await api(id?`/projects/${id}`:"/projects",{method:id?"PATCH":"POST",body:JSON.stringify(b)});
-    flash("Saqlandi");closeM();if(_proj)_proj={..._proj,...b};render("content");}catch(e){flash("⚠️ "+e.message);}}
+  const tpl=$("p_tpl")?val("p_tpl"):"";
+  if(!id){if(tpl)b.template_id=tpl;}
+  else{const wfk=_ptype(b.type).workflow;if(_MCFG.workflows[wfk])b.workflow={statuses:_MCFG.workflows[wfk]};}
+  try{await api(id?`/projects/${id}`:"/projects",{method:id?"PATCH":"POST",body:JSON.stringify(b)});
+    flash("Saqlandi");closeM();
+    if(id&&_proj)_proj={..._proj,...b,workflow:b.workflow?JSON.stringify(b.workflow):_proj.workflow};
+    render("content");}catch(e){flash("⚠️ "+e.message);}}
 function projDel(id){const run=async()=>{try{await api(`/projects/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();_proj=null;render("content");}catch(e){flash("⚠️ "+e.message);}};
-  const msg="Loyiha o'chirilsinmi? (postlar saqlanadi, faqat bog'lanish olib tashlanadi)";
-  if(tg?.showConfirm)tg.showConfirm(msg,ok=>{if(ok)run()});else if(confirm(msg))run();}
+  const msg="Loyiha o'chirilsinmi? (item'lar saqlanadi, faqat bog'lanish olib tashlanadi)";
+  if(tg?.showConfirm)tg.showConfirm(msg,ok=>{if(ok)run();});else if(confirm(msg))run();}
 
-// ── KALENDAR TAB ──
-async function renderProjCal(box){
-  const now=new Date();
-  if(!_cYM)_cYM={y:now.getFullYear(),m:now.getMonth()};
-  const posts=(await api(`/content?project=${encodeURIComponent(_proj.id)}&year=${_cYM.y}&month=${_cYM.m+1}`)).posts||[];
-  posts.forEach(p=>CACHE.content[p.id]=p);
-  const counts={};posts.forEach(p=>counts[p.category]=(counts[p.category]||0)+1);
-  const cats=[...new Set([...Object.keys(CATCOL),...posts.map(p=>p.category)])];
-  const chips=cats.map(c=>`<span class="cf ${_cOff.has(c)?'off':''}" onclick="cToggle('${esc(c)}')"><span class="dot" style="background:${_catCol(c)}"></span>${esc(_catLbl(c))} <b style="color:${_catCol(c)}">${counts[c]||0}</b></span>`).join("");
-  const byDay={};posts.forEach(p=>{const dd=parseInt(String(p.date).slice(8,10),10);(byDay[dd]=byDay[dd]||[]).push(p);});
-  const first=new Date(_cYM.y,_cYM.m,1);let lead=(first.getDay()+6)%7;
-  const dim=new Date(_cYM.y,_cYM.m+1,0).getDate();
-  const isCur=(_cYM.y===now.getFullYear()&&_cYM.m===now.getMonth());
-  let cells="";
-  for(let i=0;i<lead;i++)cells+='<div class="cday mut"></div>';
-  for(let dd=1;dd<=dim;dd++){
-    const ps=(byDay[dd]||[]).filter(p=>!_cOff.has(p.category));
-    const bars=ps.slice(0,4).map(p=>`<div class="cbar" style="background:${_catCol(p.category)};opacity:${STOPA[p.status]??.6}"></div>`).join("")
-      +(ps.length>4?`<div class="cmore">+${ps.length-4}</div>`:"");
-    cells+=`<div class="cday ${(isCur&&dd===now.getDate())?'today':''}" onclick="cOpenDay(${dd})"><div class="cd">${dd}</div>${bars}</div>`;
-  }
-  box.innerHTML=`<div class="calh"><button class="icobtn" onclick="cNav(-1)"><i class="ti ti-chevron-left"></i></button>
-      <b>${_UZMON[_cYM.m]} ${_cYM.y}</b>
-      <button class="icobtn" onclick="cNav(1)"><i class="ti ti-chevron-right"></i></button></div>
-    <div class="cflt">${chips}</div>
-    <div class="cgrid">${_UZWD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">To'q rang — joylangan, ochroq — rejadagi/jarayonda</div>
-    <button class="btn pri" style="width:100%;margin-top:12px" onclick="cEdit({date:'${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-15'})"><i class="ti ti-plus"></i> Post qo'shish</button>`;
-}
-function cNav(delta){_cYM.m+=delta;if(_cYM.m<0){_cYM.m=11;_cYM.y--}if(_cYM.m>11){_cYM.m=0;_cYM.y++}render("content");}
-function cToggle(c){_cOff.has(c)?_cOff.delete(c):_cOff.add(c);render("content");}
-function cOpenDay(dd){
-  const ds=`${_cYM.y}-${String(_cYM.m+1).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
-  const ps=Object.values(CACHE.content).filter(p=>p.date===ds&&p.project_id===_proj.id&&!_cOff.has(p.category)).sort((a,b)=>a.category.localeCompare(b.category));
-  const wd=_WD[new Date(_cYM.y,_cYM.m,dd).getDay()];
-  let h=`<h3>${dd}-${_UZMON[_cYM.m].toLowerCase()}, ${_cYM.y}</h3>
-    <div style="font-size:12px;color:var(--muted);margin:2px 0 13px;font-weight:600">${wd} · ${ps.length} ta kontent</div>`;
-  if(!ps.length)h+=`<div style="color:var(--muted);font-size:13px;margin-bottom:8px">Bu kunda kontent yo'q</div>`;
-  ps.forEach(p=>{h+=smmCard(p);});
-  h+=`<button class="btn pri" style="width:100%;margin-top:4px" onclick="cEdit({date:'${ds}'})"><i class="ti ti-plus"></i> Shu kunga post</button>`;
-  openM(h);
-}
-// ── PROFESSIONAL SMM KARTOCHKA ──
-function smmCard(p){const st=p.status||"reja";
-  return `<div class="ccard" style="border-left-color:${_catCol(p.category)}">
-    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px">
-      <span class="stbadge" style="background:${_stCol(st)}"><i class="ti ti-${STICON[st]||'circle'}"></i>${_stLbl(st)}</span>
-      <span class="ctag" style="background:${_catCol(p.category)};margin:0">${esc(_catLbl(p.category))}</span></div>
-    <div class="ctopic">${esc(p.topic)}</div>
-    ${p.format?`<div class="crow"><b>Format:</b> ${esc(p.format)}</div>`:''}
-    ${p.platform?`<div class="crow"><b>Platforma:</b> ${esc(p.platform)}</div>`:''}
-    ${p.assignee?`<div class="crow"><b>Mas'ul:</b> ${esc(p.assignee)}</div>`:''}
-    ${p.message?`<div class="cmsg">${esc(p.message)}</div>`:''}
-    ${p.hashtags?`<div class="chash">${esc(p.hashtags)}</div>`:''}
-    ${(st==='joylandi'&&p.published_url)?`<div class="clink"><i class="ti ti-link" style="vertical-align:-2px"></i> <a href="${esc(p.published_url)}" target="_blank" style="color:var(--brand-d)">${esc(p.published_url)}</a>${p.published_at?` · ${esc(String(p.published_at).slice(0,10))}`:''}</div>`:''}
-    ${(st==='rad_etildi'&&p.reject_reason)?`<div class="creject"><b>Rad sababi:</b> ${esc(p.reject_reason)}</div>`:''}
-    <label style="margin-top:9px">Holatni o'zgartirish</label>
-    <select class="cstsel" onchange="cSetStatus('${p.id}',this.value)">${Object.keys(STLBL).map(s=>`<option value="${s}" ${s===st?"selected":""}>${_stLbl(s)}</option>`).join("")}</select>
-    <div class="rowbtns"><button class="btn" onclick="cEdit(CACHE.content['${p.id}'])"><i class="ti ti-edit"></i> Tahrir</button>
-      <button class="btn dang" onclick="cDel('${p.id}')"><i class="ti ti-trash"></i></button></div></div>`;
-}
-async function cSetStatus(id,st){const p=CACHE.content[id];const patch={status:st};
-  if(st==='joylandi'&&p&&!p.published_at)patch.published_at=new Date().toISOString().slice(0,10);
-  try{await api(`/content/${id}`,{method:"PATCH",body:JSON.stringify(patch)});
-    if(p)Object.assign(p,patch);flash("Holat: "+_stLbl(st));
-    closeM();await render("content");if(p)cOpenDay(parseInt(String(p.date).slice(8,10),10));
-  }catch(e){flash("⚠️ "+e.message);}}
-// ── POST FORMASI (status/mas'ul/havola/sabab) ──
-function cEdit(p){p=p||{};const st=p.status||"reja";openM(`<h3>${p.id?"Postni tahrirlash":"Yangi post"}</h3>
-  <label>Sana</label><input type="date" id="c_date" value="${esc(p.date||"")}">
-  <div style="display:flex;gap:10px"><div style="flex:1"><label>Kategoriya</label><select id="c_cat">${Object.keys(CATCOL).map(c=>`<option value="${c}" ${(p.category||"biznes")===c?"selected":""}>${esc(_catLbl(c))}</option>`).join("")}</select></div>
-    <div style="flex:1"><label>Holat</label><select id="c_status">${Object.keys(STLBL).map(s=>`<option value="${s}" ${s===st?"selected":""}>${_stLbl(s)}</option>`).join("")}</select></div></div>
-  <label>Mavzu</label><input id="c_topic" value="${esc(p.topic)}" placeholder="Post mavzusi">
-  <label>Mas'ul</label><select id="c_asg">${selOpts(META.contacts,p.assignee,"— Mas'ulsiz —")}</select>
-  <div style="display:flex;gap:10px"><div style="flex:1"><label>Format</label><input id="c_format" value="${esc(p.format)}" placeholder="Reels / Post…"></div>
-    <div style="flex:1"><label>Platforma</label><input id="c_platform" value="${esc(p.platform)}" placeholder="Instagram…"></div></div>
-  <label>Xabar mazmuni</label><textarea id="c_msg">${esc(p.message)}</textarea>
-  <label>Hashteglar</label><input id="c_hash" value="${esc(p.hashtags)}" placeholder="#tag1 #tag2">
-  <label>Joylangan post havolasi</label><input id="c_url" value="${esc(p.published_url)}" placeholder="https://…">
-  <label>Rad sababi (rad etilsa)</label><input id="c_rej" value="${esc(p.reject_reason)}" placeholder="Nega rad etildi?">
-  <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="cSave('${p.id||""}')">Saqlash</button></div>`);}
-async function cSave(id){const b={date:val("c_date"),category:val("c_cat"),status:val("c_status"),topic:val("c_topic"),assignee:val("c_asg"),format:val("c_format"),platform:val("c_platform"),message:val("c_msg"),hashtags:val("c_hash"),published_url:val("c_url"),reject_reason:val("c_rej"),project_id:_proj?_proj.id:null};
-  if(!b.date)return flash("Sana kerak");if(!b.topic)return flash("Mavzu kerak");
-  if(b.status==='joylandi'&&b.published_url&&!id)b.published_at=b.date;
-  try{await api(id?`/content/${id}`:"/content",{method:id?"PATCH":"POST",body:JSON.stringify(b)});flash("Saqlandi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}}
-function cDel(id){const run=async()=>{try{await api(`/content/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}};
-  if(tg?.showConfirm)tg.showConfirm("Post o'chirilsinmi?",ok=>{if(ok)run()});else if(confirm("Post o'chirilsinmi?"))run();}
-
-// ── DASHBOARD TAB ──
+// ── DIAGRAMMA yordamchilari ──
 function _donut(data,colorFn,labelFn){const total=data.reduce((s,d)=>s+d[1],0)||1;let acc=0;
   const segs=data.filter(d=>d[1]>0).map(([l,n])=>{const frac=n/total;const dash=`${(frac*100).toFixed(2)} ${100-frac*100}`;const off=25-acc*100;acc+=frac;return `<circle r="15.915" cx="18" cy="18" fill="none" stroke="${colorFn(l)}" stroke-width="6" stroke-dasharray="${dash}" stroke-dashoffset="${off}"></circle>`;}).join("");
   const leg=data.filter(d=>d[1]>0).map(([l,n])=>`<div class="li"><span class="dot" style="background:${colorFn(l)}"></span>${esc(labelFn(l))}<span style="margin-left:auto;color:var(--faint)">${n} · ${Math.round(n/total*100)}%</span></div>`).join("");
-  return `<div style="display:flex;align-items:center;gap:16px"><svg viewBox="0 0 36 36" style="width:100px;height:100px;flex:none">${segs||'<circle r="15.915" cx="18" cy="18" fill="none" stroke="var(--soft)" stroke-width="6"/>'}</svg><div class="donutleg">${leg||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div></div>`;
+  return `<div style="display:flex;align-items:center;gap:16px"><svg viewBox="0 0 36 36" style="width:100px;height:100px;flex:none">${segs||'<circle r="15.915" cx="18" cy="18" fill="none" stroke="var(--soft)" stroke-width="6"/>'}</svg><div class="donutleg">${leg||_noData()}</div></div>`;
 }
 function _hbars(data,labelFn){const max=Math.max(1,...data.map(d=>d[1]));
   return data.slice(0,6).map(([l,n])=>`<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px"><span>${esc(labelFn?labelFn(l):l)}</span><b style="color:var(--brand)">${n}</b></div><div class="tbar"><i style="width:${Math.round(n/max*100)}%;background:var(--brand)"></i></div></div>`).join("");
-}
-async function renderProjDash(box){
-  const d=await api(`/projects/${encodeURIComponent(_proj.id)}/dashboard`);
-  const st=d.status||{};const kpi=(n,l,col)=>`<div class="kpi"><div class="kn" style="color:${col||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
-  const wd=["Yak","Du","Se","Ch","Pa","Ju","Sh"];
-  const wmax=Math.max(1,...(d.weekly_published||[]).map(w=>w.count));
-  const wbars=(d.weekly_published||[]).map(w=>{const dt=new Date(w.week+"T00:00");const lbl=isNaN(dt)?"":(dt.getDate()+"/"+(dt.getMonth()+1));
-    return `<div class="col"><div class="b" style="height:${Math.round(w.count/wmax*100)}px" title="${w.count}"></div><small>${lbl}</small></div>`}).join("");
-  box.innerHTML=`<div class="kpis">
-      ${kpi(d.total||0,"Jami post")}
-      ${kpi(st.joylandi||0,"Joylandi","var(--green)")}
-      ${kpi(st.jarayonda||0,"Jarayonda","#2f7ae5")}
-      ${kpi(st.reja||0,"Reja","#B45309")}
-      ${kpi(st.rad_etildi||0,"Rad etildi","var(--red)")}
-      ${kpi((d.progress||0)+"%","Bajarilish","var(--brand)")}</div>
-    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Holatlar bo'yicha</div>
-      ${_donut(Object.keys(STLBL).map(s=>[s,st[s]||0]),_stCol,_stLbl)}</div>
-    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar</div>
-      ${_donut(d.by_category||[],_catCol,_catLbl)}</div>
-    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Joylangan postlar (haftalik)</div>
-      <div class="bar">${wbars}</div></div>
-    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Formatlar</div>${_hbars(d.by_format||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
-    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Platformalar</div>${_hbars(d.by_platform||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
-    ${(d.by_assignee&&d.by_assignee.filter(a=>a[0]!=='—').length)?`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Mas'ullar yuklamasi</div>${_hbars(d.by_assignee.filter(a=>a[0]!=='—'))}</div>`:''}`;
 }
 
 function pickImport(){const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx,.csv";

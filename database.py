@@ -1136,23 +1136,27 @@ async def seed_content_posts(posts: list[dict]) -> int:
 # ─────────────────────────────── LOYIHALAR (Projects) ───────────────────────────────
 
 async def list_projects(include_archived: bool = True) -> list[dict]:
-    """Loyihalar + har birida post soni va bajarilish % (joylandi/rejalashtirilgan)."""
+    """Loyihalar + har birida item soni va bajarilish % (yopiq statuslar / jami).
+    Sanoq project_items ustidan (universal model) — migratsiyadan keyingi manba."""
+    terminal = sorted(config_marketing.TERMINAL_STATUSES)
+    ph = ",".join("?" * len(terminal))
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM projects ORDER BY status, name")
         projects = [dict(r) for r in await cur.fetchall()]
         cur = await db.execute(
-            "SELECT project_id, COUNT(*) n, "
-            "SUM(CASE WHEN status='joylandi' THEN 1 ELSE 0 END) done "
-            "FROM content_posts GROUP BY project_id")
+            f"SELECT project_id, COUNT(*) n, "
+            f"SUM(CASE WHEN status IN ({ph}) THEN 1 ELSE 0 END) done "
+            f"FROM project_items GROUP BY project_id", terminal)
         stats = {r["project_id"]: (r["n"], r["done"]) for r in await cur.fetchall()}
     out = []
     for p in projects:
         if not include_archived and p["status"] == "archived":
             continue
         n, done = stats.get(p["id"], (0, 0))
-        p["post_count"] = n
-        p["progress"] = round(done / n * 100) if n else 0
+        p["item_count"] = n
+        p["post_count"] = n   # frontend moslashuvi (eski kalit)
+        p["progress"] = round((done or 0) / n * 100) if n else 0
         out.append(_normalize_project(p))
     return out
 
