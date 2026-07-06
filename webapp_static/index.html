@@ -187,13 +187,13 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .tile .num{font-size:24px;font-weight:700;line-height:1}.tile .tl{font-size:12px;color:var(--muted)}
   .rdot{width:8px;height:8px;border-radius:50%;flex:none}
   .next{background:var(--brand);color:#fff;border-radius:14px;padding:13px;margin-bottom:9px}
-  .tl2{display:flex;gap:11px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line);transition:background .15s}
-  .tl2:first-child{padding-top:4px}.tl2:last-child{border:none;padding-bottom:4px}
+  .tl2{display:flex;gap:13px;align-items:center;padding:13px 4px;border-bottom:1px solid var(--line);font-size:16px;line-height:1.35;transition:background .15s}
+  .tl2:first-child{padding-top:6px}.tl2:last-child{border:none;padding-bottom:6px}
   .tl2:active{background:var(--line)}
-  .tl2 .tm{font-size:13px;font-weight:600;color:var(--muted);width:46px;flex:none;font-variant-numeric:tabular-nums}
-  .tl2 .ic{width:22px;height:22px;flex:none;display:flex;align-items:center;justify-content:center}
-  .tl2 .ic i{font-size:18px}
-  .tl2 .tx{flex:1;min-width:0;font-size:15px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tl2 .tm{font-size:14px;font-weight:600;color:var(--muted);width:52px;flex:none;font-variant-numeric:tabular-nums}
+  .tl2 .ic{width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center}
+  .tl2 .ic i{font-size:20px}
+  .tl2 .tx{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis}
   .warn{background:var(--card);border-radius:14px;padding:11px 13px;margin-bottom:9px;display:flex;align-items:center;gap:10px;font-size:13px}
   .pulse{background:var(--card);border-radius:14px;padding:13px;display:flex;align-items:center;gap:14px;margin-bottom:10px}
   .qa{display:flex;gap:8px}.qa div{flex:1;background:var(--card);border-radius:12px;padding:10px;text-align:center;font-size:11px;color:var(--muted)}.qa i{font-size:19px;color:var(--brand);display:block;margin-bottom:3px}
@@ -401,33 +401,6 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .pcolors{display:flex;gap:9px;flex-wrap:wrap}
   .pcol{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2.5px solid transparent}
   .pcol.on{border-color:var(--text);box-shadow:0 0 0 2px var(--bg) inset}
-  /* ── Kanban ── */
-  .kbwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -2px}
-  .kboard{display:flex;gap:10px;min-width:min-content;padding:0 2px 4px}
-  .kcol{flex:0 0 200px;background:var(--soft);border-radius:12px;padding:9px;min-height:80px}
-  .kcol.kover{outline:2px dashed var(--brand);outline-offset:-2px}
-  .khead{font-size:12px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px;margin-bottom:9px;padding:0 2px}
-  .khead .kdot{width:9px;height:9px;border-radius:50%;flex:none}
-  .khead b{margin-left:auto;color:var(--faint)}
-  .kcards{display:flex;flex-direction:column;gap:7px}
-  .kcard{background:var(--card);border-radius:10px;padding:9px 10px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-  .kct{font-size:13px;font-weight:600;line-height:1.3;margin-bottom:5px}
-  .kct i{color:var(--brand);font-size:14px;vertical-align:-2px}
-  .kcm{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
-  .kempty{font-size:12px;color:var(--faint);text-align:center;padding:6px}
-  /* ── Table ── */
-  .tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:12px}
-  .ptable{width:100%;min-width:480px;border-collapse:collapse;font-size:13px}
-  .ptable th{text-align:left;padding:9px 11px;font-size:11px;font-weight:700;color:var(--muted);background:var(--soft);cursor:pointer;white-space:nowrap;text-transform:uppercase;letter-spacing:.3px}
-  .ptable td{padding:9px 11px;border-top:1px solid var(--line)}
-  .ptable tbody tr{cursor:pointer}
-  .ptable tbody tr:active{background:var(--soft)}
-  .ptable .tgrp td{background:var(--soft);font-weight:700;font-size:12px;color:var(--text)}
-  /* ── Item picker ── */
-  .ipick{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-  .ipk{background:var(--soft);border-radius:12px;padding:14px 10px;text-align:center;cursor:pointer;font-size:13px;font-weight:600}
-  .ipk i{display:block;font-size:22px;color:var(--brand);margin-bottom:6px}
-  @media(max-width:400px){.ptabs button{font-size:12px;padding:9px 4px;gap:3px}}
 </style>
 </head>
 <body>
@@ -879,8 +852,7 @@ async function renderProfile(box){
   const nameEl=box.querySelector("#phname");if(nameEl)nameEl.textContent=nm;
   const roleEl=box.querySelector("#phrole");if(roleEl)roleEl.textContent=roleLine;
   const avEl=box.querySelector("#phav");if(avEl)avEl.textContent=_initials(nm);
-  // Stats: paint only when data actually loaded — a failed fetch keeps the "·" placeholder
-  // rather than showing misleading zeros.
+  // Stats: paint only when data actually loaded — a failed fetch keeps the "·" placeholder.
   const st=await dashP,el=box.querySelector("#phstats");
   if(el&&st&&(st.radar||st.counts)){
     const r=st.radar||{},c=st.counts||{},over=r.overdue||0;
@@ -974,8 +946,7 @@ async function renderCalendar(box){
 }
 function calNav(delta){_calYM.m+=delta;if(_calYM.m<1){_calYM.m=12;_calYM.y--;}if(_calYM.m>12){_calYM.m=1;_calYM.y++;}render("calendar");}
 
-// ══ LOYIHALAR + KONTENT PLAN (Marketing Hub) ══
-// LEGACY FALLBACK — SMM postlari uchun. Dinamik _wf() ishlamasa (workflow yo'q/xato) ishlatiladi.
+// ══ LOYIHALAR + KONTENT PLAN (SMM) ══
 const CATCOL={biznes:"#16A34A",jamoa:"#7C3AED",bank:"#2f7ae5",chakana:"#E8A317"};
 const CATLBL={biznes:"Biznes",jamoa:"Jamoa (ichki)",bank:"Bank xizmatlari",chakana:"Chakana"};
 const _catCol=c=>CATCOL[c]||"#8a8a9e";
@@ -986,78 +957,7 @@ const STICON={reja:"clipboard-list",jarayonda:"progress",tekshiruvda:"eye",joyla
 const STOPA={joylandi:1,tekshiruvda:.82,jarayonda:.7,reja:.5,rad_etildi:.28,bekor:.28};
 const _stCol=s=>STCOL[s]||"#8a8a9e";
 const _stLbl=s=>STLBL[s]||s;
-
-// ── config_marketing.py bilan LOCKSTEP MIRROR (tests/marketing_hub_check.py drift'ni ushlaydi) ──
-const _MC={grey:"#8a8a9e",amber:"#E8A317",amber2:"#B45309",violet:"#7C3AED",blue:"#2f7ae5",navy:"#0C4A6E",green:"#16A34A",red:"#d64545",pink:"#E8557F",teal:"#0EA5A5"};
-const WORKFLOWS={
-  smm:[{key:"reja",label:"Reja",color:_MC.amber2},{key:"jarayonda",label:"Jarayonda",color:_MC.blue},{key:"tekshiruvda",label:"Tekshiruvda",color:_MC.violet},{key:"joylandi",label:"Joylandi",color:_MC.green},{key:"rad_etildi",label:"Rad etildi",color:_MC.red},{key:"bekor",label:"Bekor",color:_MC.grey}],
-  campaign:[{key:"brif",label:"Brif",color:_MC.grey},{key:"rejalashtirish",label:"Rejalashtirish",color:_MC.amber},{key:"ishlab_chiqarish",label:"Ishlab chiqarish",color:_MC.violet},{key:"tasdiqlash",label:"Tasdiqlash",color:_MC.blue},{key:"ishga_tushirish",label:"Ishga tushirish",color:_MC.teal},{key:"monitoring",label:"Monitoring",color:_MC.navy},{key:"hisobot",label:"Hisobot",color:_MC.green}],
-  pr:[{key:"qoralama",label:"Qoralama",color:_MC.grey},{key:"korib_chiqish",label:"Ko'rib chiqish",color:_MC.amber},{key:"tarqatish",label:"Tarqatish",color:_MC.blue},{key:"chop_etildi",label:"Chop etildi",color:_MC.green},{key:"qamrov",label:"Qamrov tahlili",color:_MC.teal}],
-  branding:[{key:"brif",label:"Brif",color:_MC.grey},{key:"dizayn",label:"Dizayn",color:_MC.violet},{key:"tasdiqlash",label:"Tasdiqlash",color:_MC.blue},{key:"ishlab_chiqarish",label:"Ishlab chiqarish",color:_MC.amber},{key:"ornatish",label:"O'rnatish",color:_MC.teal},{key:"foto_hisobot",label:"Foto-hisobot",color:_MC.green}],
-  roadmap:[{key:"tayyorlov",label:"Tayyorlov",color:_MC.grey},{key:"ishlab_chiqish",label:"Ishlab chiqish",color:_MC.violet},{key:"tasdiqlash",label:"Tasdiqlash",color:_MC.blue},{key:"ishga_tushirish",label:"Ishga tushirish",color:_MC.teal},{key:"monitoring",label:"Monitoring",color:_MC.navy},{key:"hisobot",label:"Hisobot",color:_MC.green}],
-  simple:[{key:"todo",label:"Bajarilishi kerak",color:_MC.grey},{key:"in_progress",label:"Jarayonda",color:_MC.blue},{key:"done",label:"Bajarildi",color:_MC.green}]
-};
-const PROJECT_TYPES={
-  smm:{label:"SMM kontent",icon:"brand-instagram",default_view:"calendar",workflow:"smm"},
-  campaign:{label:"Marketing kampaniya",icon:"speakerphone",default_view:"kanban",workflow:"campaign"},
-  pr:{label:"PR loyiha",icon:"news",default_view:"kanban",workflow:"pr"},
-  branding:{label:"Brending",icon:"palette",default_view:"kanban",workflow:"branding"},
-  event:{label:"Tadbir (Event)",icon:"calendar-event",default_view:"table",workflow:"simple"},
-  roadmap:{label:"Roadmap",icon:"route",default_view:"table",workflow:"roadmap"},
-  media_plan:{label:"Media plan",icon:"device-tv",default_view:"table",workflow:"campaign"},
-  custom:{label:"Universal",icon:"folder",default_view:"table",workflow:"simple"}
-};
-const ITEM_TYPES={
-  post:{label:"Post",icon:"photo"},task:{label:"Vazifa",icon:"checkbox"},milestone:{label:"Milestone",icon:"flag"},
-  note:{label:"Qayd",icon:"note"},media_placement:{label:"Media joylashtirish",icon:"device-tv"},
-  pr_material:{label:"PR material",icon:"news"},design:{label:"Dizayn",icon:"palette"},report:{label:"Hisobot",icon:"report"},
-  approval:{label:"Tasdiqlash",icon:"check"},event:{label:"Tadbir",icon:"calendar-event"},risk:{label:"Risk",icon:"alert-triangle"}
-};
-const PROJECT_ITEM_TYPES={
-  smm:["post","task","milestone","note"],campaign:["media_placement","task","report","approval","milestone"],
-  pr:["pr_material","task","report","approval"],branding:["design","task","approval","report"],
-  event:["task","milestone","note"],roadmap:["milestone","task","report"],
-  media_plan:["media_placement","task","report"],custom:["task","milestone","note"]
-};
-const ITEM_FIELDS={
-  post:[{key:"format",label:"Format",kind:"text"},{key:"platform",label:"Platforma",kind:"text"},{key:"hashtags",label:"Hashteglar",kind:"text"},{key:"published_url",label:"Joylangan havola",kind:"url"},{key:"reject_reason",label:"Rad sababi",kind:"text"}],
-  media_placement:[{key:"channel",label:"Kanal",kind:"select",options:["TV","Radio","Outdoor","SMM","Mobil ilova","SMS","Filial","PR"]},{key:"budget",label:"Byudjet",kind:"number"},{key:"placement",label:"Joylashuv",kind:"text"},{key:"vendor",label:"Pudratchi",kind:"text"},{key:"launch_date",label:"Boshlanish sanasi",kind:"date"}],
-  pr_material:[{key:"media_name",label:"OAV nomi",kind:"text"},{key:"material_type",label:"Material turi",kind:"text"},{key:"speaker",label:"Spiker",kind:"text"},{key:"journalist",label:"Jurnalist",kind:"text"},{key:"coverage_link",label:"Chiqish havolasi",kind:"url"}],
-  design:[{key:"object_type",label:"Obyekt turi",kind:"text"},{key:"location",label:"Manzil",kind:"text"},{key:"size",label:"O'lcham",kind:"text"},{key:"contractor",label:"Pudratchi",kind:"text"}],
-  report:[{key:"report_url",label:"Hisobot havolasi",kind:"url"}],
-  task:[],milestone:[],note:[],approval:[],
-  event:[{key:"venue",label:"Joy",kind:"text"}],
-  risk:[{key:"impact",label:"Ta'sir darajasi",kind:"select",options:["Past","O'rta","Yuqori"]}]
-};
-const TEMPLATES=[
-  {id:"smm_calendar",label:"SMM Content Calendar",type:"smm",icon:"brand-instagram",color:_MC.green,default_view:"calendar"},
-  {id:"campaign_360",label:"360 Marketing Campaign",type:"campaign",icon:"speakerphone",color:_MC.violet,default_view:"kanban"},
-  {id:"pr_campaign",label:"PR Campaign",type:"pr",icon:"news",color:_MC.blue,default_view:"kanban"},
-  {id:"branding_project",label:"Branding Project",type:"branding",icon:"palette",color:_MC.pink,default_view:"kanban"},
-  {id:"event_management",label:"Event Management",type:"event",icon:"calendar-event",color:_MC.amber,default_view:"table"},
-  {id:"media_plan",label:"Media Plan",type:"media_plan",icon:"device-tv",color:_MC.navy,default_view:"table"},
-  {id:"roadmap_project",label:"Roadmap Project",type:"roadmap",icon:"route",color:_MC.teal,default_view:"table"},
-  {id:"influencer_campaign",label:"Influencer Campaign",type:"campaign",icon:"user-star",color:_MC.pink,default_view:"kanban"},
-  {id:"product_launch",label:"Product Launch",type:"roadmap",icon:"rocket",color:_MC.red,default_view:"table"},
-  {id:"internal_comm",label:"Internal Communication Plan",type:"custom",icon:"messages",color:_MC.grey,default_view:"table"},
-  {id:"blank",label:"Bo'sh loyiha",type:"custom",icon:"folder",color:"#6C5CE7",default_view:"table"}
-];
-// ── Dinamik workflow resolverlar (har loyiha o'z statuslariga ega) ──
-function _wf(proj){
-  try{const w=typeof proj.workflow==="string"?JSON.parse(proj.workflow):proj.workflow;
-      if(w&&w.statuses&&w.statuses.length)return w.statuses;}catch(e){}
-  const key=(PROJECT_TYPES[proj.type]||{}).workflow;
-  return WORKFLOWS[key]||WORKFLOWS.smm;
-}
-const _stList=proj=>_wf(proj);
-function _stColor(proj,key){const s=_wf(proj).find(x=>x.key===key);return s?s.color:(STCOL[key]||"#8a8a9e");}
-function _stLabel(proj,key){const s=_wf(proj).find(x=>x.key===key);return s?s.label:(STLBL[key]||key);}
-function _stOpacity(proj,key){if(key in STOPA)return STOPA[key];const st=_wf(proj);const i=st.findIndex(x=>x.key===key);return i<0?.6:(0.45+0.55*(i+1)/st.length);}
-const itemTypesFor=t=>PROJECT_ITEM_TYPES[t]||PROJECT_ITEM_TYPES.custom;
-const fieldsFor=it=>ITEM_FIELDS[it]||[];
-// default_view → tab kaliti (dastlab ochiladigan tab)
-const _VIEW2TAB={calendar:"cal",dashboard:"dash",kanban:"kanban",table:"table"};
-let _proj=null,_projTab="cal",_cYM=null,_cOff=new Set(),_PROJS=[],_tblSort={col:"primary_date",dir:1},_tblGroup="";
+let _proj=null,_projTab="cal",_cYM=null,_cOff=new Set(),_PROJS=[];
 
 // ── dispatcher: loyiha tanlanmagan → ro'yxat; tanlangan → detal ──
 async function renderContent(box){ return _proj ? renderProjDetail(box) : renderProjList(box); }
@@ -1075,140 +975,33 @@ async function renderProjList(box){
   h+=`<button class="btn pri" style="width:100%;margin-top:8px" onclick="projEdit({})"><i class="ti ti-plus"></i> Loyiha qo'shish</button>`;
   box.innerHTML=h;
 }
-async function openProj(id){
-  let p=_PROJS.find(x=>x.id===id);
-  if(!p){try{_PROJS=(await api("/projects")).projects||[];p=_PROJS.find(x=>x.id===id);}catch(e){}}
-  _proj=p||{id,name:"Loyiha",type:"smm",default_view:"calendar"};
-  _projTab=_VIEW2TAB[_proj.default_view]||"cal";
-  if(!_projTabs().some(x=>x.k===_projTab))_projTab=_projTabs()[0].k;   // stale-tab guard
-  render("content");
-}
+function openProj(id){_proj=(_PROJS.find(p=>p.id===id))||{id,name:"Loyiha"};_projTab="cal";render("content");}
 function backToProjects(){_proj=null;render("content");}
 function projTab(t){_projTab=t;render("content");}
-// Tab RO'YXATI type-driven (qaysi tablar ko'rinadi). Dastlabki tab default_view-driven (openProj).
-function _projTabs(){
-  const cal={k:"cal",lbl:"Kalendar",icon:"calendar-month"};
-  const base=[{k:"dash",lbl:"Overview",icon:"chart-pie"},{k:"kanban",lbl:"Kanban",icon:"layout-kanban"},{k:"table",lbl:"Jadval",icon:"table"}];
-  const t=_proj.type||"smm";
-  return (t==="smm"||t==="content")?[base[0],cal,base[1],base[2]]:base;
-}
 async function renderProjDetail(box){
   box.innerHTML=`<div class="head"><div style="display:flex;align-items:center;gap:10px;min-width:0">
       <button class="icobtn" onclick="backToProjects()"><i class="ti ti-arrow-left"></i></button>
       <h1 style="font-size:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(_proj.name||"Loyiha")}</h1></div>
       <button class="icobtn" onclick="projEdit(_proj)" title="Tahrir"><i class="ti ti-edit"></i></button></div>
-    <div class="ptabs">${_projTabs().map(t=>`<button class="${_projTab===t.k?'on':''}" onclick="projTab('${t.k}')"><i class="ti ti-${t.icon}"></i> ${t.lbl}</button>`).join("")}</div>
+    <div class="ptabs">
+      <button class="${_projTab==='dash'?'on':''}" onclick="projTab('dash')"><i class="ti ti-chart-pie"></i> Dashboard</button>
+      <button class="${_projTab==='cal'?'on':''}" onclick="projTab('cal')"><i class="ti ti-calendar-month"></i> Kalendar</button></div>
     <div id="ptb"></div>`;
   const tb=$("ptb");
-  const R={dash:renderProjDash,cal:renderProjCal,kanban:renderProjKanban,table:renderProjTable};
-  await (R[_projTab]||renderProjCal)(tb);
+  if(_projTab==="dash")await renderProjDash(tb);else await renderProjCal(tb);
 }
-// ── KANBAN TAB ──
-async function renderProjKanban(box){
-  const items=(await api(`/projects/${encodeURIComponent(_proj.id)}/items`)).items||[];
-  items.forEach(i=>CACHE.content[i.id]=i);
-  const cols=_stList(_proj);const byStatus={};cols.forEach(c=>byStatus[c.key]=[]);
-  items.forEach(i=>{(byStatus[i.status]=byStatus[i.status]||[]).push(i);});
-  Object.values(byStatus).forEach(a=>a.sort((x,y)=>(x.order_index||0)-(y.order_index||0)));
-  box.innerHTML=`<div class="kbwrap"><div class="kboard">${cols.map(c=>`
-    <div class="kcol" data-st="${esc(c.key)}" ondragover="kOver(event)" ondragleave="kLeave(event)" ondrop="kDrop(event,'${esc(c.key)}')">
-      <div class="khead"><span class="kdot" style="background:${c.color}"></span>${esc(c.label)} <b>${(byStatus[c.key]||[]).length}</b></div>
-      <div class="kcards">${(byStatus[c.key]||[]).map(kCard).join("")||'<div class="kempty">—</div>'}</div>
-    </div>`).join("")}</div></div>
-    <button class="btn pri" style="width:100%;margin-top:12px" onclick="itemAdd()"><i class="ti ti-plus"></i> Item qo'shish</button>`;
-}
-function kCard(i){const it=ITEM_TYPES[i.type]||{icon:"circle",label:i.type};
-  return `<div class="kcard" draggable="true" ondragstart="kDrag(event,'${i.id}')" onclick="itemOpen('${i.id}')">
-    <div class="kct"><i class="ti ti-${it.icon}"></i> ${esc(i.title)}</div>
-    <div class="kcm">${i.assignee?`<span><i class="ti ti-user" style="font-size:11px"></i> ${esc(i.assignee)}</span>`:''}${i.primary_date?`<span><i class="ti ti-calendar" style="font-size:11px"></i> ${esc(String(i.primary_date).slice(5,10))}</span>`:''}</div></div>`;
-}
-let _kDragId=null;
-function kDrag(e,id){_kDragId=id;e.dataTransfer.effectAllowed="move";}
-function kOver(e){e.preventDefault();e.currentTarget.classList.add("kover");}
-function kLeave(e){e.currentTarget.classList.remove("kover");}
-async function kDrop(e,status){e.preventDefault();e.currentTarget.classList.remove("kover");
-  if(!_kDragId)return;const id=_kDragId;_kDragId=null;
-  try{await api(`/items/${id}/move`,{method:"POST",body:JSON.stringify({status})});render("content");}
-  catch(err){flash("⚠️ "+err.message);}}
-
-// ── TABLE TAB ──
-const _TCOLS=[{k:"title",l:"Nomi"},{k:"type",l:"Tur"},{k:"status",l:"Holat"},{k:"assignee",l:"Mas'ul"},{k:"primary_date",l:"Sana"}];
-async function renderProjTable(box){
-  const items=(await api(`/projects/${encodeURIComponent(_proj.id)}/items`)).items||[];
-  items.forEach(i=>CACHE.content[i.id]=i);
-  const s=_tblSort;items.sort((a,b)=>(((a[s.col]||"")+"").localeCompare((b[s.col]||"")+""))*s.dir);
-  let rows="";
-  if(_tblGroup){const groups={};items.forEach(i=>{const g=(i[_tblGroup]||"—")+"";(groups[g]=groups[g]||[]).push(i);});
-    rows=Object.keys(groups).sort().map(g=>{const lbl=_tblGroup==="status"?_stLabel(_proj,g):(_tblGroup==="type"?((ITEM_TYPES[g]||{}).label||g):g);
-      return `<tr class="tgrp"><td colspan="${_TCOLS.length}">${esc(lbl)} · ${groups[g].length}</td></tr>`+groups[g].map(_trow).join("");}).join("");
-  }else rows=items.map(_trow).join("");
-  box.innerHTML=`<div style="display:flex;gap:7px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
-    <span style="font-size:12px;color:var(--muted)">Guruh:</span>
-    ${["","status","assignee","type"].map(g=>`<span class="cf ${_tblGroup===g?'':'off'}" onclick="tblGroup('${g}')">${g?({status:"Holat",assignee:"Mas'ul",type:"Tur"}[g]):"Yo'q"}</span>`).join("")}</div>
-    <div class="tblwrap"><table class="ptable"><thead><tr>${_TCOLS.map(c=>`<th onclick="tblSort('${c.k}')">${c.l}${_tblSort.col===c.k?(_tblSort.dir>0?" ▲":" ▼"):""}</th>`).join("")}</tr></thead>
-    <tbody>${rows||`<tr><td colspan="${_TCOLS.length}" style="color:var(--faint);text-align:center;padding:16px">Item yo'q</td></tr>`}</tbody></table></div>
-    <button class="btn pri" style="width:100%;margin-top:12px" onclick="itemAdd()"><i class="ti ti-plus"></i> Item qo'shish</button>`;
-}
-function _trow(i){const it=ITEM_TYPES[i.type]||{label:i.type};
-  return `<tr onclick="itemOpen('${i.id}')"><td>${esc(i.title)}</td><td>${esc(it.label)}</td>
-    <td><span class="stbadge" style="background:${_stColor(_proj,i.status)};font-size:9px">${esc(_stLabel(_proj,i.status))}</span></td>
-    <td>${esc(i.assignee||"—")}</td><td>${i.primary_date?esc(String(i.primary_date).slice(0,10)):"—"}</td></tr>`;
-}
-function tblSort(col){if(_tblSort.col===col)_tblSort.dir*=-1;else _tblSort={col,dir:1};render("content");}
-function tblGroup(g){_tblGroup=g;render("content");}
-
-// ── ITEM QO'SHISH (universal type-picker + generic forma) ──
-function itemAdd(date){const types=itemTypesFor(_proj.type||"smm");
-  if(types.length===1){itemNew(types[0],date);return;}
-  openM(`<h3>Yangi item</h3><div style="font-size:13px;color:var(--muted);margin-bottom:12px">Turini tanlang</div>
-    <div class="ipick">${types.map(t=>{const it=ITEM_TYPES[t]||{label:t,icon:"circle"};
-      return `<div class="ipk" onclick="itemNew('${t}',${date?`'${date}'`:'null'})"><i class="ti ti-${it.icon}"></i><span>${esc(it.label)}</span></div>`;}).join("")}</div>`);}
-function itemNew(type,date){if(type==="post"){cEdit(date?{date}:{});return;}itemEdit({type,primary_date:date||""});}
-function itemOpen(id){const i=CACHE.content[id];if(!i)return;i.type==="post"?cEdit(_item2post(i)):itemEdit(i);}
-function _item2post(i){const f=i.fields||{};return {id:i.id,date:i.primary_date,category:i.category,topic:i.title,message:i.description,status:i.status,assignee:i.assignee,format:f.format,platform:f.platform,hashtags:f.hashtags,published_url:f.published_url,reject_reason:f.reject_reason};}
-function itemEdit(i){i=i||{};const type=i.type||"task";const f=i.fields||{};const its=ITEM_TYPES[type]||{label:type};const sts=_stList(_proj);
-  openM(`<h3>${i.id?"Tahrirlash":its.label+" — yangi"}</h3>
-    <label>Nomi</label><input id="it_title" value="${esc(i.title)}" placeholder="${esc(its.label)} nomi">
-    <div style="display:flex;gap:10px"><div style="flex:1"><label>Holat</label><select id="it_status">${sts.map(s=>`<option value="${s.key}" ${i.status===s.key?"selected":""}>${esc(s.label)}</option>`).join("")}</select></div>
-      <div style="flex:1"><label>Sana</label><input type="date" id="it_date" value="${esc(i.primary_date)}"></div></div>
-    <label>Mas'ul</label><select id="it_asg">${selOpts(META.contacts,i.assignee,"— Mas'ulsiz —")}</select>
-    ${fieldsFor(type).map(fd=>`<label>${esc(fd.label)}</label>${
-      fd.kind==="select"?`<select id="itf_${fd.key}"><option value=""></option>${(fd.options||[]).map(o=>`<option ${f[fd.key]===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`
-      :fd.kind==="date"?`<input type="date" id="itf_${fd.key}" value="${esc(f[fd.key])}">`
-      :fd.kind==="number"?`<input type="number" id="itf_${fd.key}" value="${esc(f[fd.key])}">`
-      :`<input id="itf_${fd.key}" value="${esc(f[fd.key])}" placeholder="${esc(fd.label)}">`}`).join("")}
-    <label>Izoh</label><textarea id="it_desc">${esc(i.description)}</textarea>
-    <div class="macts">${i.id?`<button class="btn dang" onclick="itemDel('${i.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="itemSave('${i.id||""}','${type}')">Saqlash</button></div>`);}
-async function itemSave(id,type){
-  const fields={};fieldsFor(type).forEach(fd=>{const v=val(`itf_${fd.key}`);if(v!=="")fields[fd.key]=v;});
-  const b={type,title:val("it_title"),status:val("it_status"),primary_date:val("it_date"),assignee:val("it_asg"),description:val("it_desc"),fields};
-  if(!b.title)return flash("Nom kerak");
-  try{await api(id?`/items/${id}`:`/projects/${_proj.id}/items`,{method:id?"PATCH":"POST",body:JSON.stringify(b)});flash("Saqlandi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}}
-function itemDel(id){const run=async()=>{try{await api(`/items/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();render("content");}catch(e){flash("⚠️ "+e.message);}};
-  if(tg?.showConfirm)tg.showConfirm("Item o'chirilsinmi?",ok=>{if(ok)run()});else if(confirm("Item o'chirilsinmi?"))run();}
-
 // ── LOYIHA FORMASI ──
 const PCOLORS=["#6C5CE7","#16A34A","#2f7ae5","#E8A317","#d64545","#0C4A6E","#b060d0","#E8557F"];
-function projEdit(p){p=p||{};const cur=p.color||"#6C5CE7";const isNew=!p.id;
-  const _vlbl={calendar:"Kalendar",kanban:"Kanban",table:"Jadval",dashboard:"Overview"};
-  openM(`<h3>${p.id?"Loyihani tahrirlash":"Yangi loyiha"}</h3>
-  ${isNew?`<label>Shablon</label><select id="p_tpl" onchange="projTplChange()"><option value="">— Bo'sh —</option>${TEMPLATES.map(t=>`<option value="${t.id}">${esc(t.label)}</option>`).join("")}</select>`:""}
+function projEdit(p){p=p||{};const cur=p.color||"#6C5CE7";openM(`<h3>${p.id?"Loyihani tahrirlash":"Yangi loyiha"}</h3>
   <label>Nomi</label><input id="p_name" value="${esc(p.name)}" placeholder="Masalan: Agrobank SMM">
   <label>Tavsif</label><textarea id="p_desc">${esc(p.description)}</textarea>
-  <div style="display:flex;gap:10px"><div style="flex:1"><label>Tur</label><select id="p_type">${Object.keys(PROJECT_TYPES).map(t=>`<option value="${t}" ${(p.type||'smm')===t?"selected":""}>${esc(PROJECT_TYPES[t].label)}</option>`).join("")}</select></div>
-    <div style="flex:1"><label>Ko'rinish</label><select id="p_view">${["calendar","kanban","table","dashboard"].map(v=>`<option value="${v}" ${(p.default_view||'calendar')===v?"selected":""}>${_vlbl[v]}</option>`).join("")}</select></div></div>
   <label>Rang</label><div class="pcolors" id="p_colors">${PCOLORS.map(c=>`<span class="pcol ${c===cur?'on':''}" style="background:${c}" data-c="${c}" onclick="pPickColor(this)"></span>`).join("")}</div>
   <input type="hidden" id="p_color" value="${esc(cur)}">
   <label>Holat</label><select id="p_status"><option value="active" ${(p.status||'active')==='active'?'selected':''}>Faol</option><option value="archived" ${p.status==='archived'?'selected':''}>Arxiv</option></select>
   <div class="macts">${p.id?`<button class="btn dang" onclick="projDel('${p.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="projSave('${p.id||""}')">Saqlash</button></div>`);}
-function projTplChange(){const id=val("p_tpl");if(!id)return;const t=TEMPLATES.find(x=>x.id===id);if(!t)return;
-  const ty=$("p_type");if(ty)ty.value=t.type;const vw=$("p_view");if(vw)vw.value=t.default_view;
-  $("p_color").value=t.color;document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.toggle("on",x.getAttribute("data-c")===t.color));
-  const nm=$("p_name");if(nm&&!nm.value)nm.value=t.label;}
 function pPickColor(el){document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.remove("on"));el.classList.add("on");$("p_color").value=el.getAttribute("data-c");}
-async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status"),type:val("p_type"),default_view:val("p_view")};
+async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status")};
   if(!b.name)return flash("Nom kerak");
-  if(!id){const tpl=val("p_tpl");if(tpl)b.template_id=tpl;}   // workflow/icon backend'da type'dan olinadi
   try{const r=await api(id?`/projects/${id}`:"/projects",{method:id?"PATCH":"POST",body:JSON.stringify(b)});
     flash("Saqlandi");closeM();if(_proj)_proj={..._proj,...b};render("content");}catch(e){flash("⚠️ "+e.message);}}
 function projDel(id){const run=async()=>{try{await api(`/projects/${id}`,{method:"DELETE"});flash("O'chirildi");closeM();_proj=null;render("content");}catch(e){flash("⚠️ "+e.message);}};
@@ -1312,53 +1105,29 @@ function _donut(data,colorFn,labelFn){const total=data.reduce((s,d)=>s+d[1],0)||
 function _hbars(data,labelFn){const max=Math.max(1,...data.map(d=>d[1]));
   return data.slice(0,6).map(([l,n])=>`<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px"><span>${esc(labelFn?labelFn(l):l)}</span><b style="color:var(--brand)">${n}</b></div><div class="tbar"><i style="width:${Math.round(n/max*100)}%;background:var(--brand)"></i></div></div>`).join("");
 }
-// Terminal statuslar: muvaffaqiyatli tugagan (progress numeratori) va bekor/rad (maxrajidan chiqadi).
-const _DONE_ST=new Set(["joylandi","done","chop_etildi","foto_hisobot","hisobot"]);
-const _DEAD_ST=new Set(["bekor","rad_etildi"]);
-// Overview — HAR loyihaning turi va workflow'iga qarab quriladi (item-asosli), SMM'ga
-// esa qo'shimcha kontent grafiklari (kategoriya/format/platforma/haftalik) ko'rsatiladi.
 async function renderProjDash(box){
-  const isSMM=(_proj.type==="smm"||_proj.type==="content"||!_proj.type);
-  const items=(await api(`/projects/${encodeURIComponent(_proj.id)}/items`)).items||[];
-  const wf=_wf(_proj);const today=new Date().toISOString().slice(0,10);
-  const total=items.length;const cnt={};wf.forEach(s=>cnt[s.key]=0);
-  let done=0,dead=0;const byAsg={},byType={};const overdueItems=[];
-  items.forEach(i=>{cnt[i.status]=(cnt[i.status]||0)+1;
-    if(_DONE_ST.has(i.status))done++;else if(_DEAD_ST.has(i.status))dead++;
-    else if(i.primary_date&&i.primary_date<today)overdueItems.push(i);
-    byAsg[i.assignee||"—"]=(byAsg[i.assignee||"—"]||0)+1;byType[i.type]=(byType[i.type]||0)+1;});
-  const planned=total-dead;const progress=planned?Math.round(done/planned*100):0;
-  const kpi=(n,l,col)=>`<div class="kpi"><div class="kn" style="color:${col||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
-  const pt=PROJECT_TYPES[_proj.type||'smm']||{};
-  const col=_proj.color||'#6C5CE7';
-  let h=`<div class="card" style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-      <span style="width:36px;height:36px;border-radius:11px;flex:none;display:flex;align-items:center;justify-content:center;background:${esc(col)}22;color:${esc(col)}"><i class="ti ti-${esc(pt.icon||'folder')}" style="font-size:20px"></i></span>
-      <div style="flex:1;min-width:0"><div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(_proj.name||'Loyiha')}</div>
-      <div style="font-size:12px;color:var(--muted)">${esc(pt.label||'')}${_proj.status==='archived'?" · Arxiv":""}</div></div></div>
-    <div class="kpis">
-      ${kpi(total,isSMM?"Jami post":"Jami item")}
-      ${kpi(done,"Bajarilgan","var(--green)")}
-      ${kpi(overdueItems.length,"Kechikkan","var(--red)")}
-      ${kpi(progress+"%","Bajarilish","var(--brand)")}</div>
+  const d=await api(`/projects/${encodeURIComponent(_proj.id)}/dashboard`);
+  const st=d.status||{};const kpi=(n,l,col)=>`<div class="kpi"><div class="kn" style="color:${col||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
+  const wd=["Yak","Du","Se","Ch","Pa","Ju","Sh"];
+  const wmax=Math.max(1,...(d.weekly_published||[]).map(w=>w.count));
+  const wbars=(d.weekly_published||[]).map(w=>{const dt=new Date(w.week+"T00:00");const lbl=isNaN(dt)?"":(dt.getDate()+"/"+(dt.getMonth()+1));
+    return `<div class="col"><div class="b" style="height:${Math.round(w.count/wmax*100)}px" title="${w.count}"></div><small>${lbl}</small></div>`}).join("");
+  box.innerHTML=`<div class="kpis">
+      ${kpi(d.total||0,"Jami post")}
+      ${kpi(st.joylandi||0,"Joylandi","var(--green)")}
+      ${kpi(st.jarayonda||0,"Jarayonda","#2f7ae5")}
+      ${kpi(st.reja||0,"Reja","#B45309")}
+      ${kpi(st.rad_etildi||0,"Rad etildi","var(--red)")}
+      ${kpi((d.progress||0)+"%","Bajarilish","var(--brand)")}</div>
     <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Holatlar bo'yicha</div>
-      ${_donut(wf.map(s=>[s.key,cnt[s.key]||0]),k=>_stColor(_proj,k),k=>_stLabel(_proj,k))}</div>`;
-  const typeData=Object.entries(byType).sort((a,b)=>b[1]-a[1]);
-  if(typeData.length>1)h+=`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Turlar bo'yicha</div>${_hbars(typeData,t=>(ITEM_TYPES[t]||{}).label||t)}</div>`;
-  const asgData=Object.entries(byAsg).filter(a=>a[0]!=='—').sort((a,b)=>b[1]-a[1]);
-  if(asgData.length)h+=`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Mas'ullar yuklamasi</div>${_hbars(asgData)}</div>`;
-  if(overdueItems.length)h+=`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:10px"><i class="ti ti-alert-triangle" style="color:var(--red);vertical-align:-2px"></i> Kechikkan (${overdueItems.length})</div>${overdueItems.slice(0,8).map(i=>`<div class="tl2" onclick="itemOpen('${i.id}')"><span class="tm">${esc(String(i.primary_date).slice(5,10))}</span><span class="ic"><i class="ti ti-${(ITEM_TYPES[i.type]||{}).icon||'circle'}" style="color:${_stColor(_proj,i.status)}"></i></span><span class="tx">${esc(i.title)}</span></div>`).join("")}</div>`;
-  if(isSMM){   // SMM'ga xos qo'shimcha kontent analitikasi
-    try{const d=await api(`/projects/${encodeURIComponent(_proj.id)}/dashboard`);
-      const wmax=Math.max(1,...(d.weekly_published||[]).map(w=>w.count));
-      const wbars=(d.weekly_published||[]).map(w=>{const dt=new Date(w.week+"T00:00");const lbl=isNaN(dt)?"":(dt.getDate()+"/"+(dt.getMonth()+1));
-        return `<div class="col"><div class="b" style="height:${Math.round(w.count/wmax*100)}px" title="${w.count}"></div><small>${lbl}</small></div>`}).join("");
-      h+=`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar</div>${_donut(d.by_category||[],_catCol,_catLbl)}</div>
-        <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Joylangan postlar (haftalik)</div><div class="bar">${wbars}</div></div>
-        <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Formatlar</div>${_hbars(d.by_format||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
-        <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Platformalar</div>${_hbars(d.by_platform||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>`;
-    }catch(e){}
-  }
-  box.innerHTML=h;
+      ${_donut(Object.keys(STLBL).map(s=>[s,st[s]||0]),_stCol,_stLbl)}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Kategoriyalar</div>
+      ${_donut(d.by_category||[],_catCol,_catLbl)}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Joylangan postlar (haftalik)</div>
+      <div class="bar">${wbars}</div></div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Formatlar</div>${_hbars(d.by_format||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
+    <div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Platformalar</div>${_hbars(d.by_platform||[])||'<span style="color:var(--faint);font-size:12px">Ma\'lumot yo\'q</span>'}</div>
+    ${(d.by_assignee&&d.by_assignee.filter(a=>a[0]!=='—').length)?`<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:12px">Mas'ullar yuklamasi</div>${_hbars(d.by_assignee.filter(a=>a[0]!=='—'))}</div>`:''}`;
 }
 
 function pickImport(){const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx,.csv";
