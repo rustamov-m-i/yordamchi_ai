@@ -126,13 +126,20 @@ BTN_SETTINGS = "⚙️ Sozlamalar"
 
 
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Persistent main menu — daily executive workflow."""
+    """Persistent main menu — daily executive workflow.
+
+    Discoverability: Ijrochilar / Risklar / Statistika endi bosh menyuda
+    (avval faqat Cockpit drill-down orqali topilardi). Routing o'zgармaydi —
+    handle_main_reply_button allaqachon bu labellarni dispatch qiladi.
+    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_COCKPIT), KeyboardButton(text=BTN_TODAY)],
-            [KeyboardButton(text=BTN_TASKS), KeyboardButton(text=BTN_REMINDERS)],
-            [KeyboardButton(text=BTN_MEETINGS), KeyboardButton(text=BTN_NEW)],
-            [KeyboardButton(text=BTN_SEARCH), KeyboardButton(text=BTN_SETTINGS)],
+            [KeyboardButton(text=BTN_TASKS), KeyboardButton(text=BTN_MEETINGS)],
+            [KeyboardButton(text=BTN_TEAM), KeyboardButton(text=BTN_RISKS)],
+            [KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_REMINDERS)],
+            [KeyboardButton(text=BTN_NEW), KeyboardButton(text=BTN_SEARCH),
+             KeyboardButton(text=BTN_SETTINGS)],
         ],
         resize_keyboard=True,
         is_persistent=True,
