@@ -394,6 +394,11 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .kaddcol{flex:0 0 130px;width:130px;background:transparent}
   .kaddc{width:100%;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;padding:11px 8px;border-radius:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
   .kaddc:hover{border-color:var(--brand);color:var(--brand)}
+  /* Overview filtrlari */
+  .ovf{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  .ovf select{font:inherit;font-size:12.5px;font-weight:600;padding:7px 28px 7px 12px;border-radius:20px;border:1px solid var(--line);background:var(--card);color:var(--muted);cursor:pointer;max-width:47%}
+  .ovf select.on{border-color:var(--brand);color:var(--brand-d);background:var(--brand-soft)}
+  .ovfx{font:inherit;font-size:12px;font-weight:600;border:none;background:transparent;color:var(--red);cursor:pointer;display:inline-flex;align-items:center;gap:3px;padding:6px 4px}
   .kcards{display:flex;flex-direction:column;gap:7px;min-height:8px}
   .kcard{background:var(--card);border-radius:10px;padding:9px 10px;box-shadow:0 1px 2px rgba(20,20,45,.06);cursor:grab}
   .kcard:active{cursor:grabbing}
@@ -412,6 +417,12 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .ptable td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:middle;cursor:pointer}
   .ptable tr:hover td{background:var(--soft)}
   .ptable .tgrp td{background:var(--soft);font-weight:700;font-size:12px;cursor:default}
+  .ptable tr.wfhdr td{cursor:grab;-webkit-user-select:none;user-select:none}
+  .ptable tr.wfhdr .wfdot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:1px;margin-right:6px}
+  .ptable tr.wfdrag{opacity:.5}
+  .ptable tr.wfover td{box-shadow:inset 0 2px 0 var(--brand)}
+  .ptable tr.addwf td{color:var(--muted);cursor:pointer;font-weight:600}
+  .ptable tr.addwf td:hover{color:var(--brand)}
   .ptable tr.rrow{cursor:grab;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .ptable tr.rrow.dragging{cursor:grabbing}
   .ptable tr.dragging{opacity:.5;background:var(--soft)}
@@ -1004,7 +1015,7 @@ async function renderProjList(box){
   box.innerHTML=h;
 }
 const _VIEWTAB={dashboard:"dash",calendar:"cal",kanban:"kanban",table:"table"};
-function openProj(id){_proj=(_PROJS.find(p=>p.id===id))||{id,name:"Loyiha",type:"smm"};_projTab=_VIEWTAB[_proj.default_view]||"kanban";_cYM=null;render("content");}
+function openProj(id){_proj=(_PROJS.find(p=>p.id===id))||{id,name:"Loyiha",type:"smm"};_projTab=_VIEWTAB[_proj.default_view]||"kanban";_cYM=null;_grp="none";_ovF={status:"",assignee:"",type:"",ym:""};render("content");}
 function backToProjects(){_proj=null;_projTab=null;render("content");}
 function projTab(t){_projTab=t;render("content");}
 
@@ -1033,8 +1044,17 @@ async function _items(extra){
 }
 
 // ── OVERVIEW (item-asosli agregatsiya) ──
+let _ovF={status:"",assignee:"",type:"",ym:""};
+function ovSet(){_ovF={status:val("ovf_status"),assignee:val("ovf_asg"),type:val("ovf_type"),ym:val("ovf_ym")};render("content");}
+function ovClear(){_ovF={status:"",assignee:"",type:"",ym:""};render("content");}
 async function renderProjOverview(box){
-  const items=await _items();const wf=_wf(_proj);
+  const all=await _items();const wf=_wf(_proj);
+  // filtr variantlari — butun (filtrlanmagan) to'plamdan
+  const asgs=[...new Set(all.map(i=>i.assignee).filter(Boolean))].sort();
+  const types=[...new Set(all.map(i=>i.type))];
+  const yms=[...new Set(all.map(i=>i.primary_date?String(i.primary_date).slice(0,7):null).filter(Boolean))].sort();
+  const items=all.filter(i=>(!_ovF.status||i.status===_ovF.status)&&(!_ovF.assignee||i.assignee===_ovF.assignee)
+    &&(!_ovF.type||i.type===_ovF.type)&&(!_ovF.ym||String(i.primary_date||"").slice(0,7)===_ovF.ym));
   const bySt={};wf.forEach(s=>bySt[s.key]=0);const byType={},byAsg={};let done=0;
   items.forEach(it=>{bySt[it.status]=(bySt[it.status]||0)+1;
     const tl=_itype(it.type).label;byType[tl]=(byType[tl]||0)+1;
@@ -1042,7 +1062,15 @@ async function renderProjOverview(box){
     if(_TERM.has(it.status))done++;});
   const total=items.length,prog=total?Math.round(done/total*100):0;
   const kpi=(n,l,c)=>`<div class="kpi"><div class="kn" style="color:${c||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
-  box.innerHTML=`<div class="kpis">${kpi(total,"Jami item")}${kpi(done,"Yakunlangan","var(--green)")}${kpi(prog+"%","Bajarilish","var(--brand)")}</div>
+  const sel=(id,cur,opts,ph)=>`<select id="${id}" onchange="ovSet()"${cur?' class="on"':''}><option value="">${ph}</option>${opts.map(o=>`<option value="${esc(o[0])}" ${cur===o[0]?"selected":""}>${esc(o[1])}</option>`).join("")}</select>`;
+  const anyF=_ovF.status||_ovF.assignee||_ovF.type||_ovF.ym;
+  box.innerHTML=`<div class="ovf">
+      ${sel("ovf_status",_ovF.status,wf.map(s=>[s.key,s.label]),"Holat: hammasi")}
+      ${sel("ovf_asg",_ovF.assignee,asgs.map(a=>[a,a]),"Mas'ul: hammasi")}
+      ${sel("ovf_type",_ovF.type,types.map(t=>[t,_itype(t).label]),"Tur: hammasi")}
+      ${sel("ovf_ym",_ovF.ym,yms.map(m=>[m,m]),"Davr: hammasi")}
+      ${anyF?`<button class="ovfx" onclick="ovClear()"><i class="ti ti-x"></i> Tozalash</button>`:""}</div>
+    <div class="kpis">${kpi(total,"Jami item")}${kpi(done,"Yakunlangan","var(--green)")}${kpi(prog+"%","Bajarilish","var(--brand)")}</div>
     <div class="card">${_ctitle("Holatlar bo'yicha")}${_donut(wf.map(s=>[s.key,bySt[s.key]||0]),k=>_stColP(_proj,k),k=>_stLblP(_proj,k))}</div>
     <div class="card">${_ctitle("Turlar bo'yicha")}${_hbars(Object.entries(byType).sort((a,b)=>b[1]-a[1]))||_noData()}</div>
     ${Object.keys(byAsg).length?`<div class="card">${_ctitle("Mas'ullar yuklamasi")}${_hbars(Object.entries(byAsg).sort((a,b)=>b[1]-a[1]))}</div>`:""}`;
@@ -1169,16 +1197,37 @@ async function renderProjTable(box){
      <td><span class="stbadge" style="background:${_stColP(_proj,it.status)}">${esc(_stLblP(_proj,it.status))}</span></td>
      <td>${esc(it.assignee||"—")}</td><td style="white-space:nowrap">${esc(it.primary_date||"")}</td></tr>`;
   let body="";
-  if(gf){const g={};items.forEach(it=>{const k=gf(it);(g[k]=g[k]||[]).push(it);});
+  if(_grp==='status'){   // workflow tartibida — sarlavhalar tahrirlanadi/sudraladi (Kanban bilan bir xil)
+    _wf(_proj).forEach(s=>{const g=items.filter(it=>it.status===s.key);
+      body+=`<tr class="tgrp wfhdr" data-st="${s.key}" title="Bosib tahrirlang · sudrab tartiblang"><td colspan="5"><span class="wfdot" style="background:${s.color}"></span>${esc(s.label)} · ${g.length}</td></tr>`+g.map(row).join("");});
+    body+=`<tr class="tgrp addwf"><td colspan="5" onclick="colAdd()"><i class="ti ti-plus"></i> Ustun qo'shish</td></tr>`;
+  }else if(gf){const g={};items.forEach(it=>{const k=gf(it);(g[k]=g[k]||[]).push(it);});
     Object.keys(g).sort().forEach(k=>{body+=`<tr class="tgrp"><td colspan="5">${esc(k)} · ${g[k].length}</td></tr>`+g[k].map(row).join("");});}
   else body=items.map(row).join("");
   const chip=(k,l)=>`<span class="cf ${_grp===k?'on':''}" onclick="_grp='${k}';render('content')">${l}</span>`;
   box.innerHTML=`<div class="grp">Guruh: ${chip('none',"Yo'q")}${chip('status',"Holat")}${chip('assignee',"Mas'ul")}${chip('type',"Tur")}</div>
     <div class="tblwrap"><table class="ptable"><thead><tr><th>Nomi</th><th>Tur</th><th>Holat</th><th>Mas'ul</th><th>Sana</th></tr></thead>
       <tbody>${body||'<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:16px">Item yo\'q</td></tr>'}</tbody></table></div>
-    ${ro?'<div style="font-size:11px;color:var(--faint);margin-top:6px">Qatorni sudrab holat ichida qayta tartiblang (mobil: bosib turib suring).</div>':''}
+    <div style="font-size:11px;color:var(--faint);margin-top:6px">${_grp==='status'?"Status sarlavhasini bosib tahrirlang yoki sudrab tartiblang. ":""}${ro?"Qatorni sudrab holat ichida qayta tartiblang (mobil: bosib turib).":""}</div>
     <button class="btn pri" style="width:100%;margin-top:10px" onclick="itemEdit({})"><i class="ti ti-plus"></i> Item qo'shish</button>`;
   if(ro)_wireRowDrag(box);
+  if(_grp==='status')_wireWfHdrDrag(box);
+}
+function _wireWfHdrDrag(box){
+  const tb=box.querySelector("tbody")||box;let st=null;
+  const clear=()=>{if(st&&st.timer)clearTimeout(st.timer);box.querySelectorAll("tr.wfdrag,tr.wfover").forEach(x=>x.classList.remove("wfdrag","wfover"));st=null;};
+  tb.addEventListener("pointerdown",e=>{const h=e.target.closest("tr.wfhdr");if(!h)return;
+    st={key:h.dataset.st,h,x:e.clientX,y:e.clientY,touch:e.pointerType==="touch",active:false,moved:false,over:null};
+    if(st.touch)st.timer=setTimeout(()=>{if(st){st.active=true;h.classList.add("wfdrag");if(window.tg&&tg.HapticFeedback)tg.HapticFeedback.impactOccurred("light");}},280);});
+  tb.addEventListener("pointermove",e=>{if(!st)return;
+    if(Math.abs(e.clientX-st.x)>5||Math.abs(e.clientY-st.y)>5)st.moved=true;
+    if(!st.active){if(st.touch){if(st.moved)clearTimeout(st.timer);return;}if(st.moved){st.active=true;st.h.classList.add("wfdrag");}}
+    if(st.active){e.preventDefault();const h=e.target.closest("tr.wfhdr");
+      box.querySelectorAll("tr.wfover").forEach(x=>x.classList.remove("wfover"));
+      st.over=(h&&h!==st.h)?h.dataset.st:null;if(st.over)h.classList.add("wfover");}},{passive:false});
+  tb.addEventListener("pointerup",()=>{if(!st)return;const a=st.active,ov=st.over,key=st.key,mv=st.moved;clear();
+    if(a){if(ov)_colReorder(key,ov);}else if(!mv)colEdit(key);});
+  tb.addEventListener("pointercancel",clear);
 }
 
 // ── KALENDAR (sana-markazli item'lar) ──
