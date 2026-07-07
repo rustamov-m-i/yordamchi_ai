@@ -6,8 +6,8 @@ Marketing Hub versiyasida config Python va JS'da qo'lda takrorlanib "lockstep" t
 bu drift manbai edi — endi bitta manba, dublikatsiz.)
 
 Muhim: SMM workflow'ining 6 legacy status kaliti (reja|jarayonda|tekshiruvda|
-joylandi|rad_etildi|bekor) RENAME QILINMAYDI — `database.content_dashboard`,
-`CONTENT_STATUSES` va frontend `cSetStatus` shularga bog'langan.
+joylandi|rad_etildi|bekor) RENAME QILINMAYDI — migratsiyadan o'tgan mavjud
+project_items qatorlari va migrations.py status-mapping shularga bog'langan.
 """
 
 from __future__ import annotations

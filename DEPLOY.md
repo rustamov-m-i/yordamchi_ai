@@ -103,6 +103,11 @@ source venv/bin/activate
 mkdir -p data
 venv/bin/python -c "import asyncio, database; asyncio.run(database.init())"
 
+# Marketing Hub migratsiyasi (MAJBURIY — mavjud SMM postlarini project_items'ga ko'chiradi).
+# init() ichida AVTOMATIK ishlamaydi; qo'lda, backup bilan:
+venv/bin/python migrations.py --dry-run   # avval nima bo'lishini ko'ring
+venv/bin/python migrations.py             # qo'llaydi (avtomatik .bak-* backup oladi)
+
 # Smoke test
 venv/bin/python tests/tasks_section_smoke.py
 
@@ -392,6 +397,7 @@ Free Tier hududlari: `us-central1`, `us-west1`, `us-east1` (faqat shu uchta zona
 - [ ] `gcloud compute ssh ...` ishlaydi
 - [ ] `.env` VM'da `chmod 600` bilan
 - [ ] `data/yordamchi.db` mavjud (database.init() ishlagan)
+- [ ] Marketing Hub migratsiyasi qo'llangan (`venv/bin/python migrations.py` → `applied`/`up_to_date`; Mini App Loyihalar'da postlar ko'rinadi)
 - [ ] `sudo systemctl status yordamchi` → active (running)
 - [ ] Telegramda `/cockpit` javob beradi
 - [ ] iCloud sync ishlayapti (log'da `iCloud cache primed`)

@@ -488,8 +488,9 @@ async def init() -> None:
 
         await db.commit()
 
-    # Bir martalik: SMM kontent-rejasi bo'sh bo'lsa, Agrobank iyul-2026 urug'ini import
-    # qilamiz (content_seed.json). Jadval to'lgan bo'lsa — hech narsa qilmaydi.
+    # Bir martalik: mutlaqo yangi o'rnatishda kontent-rejani project_items'ga urug'laymiz
+    # (content_seed.json). Legacy content_posts'da ma'lumot bo'lsa — seed o'zini chetga
+    # oladi (u yerda migrations.py haqiqiy ma'lumotni ko'chiradi, dublikat bo'lmaydi).
     try:
         seed_path = os.path.join(os.path.dirname(__file__), "content_seed.json")
         if os.path.exists(seed_path):
@@ -1036,99 +1037,33 @@ async def delete_contact(name: str) -> bool:
 
 
 # ─────────────────────────────── SMM KONTENT-REJA ───────────────────────────────
-
-_CONTENT_FIELDS = ("date", "category", "topic", "format", "platform", "message", "hashtags",
-                   "project_id", "status", "assignee", "published_url", "published_at", "reject_reason")
-CONTENT_STATUSES = ("reja", "jarayonda", "tekshiruvda", "joylandi", "rad_etildi", "bekor")
-
-
-async def list_content_posts(year: int | None = None, month: int | None = None,
-                             project_id: str | None = None, status: str | None = None) -> list[dict]:
-    """Kontent postlari. year+month, project_id, status bo'yicha filtrlanadi."""
-    where, params = [], []
-    if year and month:
-        where.append("date LIKE ?"); params.append(f"{int(year):04d}-{int(month):02d}-%")
-    if project_id:
-        where.append("project_id = ?"); params.append(project_id)
-    if status:
-        where.append("status = ?"); params.append(status)
-    sql = "SELECT * FROM content_posts"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY date, category"
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(sql, params)
-        return [dict(r) for r in await cur.fetchall()]
-
-
-async def create_content_post(data: dict) -> str:
-    cid = new_id("cp-")
-    now = now_iso()
-    v = {k: (data.get(k).strip() if isinstance(data.get(k), str) else data.get(k))
-         for k in _CONTENT_FIELDS}
-    st = v.get("status") or "reja"
-    if st not in CONTENT_STATUSES:
-        st = "reja"
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        await db.execute(
-            """INSERT INTO content_posts (id, date, category, topic, format, platform,
-                   message, hashtags, project_id, status, assignee, published_url,
-                   published_at, reject_reason, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (cid, v["date"], v["category"] or "biznes", v["topic"] or "Post", v["format"],
-             v["platform"], v["message"], v["hashtags"], v["project_id"], st, v["assignee"],
-             v["published_url"], v["published_at"], v["reject_reason"], now, now))
-        await db.commit()
-    return cid
-
-
-async def update_content_post(post_id: str, data: dict) -> bool:
-    fields, values = [], []
-    for k in _CONTENT_FIELDS:
-        if k in data:
-            fields.append(f"{k} = ?")
-            v = data[k]
-            values.append(v.strip() if isinstance(v, str) else v)
-    if not fields:
-        return False
-    fields.append("updated_at = ?")
-    values.append(now_iso())
-    values.append(post_id)
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute(
-            f"UPDATE content_posts SET {', '.join(fields)} WHERE id = ?", values)
-        await db.commit()
-        return cur.rowcount > 0
-
-
-async def delete_content_post(post_id: str) -> bool:
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute("DELETE FROM content_posts WHERE id = ?", (post_id,))
-        await db.commit()
-        return cur.rowcount > 0
-
-
-async def count_content_posts() -> int:
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute("SELECT COUNT(*) FROM content_posts")
-        return (await cur.fetchone())[0]
-
+# Eski content_posts CRUD olib tashlandi (Marketing Hub switchover) — jonli yo'l endi
+# project_items. content_posts jadvali faqat migratsiya manbai sifatida saqlanadi
+# (migrations.py o'qiydi, hech narsa yozmaydi).
 
 async def seed_content_posts(posts: list[dict]) -> int:
-    """Bir martalik urug'lantirish: jadval bo'sh bo'lsagina to'ldiradi (idempotent).
-    Agrobank iyul-2026 kontent-rejasini ilk ishga tushirishda import qiladi."""
-    if await count_content_posts() > 0:
-        return 0
-    now = now_iso()
+    """Bir martalik urug'lantirish — endi to'g'ridan project_items(type='post')ga.
+    Faqat MUTLAQO yangi o'rnatishda ishlaydi: project_items'da post yo'q VA content_posts
+    bo'sh bo'lsa. (Prod'da content_posts to'la — u yerda migrations.py haqiqiy
+    ma'lumotni olib keladi; seed o'zini chetga oladi, dublikat bo'lmaydi.)"""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM project_items WHERE type = 'post'")
+        if (await cur.fetchone())[0] > 0:
+            return 0
+        cur = await db.execute("SELECT COUNT(*) FROM content_posts")
+        if (await cur.fetchone())[0] > 0:
+            return 0   # legacy ma'lumot bor — migratsiya ko'chiradi, seed aralashmaydi
+        now = now_iso()
         for p in posts:
+            fields = {k: p[k] for k in ("format", "platform", "hashtags") if p.get(k)}
             await db.execute(
-                """INSERT INTO content_posts (id, date, category, topic, format, platform,
-                                              message, hashtags, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (new_id("cp-"), p.get("date"), p.get("category"), p.get("topic"),
-                 p.get("format"), p.get("platform"), p.get("message"), p.get("hashtags"), now, now))
+                """INSERT INTO project_items
+                     (id, project_id, type, title, description, status, category,
+                      primary_date, order_index, fields, created_at, updated_at)
+                   VALUES (?, NULL, 'post', ?, ?, 'reja', ?, ?, 0, ?, ?, ?)""",
+                (new_id("pi-"), p.get("topic") or "(post)", p.get("message"),
+                 p.get("category"), p.get("date"),
+                 json.dumps(fields, ensure_ascii=False) if fields else None, now, now))
         await db.commit()
     return len(posts)
 
@@ -1419,67 +1354,6 @@ async def delete_project(project_id: str, delete_posts: bool = False) -> bool:
         await db.commit()
         return cur.rowcount > 0
 
-
-async def content_dashboard(project_id: str | None = None) -> dict:
-    """SMM analitikasi: status/kategoriya/format/platforma/mas'ul taqsimoti,
-    bajarilish %, so'nggi 8 hafta joylangan postlar, rad etilganlar sabablari."""
-    where = "WHERE project_id = ?" if project_id else ""
-    params = (project_id,) if project_id else ()
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        rows = [dict(r) for r in await (
-            await db.execute(f"SELECT * FROM content_posts {where}", params)).fetchall()]
-
-    def _dist(key):
-        d = {}
-        for r in rows:
-            k = (r.get(key) or "").strip() or "—"
-            d[k] = d.get(k, 0) + 1
-        return sorted(([k, v] for k, v in d.items()), key=lambda x: -x[1])
-
-    status_count = {s: 0 for s in CONTENT_STATUSES}
-    for r in rows:
-        st = r.get("status") or "reja"
-        status_count[st] = status_count.get(st, 0) + 1
-    total = len(rows)
-    done = status_count.get("joylandi", 0)
-    planned = total - status_count.get("rad_etildi", 0) - status_count.get("bekor", 0)
-    progress = round(done / planned * 100) if planned else 0
-
-    # so'nggi 8 hafta — joylangan postlar (published_at yoki date bo'yicha)
-    from collections import OrderedDict
-    weeks = OrderedDict()
-    now = datetime.now(TZ)
-    monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    for i in range(7, -1, -1):
-        wk = monday - timedelta(weeks=i)
-        weeks[wk.strftime("%Y-%m-%d")] = 0
-    for r in rows:
-        if r.get("status") != "joylandi":
-            continue
-        ds = (r.get("published_at") or r.get("date") or "")[:10]
-        try:
-            d = TZ.localize(datetime.strptime(ds, "%Y-%m-%d"))
-        except (ValueError, TypeError):
-            continue
-        wk = (d - timedelta(days=d.weekday())).strftime("%Y-%m-%d")
-        if wk in weeks:
-            weeks[wk] += 1
-
-    reject_reasons = [{"topic": r.get("topic"), "reason": r.get("reject_reason")}
-                      for r in rows if r.get("status") == "rad_etildi"]
-
-    return {
-        "total": total,
-        "status": status_count,
-        "progress": progress,
-        "by_category": _dist("category"),
-        "by_format": _dist("format"),
-        "by_platform": _dist("platform"),
-        "by_assignee": _dist("assignee"),
-        "weekly_published": [{"week": k, "count": v} for k, v in weeks.items()],
-        "rejects": reject_reasons,
-    }
 
 
 async def count_table(table: str) -> int:
