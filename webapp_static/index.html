@@ -254,13 +254,6 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .phrole{font-size:13px;color:var(--muted);margin-top:3px;
           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .phuser{font-size:12.5px;color:var(--brand-d);font-weight:600;margin-top:2px}
-  .phstats{display:flex;gap:8px;margin-top:16px;padding-top:15px;border-top:1px solid var(--line)}
-  .phstat{flex:1;text-align:center}
-  .phstat b{display:block;font-size:21px;font-weight:800;color:var(--text);line-height:1}
-  .phstat span{font-size:11px;color:var(--muted);display:block;margin-top:4px}
-  .phwarn{margin-top:12px;padding:9px 12px;border-radius:10px;background:rgba(214,69,69,.11);
-          color:var(--red);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
-  .phwarn i{font-size:16px}
   /* ─── Responsive shell (placed last so it overrides base rules) ─── */
   /* Tablet — fill more width, roomier padding, 4-wide radar */
   @media (min-width:640px){
@@ -835,10 +828,9 @@ async function renderInsights(box){
 
 async function renderProfile(box){
   const u=tg?.initDataUnsafe?.user||{};
-  // Paint the menu (incl. Logout) instantly; backfill owner name/role + stats after,
+  // Paint the menu (incl. Logout) instantly; backfill owner name/role after,
   // so a slow/hung /me never blocks the whole view.
   const meP=api("/me").then(d=>(d&&d.owner)||{}).catch(()=>({}));
-  const dashP=api("/dashboard").catch(()=>null);          // null = fetch failed
   const tgName=[u.first_name,u.last_name].filter(Boolean).join(" ").trim();
   const uname=u.username?"@"+esc(u.username):"";
   const avatar=u.photo_url
@@ -852,12 +844,7 @@ async function renderProfile(box){
           <div class="phrole" id="phrole"></div>
           ${uname?`<div class="phuser">${uname}</div>`:""}
         </div></div>
-      <div class="phstats" id="phstats">
-        <div class="phstat"><b>·</b><span>Jami vazifa</span></div>
-        <div class="phstat"><b>·</b><span>Bugun bajarildi</span></div>
-        <div class="phstat"><b>·</b><span>Progress</span></div>
-      </div>
-      <div id="phwarn"></div></div>`+
+    </div>`+
     `<div class="card menu">
       <div class="mi" onclick="go('insights')"><i class="ti ti-chart-bar"></i>Statistika<i class="ti ti-chevron-right ch"></i></div>
       <div class="mi" onclick="go('team')"><i class="ti ti-users"></i>Jamoa yuklamasi<i class="ti ti-chevron-right ch"></i></div>
@@ -879,16 +866,6 @@ async function renderProfile(box){
   const nameEl=box.querySelector("#phname");if(nameEl)nameEl.textContent=nm;
   const roleEl=box.querySelector("#phrole");if(roleEl)roleEl.textContent=roleLine;
   const avEl=box.querySelector("#phav");if(avEl)avEl.textContent=_initials(nm);
-  // Stats: paint only when data actually loaded — a failed fetch keeps the "·" placeholder.
-  const st=await dashP,el=box.querySelector("#phstats");
-  if(el&&st&&(st.radar||st.counts)){
-    const r=st.radar||{},c=st.counts||{},over=r.overdue||0;
-    el.innerHTML=`<div class="phstat"><b>${r.total||0}</b><span>Jami vazifa</span></div>`
-      +`<div class="phstat"><b>${c.today_done||0}</b><span>Bugun bajarildi</span></div>`
-      +`<div class="phstat"><b>${st.progress||0}%</b><span>Progress</span></div>`;
-    const w=box.querySelector("#phwarn");
-    if(w)w.innerHTML=over?`<div class="phwarn"><i class="ti ti-alert-triangle"></i> ${over} ta vazifa kechikkan</div>`:"";
-  }
 }
 async function doLogout(){try{await api("/auth/logout",{method:"POST"});}catch(e){}location.reload();}
 async function renderProtocols(box){
