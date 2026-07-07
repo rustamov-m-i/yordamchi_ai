@@ -405,6 +405,13 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .ptable td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:middle;cursor:pointer}
   .ptable tr:hover td{background:var(--soft)}
   .ptable .tgrp td{background:var(--soft);font-weight:700;font-size:12px;cursor:default}
+  .ptable td.rord{cursor:default;white-space:nowrap;width:1%;padding-right:2px;color:var(--faint)}
+  .ptable td.rord .rgrip{cursor:grab;font-size:13px;letter-spacing:-2px;margin-right:5px}
+  .ptable td.rord i{cursor:pointer;font-size:15px;vertical-align:-2px}
+  .ptable td.rord i:hover{color:var(--brand)}
+  .ptable td.rord i.dis{opacity:.25;pointer-events:none}
+  .ptable tr.dragging{opacity:.45}
+  .ptable tr.dropinto td{border-top:2px solid var(--brand)}
   .projname{font-size:15px;font-weight:600}
   .projmeta{font-size:12px;color:var(--muted);margin-top:2px}
   .ptabs{display:flex;gap:8px;margin-bottom:14px}
@@ -1063,21 +1070,54 @@ async function itemMove(id,status){try{await api(`/items/${id}/move`,{method:"PO
   const it=CACHE.content[id];if(it)it.status=status;render("content");}catch(e){flash("⚠️ "+e.message);}}
 
 // ── JADVAL (guruhlash + tartib) ──
+let _titems=[],_tdrag=null;
+// Tartib faqat "Yo'q"/"Holat" guruhlashda o'zgartiriladi — holat ichida (order_index → Kanban bilan sinxron).
+const _canReorder=()=>_grp==="none"||_grp==="status";
+// item'ning o'z holati bo'yicha "peer"lari (ko'rsatilish tartibida) va ular ichidagi o'rni.
+function _peers(id){const it=_titems.find(x=>x.id===id);if(!it)return{peers:[],i:-1,it:null};
+  const peers=_titems.filter(x=>x.status===it.status);return{peers,i:peers.findIndex(x=>x.id===id),it};}
+async function itMove(id,dir){const {peers,i,it}=_peers(id);if(!it)return;const j=i+dir;
+  if(j<0||j>=peers.length)return;
+  try{await api(`/items/${id}/move`,{method:"POST",body:JSON.stringify({status:it.status,order_index:j})});render("content");}
+  catch(e){flash("⚠️ "+e.message);}}
+async function itDropOn(targetId){if(!_tdrag||_tdrag===targetId)return;const src=_titems.find(x=>x.id===_tdrag);const tgt=_titems.find(x=>x.id===targetId);_tdrag=null;
+  if(!src||!tgt||src.status!==tgt.status)return;   // faqat bir holat ichida
+  const peers=_titems.filter(x=>x.status===src.status);const to=peers.findIndex(x=>x.id===targetId);if(to<0)return;
+  try{await api(`/items/${src.id}/move`,{method:"POST",body:JSON.stringify({status:src.status,order_index:to})});render("content");}
+  catch(e){flash("⚠️ "+e.message);}}
+
 async function renderProjTable(box){
-  const items=await _items();
+  const items=await _items();_titems=items;
+  const ro=_canReorder();
   const gf={none:null,status:it=>_stLblP(_proj,it.status),assignee:it=>it.assignee||"—",type:it=>_itype(it.type).label}[_grp];
-  const row=it=>`<tr onclick="itemOpen('${it.id}')"><td>${esc(it.title)}</td><td>${esc(_itype(it.type).label)}</td>
+  const cnt={};items.forEach(it=>{cnt[it.status]=(cnt[it.status]||0)+1;});
+  const idx={};   // item id → holat ichidagi o'rin
+  const seen={};items.forEach(it=>{idx[it.id]=(seen[it.status]=(seen[it.status]||0));seen[it.status]++;});
+  const handle=it=>{if(!ro)return"";const i=idx[it.id],n=cnt[it.status];
+    return `<td class="rord" onclick="event.stopPropagation()">
+      <span class="rgrip" title="Sudrab ko'chiring">⋮⋮</span>
+      <i class="ti ti-chevron-up ${i===0?'dis':''}" onclick="itMove('${it.id}',-1)"></i>
+      <i class="ti ti-chevron-down ${i>=n-1?'dis':''}" onclick="itMove('${it.id}',1)"></i></td>`;};
+  const row=it=>`<tr ${ro?`draggable="true" data-id="${it.id}"`:""} onclick="itemOpen('${it.id}')">${handle(it)}<td>${esc(it.title)}</td><td>${esc(_itype(it.type).label)}</td>
      <td><span class="stbadge" style="background:${_stColP(_proj,it.status)}">${esc(_stLblP(_proj,it.status))}</span></td>
      <td>${esc(it.assignee||"—")}</td><td style="white-space:nowrap">${esc(it.primary_date||"")}</td></tr>`;
+  const cols=ro?6:5;
   let body="";
   if(gf){const g={};items.forEach(it=>{const k=gf(it);(g[k]=g[k]||[]).push(it);});
-    Object.keys(g).sort().forEach(k=>{body+=`<tr class="tgrp"><td colspan="5">${esc(k)} · ${g[k].length}</td></tr>`+g[k].map(row).join("");});}
+    Object.keys(g).sort().forEach(k=>{body+=`<tr class="tgrp"><td colspan="${cols}">${esc(k)} · ${g[k].length}</td></tr>`+g[k].map(row).join("");});}
   else body=items.map(row).join("");
   const chip=(k,l)=>`<span class="cf ${_grp===k?'on':''}" onclick="_grp='${k}';render('content')">${l}</span>`;
   box.innerHTML=`<div class="grp">Guruh: ${chip('none',"Yo'q")}${chip('status',"Holat")}${chip('assignee',"Mas'ul")}${chip('type',"Tur")}</div>
-    <div class="tblwrap"><table class="ptable"><thead><tr><th>Nomi</th><th>Tur</th><th>Holat</th><th>Mas'ul</th><th>Sana</th></tr></thead>
-      <tbody>${body||'<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:16px">Item yo\'q</td></tr>'}</tbody></table></div>
+    <div class="tblwrap"><table class="ptable"><thead><tr>${ro?"<th></th>":""}<th>Nomi</th><th>Tur</th><th>Holat</th><th>Mas'ul</th><th>Sana</th></tr></thead>
+      <tbody>${body||`<tr><td colspan="${cols}" style="text-align:center;color:var(--faint);padding:16px">Item yo'q</td></tr>`}</tbody></table></div>
+    ${ro?'<div style="font-size:11px;color:var(--faint);margin-top:6px">Qatorni sudrab yoki ▲▼ bilan holat ichida qayta tartiblang.</div>':''}
     <button class="btn pri" style="width:100%;margin-top:10px" onclick="itemEdit({})"><i class="ti ti-plus"></i> Item qo'shish</button>`;
+  if(ro)box.querySelectorAll("tr[draggable]").forEach(tr=>{
+    tr.addEventListener("dragstart",e=>{_tdrag=tr.dataset.id;tr.classList.add("dragging");e.dataTransfer.effectAllowed="move";});
+    tr.addEventListener("dragend",()=>{tr.classList.remove("dragging");box.querySelectorAll("tr.dropinto").forEach(x=>x.classList.remove("dropinto"));});
+    tr.addEventListener("dragover",e=>{e.preventDefault();tr.classList.add("dropinto");});
+    tr.addEventListener("dragleave",()=>tr.classList.remove("dropinto"));
+    tr.addEventListener("drop",e=>{e.preventDefault();tr.classList.remove("dropinto");itDropOn(tr.dataset.id);});});
 }
 
 // ── KALENDAR (sana-markazli item'lar) ──
