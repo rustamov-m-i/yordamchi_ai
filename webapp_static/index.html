@@ -787,13 +787,17 @@ function _meetRow(m){const done=!!m.completed_at;const loc=m.location_or_link||"
   return `<div class="mrow"><div class="mtime">${_hm(m.datetime_start)}</div><div class="mrail"><div class="mdot ${done?'done':''}">${done?'<i class="ti ti-check"></i>':''}</div></div><div class="mc ${done?'dim':''}" onclick="meetingDetail('${m.id}')"><div class="mt">${esc(m.title)}</div>${metas}${badges}</div></div>`}
 // Uchrashuvlar — oylik kalendar setkasi. Kun bosilganda o'sha kun ro'yxati chiqadi.
 let _meetYM=null,_meetSel=null;
+// Uchrashuv sanasidan (ISO) kun raqamini QURILMADAN MUSTAQIL o'qiydi — new Date() vaqt-zonaga
+// qarab kunni siljitadi (yoki iOS ba'zi formatlarni parse qilolmaydi → NaN → uchrashuv yo'qoladi).
+// Bu yerda "YYYY-MM-DD" prefiksidagi devor-soat sanasi olinadi (uchrashuv Toshkent sanasida ko'rinadi).
+function _isoDay(iso){const m=String(iso||"").match(/(\d{4})-(\d{2})-(\d{2})/);return m?parseInt(m[3],10):NaN;}
 async function renderMeetings(box){
   const now=new Date();
   if(!_meetYM)_meetYM={y:now.getFullYear(),m:now.getMonth()};   // m: 0-11
   const d=await api(`/calendar?year=${_meetYM.y}&month=${_meetYM.m+1}`);
   const list=d.meetings||[];list.forEach(x=>CACHE.meetings[x.id]=x);
-  // Kun bo'yicha guruhlash
-  const byDay={};list.forEach(m=>{const k=new Date(m.datetime_start).getDate();(byDay[k]=byDay[k]||[]).push(m);});
+  // Kun bo'yicha guruhlash (qurilmadan mustaqil)
+  const byDay={};list.forEach(m=>{const k=_isoDay(m.datetime_start);if(!isNaN(k))(byDay[k]=byDay[k]||[]).push(m);});
   // Tanlangan kunni aniqlash: joriy oyda bugun, aks holda birinchi uchrashuvli kun
   const isCurMonth=(_meetYM.y===now.getFullYear()&&_meetYM.m===now.getMonth());
   if(_meetSel==null||_meetSelMonth!==`${_meetYM.y}-${_meetYM.m}`){
@@ -993,7 +997,7 @@ async function renderCalendar(box){
   const MON=["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"];
   let h=`<div class="head"><button class="icobtn" onclick="calNav(-1)"><i class="ti ti-chevron-left"></i></button>
     <h1 style="font-size:18px">${MON[_calYM.m-1]} ${_calYM.y}</h1><button class="icobtn" onclick="calNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
-  const byDay={};list.forEach(m=>{const k=new Date(m.datetime_start).getDate();(byDay[k]=byDay[k]||[]).push(m);CACHE.meetings[m.id]=m;});
+  const byDay={};list.forEach(m=>{const k=_isoDay(m.datetime_start);if(!isNaN(k))(byDay[k]=byDay[k]||[]).push(m);CACHE.meetings[m.id]=m;});
   const days=Object.keys(byDay).map(Number).sort((a,b)=>a-b);
   h+= days.length? days.map(k=>`<div class="sec"><h2 style="font-size:14px">${k}-kun</h2></div>`+byDay[k].map(m=>`<div class="card" onclick="openMeeting('${m.id}')"><div style="font-size:14px;font-weight:500">${esc(m.title)}</div><div style="font-size:12px;color:var(--muted);margin-top:3px"><i class="ti ti-clock" style="vertical-align:-2px;color:var(--brand)"></i> ${fmt(m.datetime_start)}${m.location_or_link?" · "+esc(m.location_or_link):""}</div></div>`).join("")).join("") : emptyBox("calendar-off","Bu oyда uchrashuv yo'q");
   box.innerHTML=h;
