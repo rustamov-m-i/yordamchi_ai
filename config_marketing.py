@@ -71,6 +71,23 @@ WORKFLOWS: dict[str, list[dict]] = {
         {"key": "in_progress", "label": "Jarayonda", "color": _C["blue"]},
         {"key": "done", "label": "Bajarildi", "color": _C["green"]},
     ],
+    # video — video-kontent ishlab chiqarish quvuri.
+    "video": [
+        {"key": "ssenariy", "label": "Ssenariy", "color": _C["grey"]},
+        {"key": "suratga_olish", "label": "Suratga olish", "color": _C["amber"]},
+        {"key": "montaj", "label": "Montaj", "color": _C["violet"]},
+        {"key": "tasdiqlash", "label": "Tasdiqlash", "color": _C["blue"]},
+        {"key": "chop_etildi", "label": "Chop etildi", "color": _C["green"]},
+    ],
+    # tender — pudratchi tanlash / tender jarayoni.
+    "tender": [
+        {"key": "talab", "label": "Talabnoma", "color": _C["grey"]},
+        {"key": "elon", "label": "E'lon", "color": _C["amber"]},
+        {"key": "takliflar", "label": "Takliflar", "color": _C["violet"]},
+        {"key": "tanlov", "label": "Tanlov", "color": _C["blue"]},
+        {"key": "shartnoma", "label": "Shartnoma", "color": _C["teal"]},
+        {"key": "ijro", "label": "Ijro", "color": _C["green"]},
+    ],
 }
 
 
@@ -80,9 +97,10 @@ WORKFLOWS: dict[str, list[dict]] = {
 TERMINAL_STATUSES: frozenset[str] = frozenset({
     "joylandi", "rad_etildi", "bekor",   # smm
     "hisobot",                           # campaign, roadmap (yakuniy)
-    "chop_etildi", "qamrov",             # pr
+    "chop_etildi", "qamrov",             # pr, video (chop_etildi yakuniy)
     "foto_hisobot",                      # branding
     "done",                              # simple
+    "ijro",                              # tender (yakuniy bosqich)
 })
 
 
@@ -96,6 +114,8 @@ PROJECT_TYPES: dict[str, dict] = {
     "event":     {"label": "Tadbir (Event)", "icon": "calendar-event", "default_view": "table", "workflow": "simple"},
     "roadmap":   {"label": "Roadmap", "icon": "route", "default_view": "table", "workflow": "roadmap"},
     "media_plan": {"label": "Media plan", "icon": "device-tv", "default_view": "table", "workflow": "campaign"},
+    "video":     {"label": "Video-kontent", "icon": "video", "default_view": "kanban", "workflow": "video"},
+    "tender":    {"label": "Tender / pudratchi", "icon": "briefcase", "default_view": "table", "workflow": "tender"},
     "custom":    {"label": "Universal", "icon": "folder", "default_view": "table", "workflow": "simple"},
 }
 
@@ -126,6 +146,8 @@ PROJECT_ITEM_TYPES: dict[str, list[str]] = {
     "event":     ["task", "milestone", "note"],
     "roadmap":   ["milestone", "task", "report"],
     "media_plan": ["media_placement", "task", "report"],
+    "video":     ["task", "milestone", "approval", "note"],
+    "tender":    ["task", "approval", "report", "milestone"],
     "custom":    ["task", "milestone", "note"],
 }
 
@@ -187,6 +209,14 @@ TEMPLATES: list[dict] = [
      "icon": "brand-instagram", "color": _C["green"], "default_view": "calendar"},
     {"id": "campaign_360", "label": "360 Marketing Campaign", "type": "campaign",
      "icon": "speakerphone", "color": _C["violet"], "default_view": "kanban"},
+    {"id": "product_campaign", "label": "Yangi mahsulot kampaniyasi", "type": "campaign",
+     "icon": "credit-card", "color": _C["violet"], "default_view": "kanban"},
+    {"id": "seasonal_promo", "label": "Mavsumiy aksiya", "type": "campaign",
+     "icon": "gift", "color": _C["red"], "default_view": "kanban"},
+    {"id": "video_production", "label": "Video-kontent ishlab chiqarish", "type": "video",
+     "icon": "video", "color": _C["blue"], "default_view": "kanban"},
+    {"id": "tender_process", "label": "Tender / pudratchi jarayoni", "type": "tender",
+     "icon": "briefcase", "color": _C["navy"], "default_view": "table"},
     {"id": "pr_campaign", "label": "PR Campaign", "type": "pr",
      "icon": "news", "color": _C["blue"], "default_view": "kanban"},
     {"id": "branding_project", "label": "Branding Project", "type": "branding",
@@ -203,8 +233,8 @@ TEMPLATES: list[dict] = [
      "icon": "rocket", "color": _C["red"], "default_view": "table"},
     {"id": "internal_comm", "label": "Internal Communication Plan", "type": "custom",
      "icon": "messages", "color": _C["grey"], "default_view": "table"},
-    {"id": "blank", "label": "Bo'sh loyiha", "type": "custom",
-     "icon": "folder", "color": "#6C5CE7", "default_view": "table"},
+    {"id": "blank", "label": "Boshqa — o'zim sozlayman", "type": "custom",
+     "icon": "adjustments", "color": "#6C5CE7", "default_view": "table"},
 ]
 TEMPLATES_BY_ID: dict[str, dict] = {t["id"]: t for t in TEMPLATES}
 
