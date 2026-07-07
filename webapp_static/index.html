@@ -1651,7 +1651,7 @@ function _chatDownload(d){const box=document.createElement("div");box.className=
   box.querySelector("button").onclick=()=>download(d.path,d.name||"export.xlsx");
   $("chatmsgs").appendChild(box);$("chatmsgs").scrollTop=$("chatmsgs").scrollHeight;}
 
-$("fab").onclick=()=>({dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({})}[VIEW]());
+$("fab").onclick=()=>{const A={dash:()=>openTask({}),tasks:()=>openTask({}),meetings:()=>openMeeting({}),notes:()=>openNote({}),reminders:()=>openM(reminderForm({})),insights:()=>openTask({}),profile:()=>openTask({}),content:()=>_proj?itemEdit({}):projEdit({}),calendar:()=>openMeeting({})};(A[VIEW]||A.dash)();};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>switchView(b.dataset.v));
 
 // ── Brauzer login (Telegram OAuth 2.0 / OpenID Connect) ──
