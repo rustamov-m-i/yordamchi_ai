@@ -1192,6 +1192,130 @@ async def import_tasks_file(request: web.Request) -> web.Response:
     return web.json_response({"created": len(actions) - n_upd, "updated": n_upd})
 
 
+_AI_IMPORT_MAX = 50
+
+
+async def import_tasks_ai(request: web.Request) -> web.Response:
+    """AI-import: istalgan fayldan (xlsx/csv/pdf/docx/txt/rasm) Claude vazifalarni
+    ajratadi va PREVIEW qaytaradi — hali YARATMAYDI. Foydalanuvchi ko'rib chiqib,
+    /confirm orqali joylaydi. Mavjud document_service + process_document pipeline'i."""
+    import document_service
+    name = (request.query.get("name") or "fayl").strip()
+    mime = request.headers.get("Content-Type") or ""
+    data = await request.read()
+    if not data:
+        return web.json_response({"error": "fayl bo'sh"}, status=400)
+    if len(data) > document_service.MAX_FILE_BYTES:
+        mb = document_service.MAX_FILE_BYTES // (1024 * 1024)
+        return web.json_response({"error": f"fayl juda katta (max {mb}MB)"}, status=413)
+    kind = document_service.detect_kind(name, mime)
+    try:
+        blocks, meta = document_service.build_content_blocks(data, kind, name, mime)
+    except document_service.DocumentError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        logger.exception("AI import: block build failed")
+        return web.json_response({"error": "faylni o'qib bo'lmadi"}, status=400)
+    directive = (
+        "Bu fayl — bajarilishi kerak bo'lgan VAZIFALAR ro'yxati (yoki ularni o'z ichiga oladi). "
+        "HAR BIR vazifani ALOHIDA create_task action sifatida ajrat: title aniq va majburiy; "
+        "aniq bo'lsa — assignee (mavjud kontaktlardan mos canonical nom bilan), deadline (ISO sana), "
+        "priority (P0/P1/P2/P3), category (faqat mavjud kategoriyalardan). Umumiy tahlil MINIMAL — "
+        "user_message'da faqat nechta vazifa topilganini qisqa yoz."
+    )
+    try:
+        resp = await claude_service.process_document(directive, blocks, file_label=name)
+    except Exception:
+        logger.exception("AI import: process_document failed")
+        return web.json_response({"error": "AI tahlil qila olmadi, keyinroq urinib ko'ring"}, status=502)
+    raw = [a for a in (resp.get("actions") or []) if a.get("type") == "create_task"]
+    truncated = len(raw) > _AI_IMPORT_MAX
+    tasks = []
+    for a in raw[:_AI_IMPORT_MAX]:
+        d = a.get("data") if isinstance(a.get("data"), dict) else a
+        title = (d.get("title") or "").strip()
+        if not title:
+            continue
+        tasks.append({
+            "title": title,
+            "assignee": d.get("assignee") or "",
+            "deadline": d.get("deadline") or "",
+            "priority": d.get("priority") or "P2",
+            "category": d.get("category") or "",
+        })
+    return web.json_response({
+        "tasks": tasks,
+        "summary": (resp.get("user_message") or "").strip(),
+        "truncated": truncated,
+    })
+
+
+async def import_tasks_ai_confirm(request: web.Request) -> web.Response:
+    """AI-import tasdiqlash — ko'rib chiqilgan vazifalarni haqiqatan yaratadi."""
+    body = await _json_body(request)
+    tasks = body.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return web.json_response({"error": "vazifalar yo'q"}, status=400)
+    created = 0
+    for t in tasks[:100]:
+        if not isinstance(t, dict):
+            continue
+        title = (t.get("title") or "").strip()
+        if not title:
+            continue
+        d = {"title": title, "source": "ai_import"}
+        for k in ("assignee", "deadline", "priority", "category", "project_id"):
+            v = t.get(k)
+            if v not in (None, ""):
+                d[k] = v
+        await database.create_task(d)
+        created += 1
+    return web.json_response({"created": created})
+
+
+async def project_import_confirm(request: web.Request) -> web.Response:
+    """AI-import tasdiqlash — LOYIHA ichiga: ko'rib chiqilgan vazifalarni o'sha
+    loyihaning project_items sifatida yaratadi (kanban/jadval/kalendarda ko'rinadi).
+    Status = loyiha workflow'ining birinchi ustuni; type = 'task' (yoki loyiha uchun mos)."""
+    pid = request.match_info["id"]
+    proj = await database.get_project(pid)
+    if proj is None:
+        return web.json_response({"error": "project not found"}, status=404)
+    body = await _json_body(request)
+    tasks = body.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return web.json_response({"error": "vazifalar yo'q"}, status=400)
+    # Loyiha workflow'ining birinchi statusi (get_project workflow'ni normalizatsiya qiladi).
+    first_status = "reja"
+    try:
+        wf = proj.get("workflow")
+        w = json.loads(wf) if isinstance(wf, str) else wf
+        if w and w.get("statuses"):
+            first_status = w["statuses"][0]["key"]
+    except Exception:
+        pass
+    itypes = config_marketing.item_types_for(proj.get("type") or "custom")
+    itype = "task" if "task" in itypes else (itypes[0] if itypes else "task")
+    created = 0
+    for t in tasks[:100]:
+        if not isinstance(t, dict):
+            continue
+        title = (t.get("title") or "").strip()
+        if not title:
+            continue
+        d = {"type": itype, "title": title, "status": first_status}
+        if t.get("assignee"):
+            d["assignee"] = t["assignee"]
+        if t.get("deadline"):
+            d["primary_date"] = str(t["deadline"])[:10]
+            d["deadline"] = t["deadline"]
+        if t.get("priority"):
+            d["priority"] = t["priority"]
+        await database.create_project_item(pid, d)
+        created += 1
+    return web.json_response({"created": created})
+
+
 async def voice(request: web.Request) -> web.Response:
     """Transcribe an uploaded audio clip (raw body) → text (Uzbek). The frontend
     puts the text into the chat input for the user to review/send."""
@@ -1404,6 +1528,9 @@ def create_app() -> web.Application:
         web.delete("/api/categories", category_delete),
         web.get("/api/calendar", calendar),
         web.post("/api/import/tasks", import_tasks_file),
+        web.post("/api/import/tasks/ai", import_tasks_ai),
+        web.post("/api/import/tasks/ai/confirm", import_tasks_ai_confirm),
+        web.post("/api/projects/{id}/import/confirm", project_import_confirm),
         web.post("/api/voice", voice),
         web.get("/api/tasks", tasks_list),
         web.post("/api/tasks", task_create),

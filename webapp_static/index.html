@@ -228,6 +228,13 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   textarea{min-height:70px;resize:vertical}
   .macts{display:flex;gap:10px;margin-top:18px}
   .macts .btn{flex:1;padding:13px;font-size:15px;border-radius:13px}
+  /* ── AI import preview ── */
+  .aiimplist{display:flex;flex-direction:column;max-height:48vh;overflow-y:auto;margin-bottom:4px}
+  .aiimp{display:flex;align-items:flex-start;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+  .aiimp input{width:17px;height:17px;accent-color:var(--brand);flex:none;margin-top:2px}
+  .aiimptx{flex:1;min-width:0}
+  .aiimpt{display:block;font-weight:600;font-size:14px;line-height:1.3}
+  .aiimpm{display:block;font-size:12px;color:var(--muted);margin-top:2px}
   .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#2a2740;color:#fff;
     padding:10px 18px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none}
   .toast.show{opacity:.96}
@@ -748,7 +755,8 @@ async function renderTasks(box){
   const orphHtml=orphans.length?('<div class="sec" style="margin:16px 2px 9px"><h2 style="font-size:13px;color:var(--faint)">Ichki vazifalar (ota boshqa ro\'yxatда)</h2></div><div class="tline">'+orphans.map(s=>taskCard(s,[])).join("")+'</div>'):"";
   const chip=(k,l)=>`<button class="${TFILTER===k?'on':''}" onclick="setTF('${k}')">${l}</button>`;
   const head=`<div class="head"><div><h1>Vazifalar</h1></div><div style="display:flex;gap:8px">
-    <button class="icobtn" onclick="pickImport()" title="Import (Excel)"><i class="ti ti-upload"></i></button>
+    <button class="icobtn" onclick="aiImport()" title="AI import (istalgan fayl/matn)"><i class="ti ti-sparkles"></i></button>
+    <button class="icobtn" onclick="pickImport()" title="Import (Excel/CSV)"><i class="ti ti-upload"></i></button>
     <button class="icobtn" onclick="download('/export/tasks?filter='+(_EXPF[TFILTER]||'active'),'vazifalar.xlsx')" title="Eksport (Excel)"><i class="ti ti-download"></i></button>
     <button class="icobtn" onclick="refreshView(this)" title="Yangilash"><i class="ti ti-refresh"></i></button></div></div>`;
   box.innerHTML=head+`<div class="tflt">${chip("active","Faol")}${chip("kechikkan","Kechikkan")}${chip("done","Bajarilgan")}${chip("all","Hammasi")}</div>`+
@@ -1049,7 +1057,9 @@ async function renderProjDetail(box){
   box.innerHTML=`<div class="head"><div style="display:flex;align-items:center;gap:10px;min-width:0">
       <button class="icobtn" onclick="backToProjects()"><i class="ti ti-arrow-left"></i></button>
       <h1 style="font-size:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(_proj.name||"Loyiha")}</h1></div>
-      <button class="icobtn" onclick="projEdit(_proj)" title="Tahrir"><i class="ti ti-edit"></i></button></div>
+      <div style="display:flex;gap:8px">
+      <button class="icobtn" onclick="aiImport('${esc(_proj.id)}')" title="AI import (fayldan elementlar)"><i class="ti ti-sparkles"></i></button>
+      <button class="icobtn" onclick="projEdit(_proj)" title="Tahrir"><i class="ti ti-edit"></i></button></div></div>
     <div class="ptabs">${tabs.map(x=>`<button class="${_projTab===x[0]?'on':''}" onclick="projTab('${x[0]}')"><i class="ti ti-${x[2]}"></i> ${x[1]}</button>`).join("")}</div>
     <div id="ptb"></div>`;
   const R={dash:renderProjOverview,cal:renderProjCal,kanban:renderProjKanban,table:renderProjTable};
@@ -1451,6 +1461,38 @@ function pickImport(){const inp=document.createElement("input");inp.type="file";
       flash(`${j.created||0} yangi, ${j.updated||0} yangilangan`);render(VIEW);
     }catch(e){flash("⚠️ "+e.message);}};
   inp.click();}
+
+// ── AI import: istalgan fayl/matn → Claude ajratadi → preview → joylaydi ──
+// projId berilsa → elementlar o'sha loyiha ichiga (project_items); aks holda → global vazifa.
+let _aiTasks=[],_aiImpProj=null;
+function aiImport(projId){_aiImpProj=projId||null;const inp=document.createElement("input");inp.type="file";
+  inp.accept=".xlsx,.csv,.pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp";
+  inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;flash("🔍 AI faylni o'qiyapti…");
+    try{const buf=await f.arrayBuffer();
+      const r=await fetch("/api/import/tasks/ai?name="+encodeURIComponent(f.name),
+        {method:"POST",credentials:"same-origin",headers:{"Authorization":AUTH,"Content-Type":f.type||"application/octet-stream"},body:buf});
+      const j=await r.json();if(!r.ok)return flash("⚠️ "+(j.error||("Xato "+r.status)));
+      if(!j.tasks||!j.tasks.length)return flash("Faylda vazifa topilmadi");
+      aiImportPreview(j.tasks,j.summary,j.truncated);
+    }catch(e){flash("⚠️ "+e.message);}};
+  inp.click();}
+function aiImportPreview(tasks,summary,truncated){_aiTasks=tasks;
+  const row=(t,i)=>`<label class="aiimp"><input type="checkbox" data-i="${i}" checked>
+    <span class="aiimptx"><span class="aiimpt">${esc(t.title)}</span>
+    <span class="aiimpm">${[t.assignee,t.deadline?String(t.deadline).slice(0,10):"",PRIO[t.priority]||t.priority].filter(Boolean).map(esc).join(" · ")||"—"}</span></span></label>`;
+  openM(`<h3>AI topgan vazifalar: ${tasks.length}</h3>
+    ${summary?`<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">${esc(summary)}</div>`:""}
+    ${truncated?`<div style="font-size:12px;color:var(--amber);margin-bottom:8px">⚠️ Faqat dastlabki ${tasks.length} ta ko'rsatilyapti — qolganini alohida import qiling.</div>`:""}
+    <div style="font-size:11.5px;color:var(--faint);margin-bottom:6px">Keraksizlarini belgidan chiqaring, so'ng joylashtiring.</div>
+    <div class="aiimplist">${tasks.map(row).join("")}</div>
+    <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="aiImportConfirm()"><i class="ti ti-check"></i> Joylashtirish</button></div>`);}
+async function aiImportConfirm(){
+  const picked=[...document.querySelectorAll('.aiimplist input:checked')].map(c=>_aiTasks[+c.dataset.i]).filter(Boolean);
+  if(!picked.length)return flash("Hech narsa tanlanmadi");
+  const url=_aiImpProj?`/projects/${_aiImpProj}/import/confirm`:"/import/tasks/ai/confirm";
+  try{const r=await api(url,{method:"POST",body:JSON.stringify({tasks:picked})});
+    flash(`${r.created||0} ${_aiImpProj?"element":"vazifa"} yaratildi`);closeM();render(VIEW);
+  }catch(e){flash("⚠️ "+e.message);}}
 
 let _rec=null,_chunks=[];
 async function toggleMic(){
