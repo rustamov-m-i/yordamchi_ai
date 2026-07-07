@@ -70,8 +70,11 @@ try:
     c = _con()
     check("dry-run: project_items hali bo'sh (hech narsa yozilmadi)",
           c.execute("SELECT COUNT(*) FROM project_items").fetchone()[0] == 0)
-    check("dry-run: schema_version yozilmadi",
-          c.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0)
+    # Eslatma: schema_version'da init()'ning 'content_seed_v1' markeri bo'lishi normal —
+    # bu yerda faqat MIGRATSIYA markeri yozilmaganini tekshiramiz.
+    check("dry-run: migratsiya markeri yozilmadi",
+          c.execute("SELECT COUNT(*) FROM schema_version WHERE name = ?",
+                    (migrations.MIGRATION_NAME,)).fetchone()[0] == 0)
     c.close()
 
     print("=== haqiqiy migratsiya (+backup) ===")

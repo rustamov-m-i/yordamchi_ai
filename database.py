@@ -1054,27 +1054,40 @@ async def seed_content_posts(posts: list[dict]) -> int:
     """Bir martalik urug'lantirish — endi to'g'ridan project_items(type='post')ga.
     Faqat MUTLAQO yangi o'rnatishda ishlaydi: project_items'da post yo'q VA content_posts
     bo'sh bo'lsa. (Prod'da content_posts to'la — u yerda migrations.py haqiqiy
-    ma'lumotni olib keladi; seed o'zini chetga oladi, dublikat bo'lmaydi.)"""
+    ma'lumotni olib keladi; seed o'zini chetga oladi, dublikat bo'lmaydi.)
+    schema_version'dagi 'content_seed_v1' markeri seed'ni DB hayotida ko'pi bilan
+    BIR MARTA ishlatadi: foydalanuvchi loyihalarni ataylab tozalagach, keyingi
+    restart bo'sh jadvallarni ko'rib demo-postlarni qayta urug'lab yubormasin."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cur = await db.execute("SELECT COUNT(*) FROM project_items WHERE type = 'post'")
-        if (await cur.fetchone())[0] > 0:
+        cur = await db.execute(
+            "SELECT 1 FROM schema_version WHERE name = 'content_seed_v1'")
+        if await cur.fetchone():
             return 0
+        seeded = 0
+        cur = await db.execute("SELECT COUNT(*) FROM project_items WHERE type = 'post'")
+        has_posts = (await cur.fetchone())[0] > 0
         cur = await db.execute("SELECT COUNT(*) FROM content_posts")
-        if (await cur.fetchone())[0] > 0:
-            return 0   # legacy ma'lumot bor — migratsiya ko'chiradi, seed aralashmaydi
-        now = now_iso()
-        for p in posts:
-            fields = {k: p[k] for k in ("format", "platform", "hashtags") if p.get(k)}
-            await db.execute(
-                """INSERT INTO project_items
-                     (id, project_id, type, title, description, status, category,
-                      primary_date, order_index, fields, created_at, updated_at)
-                   VALUES (?, NULL, 'post', ?, ?, 'reja', ?, ?, 0, ?, ?, ?)""",
-                (new_id("pi-"), p.get("topic") or "(post)", p.get("message"),
-                 p.get("category"), p.get("date"),
-                 json.dumps(fields, ensure_ascii=False) if fields else None, now, now))
+        has_legacy = (await cur.fetchone())[0] > 0
+        if not has_posts and not has_legacy:
+            now = now_iso()
+            for p in posts:
+                fields = {k: p[k] for k in ("format", "platform", "hashtags") if p.get(k)}
+                await db.execute(
+                    """INSERT INTO project_items
+                         (id, project_id, type, title, description, status, category,
+                          primary_date, order_index, fields, created_at, updated_at)
+                       VALUES (?, NULL, 'post', ?, ?, 'reja', ?, ?, 0, ?, ?, ?)""",
+                    (new_id("pi-"), p.get("topic") or "(post)", p.get("message"),
+                     p.get("category"), p.get("date"),
+                     json.dumps(fields, ensure_ascii=False) if fields else None, now, now))
+            seeded = len(posts)
+        # Marker har qanday holatda yoziladi — bu DB uchun seed masalasi yopildi
+        # (urug'landi yoki mavjud ma'lumot sabab o'zini chetga oldi — baribir).
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_version (name, applied_at) VALUES ('content_seed_v1', ?)",
+            (now_iso(),))
         await db.commit()
-    return len(posts)
+    return seeded
 
 
 # ─────────────────────────────── LOYIHALAR (Projects) ───────────────────────────────
