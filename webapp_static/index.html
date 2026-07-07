@@ -384,9 +384,16 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .kboard{display:flex;gap:10px;min-width:min-content;padding:0 2px 6px;align-items:flex-start}
   .kcol{flex:0 0 200px;width:200px;background:var(--soft);border-radius:13px;padding:9px}
   .kcol.over{outline:2px dashed var(--brand);outline-offset:-3px}
-  .khead{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;padding:2px 3px 9px}
+  .khead{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;padding:2px 3px 9px;cursor:grab;-webkit-user-select:none;user-select:none}
+  .khead:active{cursor:grabbing}
   .khead .kdot{width:9px;height:9px;border-radius:50%;flex:none}
-  .khead b{margin-left:auto;color:var(--faint);font-weight:700}
+  .khead .klbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .khead b{color:var(--faint);font-weight:700}
+  .kcol.coldrag{opacity:.5}
+  .kcol.colover{outline:2px dashed var(--brand);outline-offset:-2px;border-radius:13px}
+  .kaddcol{flex:0 0 130px;width:130px;background:transparent}
+  .kaddc{width:100%;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;padding:11px 8px;border-radius:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
+  .kaddc:hover{border-color:var(--brand);color:var(--brand)}
   .kcards{display:flex;flex-direction:column;gap:7px;min-height:8px}
   .kcard{background:var(--card);border-radius:10px;padding:9px 10px;box-shadow:0 1px 2px rgba(20,20,45,.06);cursor:grab}
   .kcard:active{cursor:grabbing}
@@ -1043,31 +1050,77 @@ async function renderProjOverview(box){
 
 // ── KANBAN (drag-drop → move) ──
 async function renderProjKanban(box){
-  const wf=_wf(_proj);const items=await _items();
+  const wf=_wf(_proj);const items=await _items();_kitems=items;
   const by={};wf.forEach(s=>by[s.key]=[]);items.forEach(it=>{(by[it.status]=by[it.status]||[]).push(it);});
   const card=it=>{const meta=[it.assignee?`<span><i class="ti ti-user"></i> ${esc(it.assignee)}</span>`:"",
       it.primary_date?`<span><i class="ti ti-calendar"></i> ${esc(String(it.primary_date).slice(5))}</span>`:""].filter(Boolean).join("");
     return `<div class="kcard" draggable="true" data-id="${it.id}" onclick="itemOpen('${it.id}')">
       <div class="kct"><i class="ti ti-${_itype(it.type).icon}"></i> ${esc(it.title)}</div>${meta?`<div class="kcm">${meta}</div>`:""}</div>`;};
   const cols=wf.map(s=>`<div class="kcol" data-st="${s.key}">
-      <div class="khead"><span class="kdot" style="background:${s.color}"></span>${esc(s.label)}<b>${(by[s.key]||[]).length}</b></div>
+      <div class="khead" title="Tahrirlash uchun bosing · sudrab tartiblang"><span class="kdot" style="background:${s.color}"></span><span class="klbl">${esc(s.label)}</span><b>${(by[s.key]||[]).length}</b></div>
       <div class="kcards">${(by[s.key]||[]).map(card).join("")}</div>
       <button class="kaddi" onclick="itemEdit({status:'${s.key}'})"><i class="ti ti-plus"></i> Item</button></div>`).join("");
-  box.innerHTML=`<div class="kbwrap"><div class="kboard">${cols}</div></div>
-    <div style="font-size:11px;color:var(--faint);margin-top:8px">Kartani ustunlar orasida suring — holat o'zgaradi. Mobil: kartani ochib holatni tanlang.</div>`;
+  box.innerHTML=`<div class="kbwrap"><div class="kboard">${cols}<div class="kcol kaddcol"><button class="kaddc" onclick="colAdd()"><i class="ti ti-plus"></i> Ustun</button></div></div></div>
+    <div style="font-size:11px;color:var(--faint);margin-top:8px">Kartani ustunga suring — holat o'zgaradi. Ustun sarlavhasini bosib tahrirlang yoki sudrab tartiblang.</div>`;
   box.querySelectorAll(".kcard").forEach(el=>{
     el.addEventListener("dragstart",e=>{_dragId=el.dataset.id;el.classList.add("dragging");e.dataTransfer.effectAllowed="move";});
     el.addEventListener("dragend",()=>{el.classList.remove("dragging");box.querySelectorAll(".kcol.over").forEach(c=>c.classList.remove("over"));_dragId=null;});});
-  box.querySelectorAll(".kcol").forEach(col=>{
-    col.addEventListener("dragover",e=>{e.preventDefault();col.classList.add("over");});
+  box.querySelectorAll(".kcol[data-st]").forEach(col=>{
+    col.addEventListener("dragover",e=>{if(!_dragId)return;e.preventDefault();col.classList.add("over");});
     col.addEventListener("dragleave",e=>{if(!col.contains(e.relatedTarget))col.classList.remove("over");});
     col.addEventListener("drop",e=>{e.preventDefault();col.classList.remove("over");if(_dragId)itemMove(_dragId,col.dataset.st);});});
+  _wireColDrag(box);
 }
 async function itemMove(id,status){try{await api(`/items/${id}/move`,{method:"POST",body:JSON.stringify({status})});
   const it=CACHE.content[id];if(it)it.status=status;render("content");}catch(e){flash("⚠️ "+e.message);}}
 
+// ── WORKFLOW USTUNLARI TAHRIRLAGICHI (project.workflow JSON'ga saqlanadi) ──
+async function _saveWorkflow(statuses){
+  try{await api(`/projects/${_proj.id}`,{method:"PATCH",body:JSON.stringify({workflow:{statuses}})});
+    _proj.workflow=JSON.stringify({statuses});render("content");}
+  catch(e){flash("⚠️ "+e.message);}}
+function _colReorder(key,overKey){const wf=_wf(_proj);const from=wf.findIndex(s=>s.key===key),to=wf.findIndex(s=>s.key===overKey);
+  if(from<0||to<0||from===to)return;const arr=wf.slice();const [m]=arr.splice(from,1);arr.splice(to,0,m);_saveWorkflow(arr);}
+function colPick(el){document.querySelectorAll("#col_cols .pcol").forEach(x=>x.classList.remove("on"));el.classList.add("on");window._colc=el.getAttribute("data-c");}
+function colAdd(){window._colc=PCOLORS[0];
+  openM(`<h3>Yangi ustun</h3><label>Nomi</label><input id="col_name" placeholder="Masalan: Kelishuvda">
+    <label>Rang</label><div class="pcolors" id="col_cols">${PCOLORS.map((c,i)=>`<span class="pcol ${i===0?'on':''}" style="background:${c}" data-c="${c}" onclick="colPick(this)"></span>`).join("")}</div>
+    <div class="macts"><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="colAddSave()">Qo'shish</button></div>`);}
+function colAddSave(){const n=(val("col_name")||"").trim();if(!n)return flash("Nom kerak");
+  const wf=_wf(_proj).slice();wf.push({key:"s"+Date.now().toString(36),label:n,color:window._colc||PCOLORS[0]});
+  closeM();_saveWorkflow(wf);}
+function colEdit(key){const s=_stMapP(_proj)[key];if(!s)return;window._colc=s.color;
+  openM(`<h3>Ustun sozlamalari</h3><label>Nomi</label><input id="col_name" value="${esc(s.label)}">
+    <label>Rang</label><div class="pcolors" id="col_cols">${PCOLORS.map(c=>`<span class="pcol ${c===s.color?'on':''}" style="background:${c}" data-c="${c}" onclick="colPick(this)"></span>`).join("")}</div>
+    <div class="macts"><button class="btn dang" onclick="colDelete('${key}')"><i class="ti ti-trash"></i></button><button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="colEditSave('${key}')">Saqlash</button></div>`);}
+function colEditSave(key){const n=(val("col_name")||"").trim();if(!n)return flash("Nom kerak");
+  const wf=_wf(_proj).map(s=>s.key===key?{...s,label:n,color:window._colc||s.color}:s);closeM();_saveWorkflow(wf);}
+function colDelete(key){const wf=_wf(_proj);if(wf.length<=1)return flash("Kamida 1 ustun kerak");
+  const its=(_kitems||[]).filter(x=>x.status===key);const target=(wf.find(s=>s.key!==key)||{}).key;
+  const run=async()=>{for(const it of its){try{await api(`/items/${it.id}`,{method:"PATCH",body:JSON.stringify({status:target})});}catch(e){}}
+    closeM();await _saveWorkflow(wf.filter(s=>s.key!==key));};
+  if(its.length){const msg=`«${_stLblP(_proj,key)}» ustunidagi ${its.length} ta item «${_stLblP(_proj,target)}»ga ko'chiriladi. Davom etamizmi?`;
+    if(tg?.showConfirm)tg.showConfirm(msg,ok=>{if(ok)run();});else if(confirm(msg))run();}
+  else run();}
+function _wireColDrag(box){
+  const board=box.querySelector(".kboard");if(!board)return;let st=null;
+  const clear=()=>{if(st&&st.timer)clearTimeout(st.timer);board.querySelectorAll(".kcol.coldrag,.kcol.colover").forEach(x=>x.classList.remove("coldrag","colover"));st=null;};
+  board.addEventListener("pointerdown",e=>{const h=e.target.closest(".khead");if(!h)return;const col=h.closest(".kcol[data-st]");if(!col)return;
+    st={key:col.dataset.st,col,x:e.clientX,y:e.clientY,touch:e.pointerType==="touch",active:false,moved:false,over:null};
+    if(st.touch)st.timer=setTimeout(()=>{if(st){st.active=true;col.classList.add("coldrag");if(window.tg&&tg.HapticFeedback)tg.HapticFeedback.impactOccurred("light");}},280);});
+  board.addEventListener("pointermove",e=>{if(!st)return;
+    if(Math.abs(e.clientX-st.x)>5||Math.abs(e.clientY-st.y)>5)st.moved=true;
+    if(!st.active){if(st.touch){if(st.moved)clearTimeout(st.timer);return;}if(st.moved){st.active=true;st.col.classList.add("coldrag");}}
+    if(st.active){e.preventDefault();const c=e.target.closest(".kcol[data-st]");
+      board.querySelectorAll(".kcol.colover").forEach(x=>x.classList.remove("colover"));
+      st.over=(c&&c!==st.col)?c.dataset.st:null;if(st.over)c.classList.add("colover");}},{passive:false});
+  board.addEventListener("pointerup",()=>{if(!st)return;const a=st.active,ov=st.over,key=st.key,mv=st.moved;clear();
+    if(a){if(ov)_colReorder(key,ov);}else if(!mv)colEdit(key);});
+  board.addEventListener("pointercancel",clear);
+}
+
 // ── JADVAL (guruhlash + tartib) ──
-let _titems=[];
+let _titems=[],_kitems=[];
 // Tartib faqat "Yo'q"/"Holat" guruhlashda — holat ichida (order_index → Kanban bilan sinxron).
 const _canReorder=()=>_grp==="none"||_grp==="status";
 const _sameStatus=(a,b)=>{const x=_titems.find(i=>i.id===a),y=_titems.find(i=>i.id===b);return !!(x&&y&&x.status===y.status);};
