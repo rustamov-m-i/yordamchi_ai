@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     tags TEXT,
     category TEXT,
     assignee TEXT,
+    project_id TEXT,              -- nullable; projects.id ga ishora (FK YO'Q — mavjud naqsh)
     recurrence_rule TEXT,
     recurrence_next_at TEXT,
     recurrence_parent_id TEXT,
@@ -427,12 +428,15 @@ async def init() -> None:
         if "assignee" not in task_cols:
             await db.execute("ALTER TABLE tasks ADD COLUMN assignee TEXT")
         for col in ("recurrence_rule", "recurrence_next_at", "recurrence_parent_id",
-                    "category", "parent_id"):
+                    "category", "parent_id", "project_id"):
             if col not in task_cols:
                 await db.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_recurrence ON tasks(recurrence_rule, recurrence_next_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category)")
+        # Task↔Project link (DESIGN_task_project_link.md, Variant A — additive, non-breaking).
+        # Index guard TASHQARISIDA (IF NOT EXISTS o'zi idempotent) — DESIGN §4.1.
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
 
         # Idempotency for redelivered Telegram updates. aiogram 3.x doesn't expose
         # the raw update_id on Message, so update_id was always NULL (NULLs never
@@ -574,8 +578,8 @@ async def create_task(data: dict) -> str:
         await db.execute(
             """INSERT INTO tasks (id, title, description, deadline, priority, status, tags, category, assignee,
                                   recurrence_rule, recurrence_next_at, recurrence_parent_id, parent_id,
-                                  source, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  project_id, source, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 title,
@@ -590,6 +594,7 @@ async def create_task(data: dict) -> str:
                 recurrence_next_at,
                 data.get("recurrence_parent_id"),
                 (data.get("parent_id") or None),
+                (data.get("project_id") or None),   # task↔project link (Variant A)
                 source,
                 now,
                 now,
@@ -625,6 +630,7 @@ async def update_task(task_id: str, data: dict, source: str = "manual") -> bool:
             "title", "description", "deadline", "priority", "status", "source", "assignee",
             "category", "recurrence_rule", "recurrence_next_at", "recurrence_parent_id",
             "parent_id",  # allow Excel № re-parenting (move a task under another / promote)
+            "project_id",  # task↔project link (Variant A) — vazifani loyihaga bog'lash/uzish
         ):
             if key in data:
                 if key == "recurrence_rule":
@@ -1408,30 +1414,44 @@ async def filter_existing_task_ids(ids: list[str]) -> set[str]:
 
 
 async def list_tasks(status_in: Optional[list[str]] = None, limit: int = 50,
-                     include_subtasks: bool = False) -> list[dict]:
+                     include_subtasks: bool = False,
+                     project_id: Optional[str] = None) -> list[dict]:
     # By default the flat list shows only top-level tasks (subtasks live under their
     # parent). include_subtasks=True drops that filter — used by per-assignee export.
+    # project_id: None → filtr yo'q (mavjud xatti-harakat, byte-for-byte); aniq id →
+    # faqat shu loyihaga bog'langan tasklar (DESIGN_task_project_link.md Variant A).
     sub_clause = "" if include_subtasks else "parent_id IS NULL"
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         if status_in:
             placeholders = ",".join("?" * len(status_in))
-            where = f"status IN ({placeholders})" + (f" AND {sub_clause}" if sub_clause else "")
+            parts = [f"status IN ({placeholders})"]
+            if sub_clause:
+                parts.append(sub_clause)
+            if project_id is not None:
+                parts.append("project_id = ?")
+            args = [*status_in] + ([project_id] if project_id is not None else []) + [limit]
             cur = await db.execute(
                 f"""SELECT * FROM tasks
-                    WHERE {where}
+                    WHERE {" AND ".join(parts)}
                     ORDER BY
                       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
                       CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
                       deadline ASC
                     LIMIT ?""",
-                (*status_in, limit),
+                tuple(args),
             )
         else:
-            where = f"WHERE {sub_clause}" if sub_clause else ""
+            parts = []
+            if sub_clause:
+                parts.append(sub_clause)
+            if project_id is not None:
+                parts.append("project_id = ?")
+            where = f"WHERE {' AND '.join(parts)}" if parts else ""
+            args = ([project_id] if project_id is not None else []) + [limit]
             cur = await db.execute(
                 f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+                tuple(args),
             )
         rows = await cur.fetchall()
         return [_row_to_task(r) for r in rows]

@@ -1081,6 +1081,13 @@ async function renderProjOverview(box){
     if(it.assignee)byAsg[it.assignee]=(byAsg[it.assignee]||0)+1;
     if(_TERM.has(it.status))done++;});
   const total=items.length,prog=total?Math.round(done/total*100):0;
+  // Bog'langan vazifalar (task↔project link, Variant A) — project_items'dan ALOHIDA blok.
+  // Progress %'ga QO'SHILMAYDI (DESIGN §4.5): task enum-statusi ↔ workflow ortogonal.
+  const ptasks=(await api(`/projects/${encodeURIComponent(_proj.id)}/tasks`)).tasks||[];
+  const ptDone=ptasks.filter(t=>t.status==="done").length;
+  const tasksCard=`<div class="card">${_ctitle(`Bog'langan vazifalar: ${ptasks.length}${ptasks.length?` (${ptDone} bajarilgan)`:""}`)}
+    <div style="font-size:11px;color:var(--faint);margin:-4px 0 10px">Progress % faqat loyiha elementlari bo'yicha — vazifalar alohida hisoblanadi.</div>
+    ${ptasks.length?ptasks.slice(0,25).map(t=>{const dn=t.status==="done";return `<div class="tl2" onclick="openTask('${t.id}')"><span class="ic"><i class="ti ti-${dn?"circle-check":"square"}" style="color:${dn?"var(--green)":(PCOL[t.priority]||"var(--brand)")}"></i></span><span class="tx"${dn?" style='text-decoration:line-through;color:var(--faint)'":""}>${esc(t.title)}</span>${STAT[t.status]?`<span class="chip">${STAT[t.status]}</span>`:""}</div>`;}).join(""):`<div style="font-size:13px;color:var(--muted)">Hali vazifa bog'lanmagan. Vazifani tahrirlab «Loyiha»ni tanlang.</div>`}</div>`;
   const kpi=(n,l,c)=>`<div class="kpi"><div class="kn" style="color:${c||'var(--text)'}">${n}</div><div class="kl">${l}</div></div>`;
   const sel=(id,cur,opts,ph)=>`<select id="${id}" onchange="ovSet()"${cur?' class="on"':''}><option value="">${ph}</option>${opts.map(o=>`<option value="${esc(o[0])}" ${cur===o[0]?"selected":""}>${esc(o[1])}</option>`).join("")}</select>`;
   const anyF=_ovF.status||_ovF.assignee||_ovF.type||_ovF.ym;
@@ -1093,7 +1100,8 @@ async function renderProjOverview(box){
     <div class="kpis">${kpi(total,"Jami item")}${kpi(done,"Yakunlangan","var(--green)")}${kpi(prog+"%","Bajarilish","var(--brand)")}</div>
     <div class="card">${_ctitle("Holatlar bo'yicha")}${_donut(wf.map(s=>[s.key,bySt[s.key]||0]),k=>_stColP(_proj,k),k=>_stLblP(_proj,k))}</div>
     <div class="card">${_ctitle("Turlar bo'yicha")}${_hbars(Object.entries(byType).sort((a,b)=>b[1]-a[1]))||_noData()}</div>
-    ${Object.keys(byAsg).length?`<div class="card">${_ctitle("Mas'ullar yuklamasi")}${_hbars(Object.entries(byAsg).sort((a,b)=>b[1]-a[1]))}</div>`:""}`;
+    ${Object.keys(byAsg).length?`<div class="card">${_ctitle("Mas'ullar yuklamasi")}${_hbars(Object.entries(byAsg).sort((a,b)=>b[1]-a[1]))}</div>`:""}
+    ${tasksCard}`;
 }
 
 // ── KANBAN (drag-drop → move) ──
@@ -1501,11 +1509,15 @@ function taskForm(t={}){return `<h3>${t.id?"Vazifani tahrirlash":(t.parent_id?"Y
   <div style="display:flex;gap:10px"><div style="flex:1"><label>Ustuvorlik</label><select id="f_prio">${["P0","P1","P2","P3"].map(p=>`<option value="${p}" ${(t.priority||"P2")===p?"selected":""}>${PRIO[p]}</option>`).join("")}</select></div>
     <div style="flex:1"><label>Holat</label><select id="f_status">${Object.keys(STATSEL).map(s=>`<option value="${s}" ${(t.status||"todo")===s?"selected":""}>${STATSEL[s]}</option>`).join("")}</select></div></div>
   <label>Kategoriya</label><select id="f_cat">${selOpts(META.categories,t.category,"— Kategoriyasiz —")}</select>
+  <label>Loyiha</label><select id="f_proj"><option value="">— Loyihasiz —</option>${(_PROJS||[]).map(p=>`<option value="${esc(p.id)}" ${(t.project_id||"")===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select>
   <div style="display:flex;gap:10px"><div style="flex:1"><label>Takroriylik</label><select id="f_rec">${Object.keys(RECUR).map(k=>`<option value="${k}" ${(t.recurrence_rule||"")===k?"selected":""}>${RECUR[k]}</option>`).join("")}</select></div>
     <div style="flex:1"><label>Teglar (vergul)</label><input id="f_tags" value="${esc(_tagsStr(t.tags))}"></div></div>
   ${t.id?`<button class="btn" style="margin-top:12px;width:100%" onclick="closeM();openTask({parent_id:'${t.id}'})"><i class="ti ti-subtask"></i> Sub-vazifa qo'shish</button>`:""}
   <div class="macts"><button class="btn" onclick="closeM()">Bekor</button>${t.id?`<button class="btn dang" onclick="delTask('${t.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn pri" onclick="saveTask('${t.id||""}')">Saqlash</button></div>`}
-const editTask=x=>openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));
+const editTask=async x=>{
+  // Loyiha selektori uchun loyihalar ro'yxati kerak — bo'sh bo'lsa lazy-load.
+  if(!(_PROJS&&_PROJS.length)){try{_PROJS=(await api("/projects")).projects||[];}catch(e){}}
+  openM(taskForm(typeof x==="object"?(x||{}):(CACHE.tasks[x]||{})));};
 // Kartani bosish → tafsilot (o'qish) ekrani; yangi/sub vazifa → tahrir formasi.
 const openTask=x=>(typeof x==="object")?editTask(x||{}):taskDetail(x);
 function taskDetail(id){const t=CACHE.tasks[id];if(!t)return flash("Vazifa topilmadi");openM(taskDetailHtml(t));}
@@ -1528,7 +1540,8 @@ function delTask(id){const run=()=>{closeM();act(()=>api(`/tasks/${id}`,{method:
 async function saveTask(id){
   const tags=val("f_tags").split(",").map(s=>s.trim()).filter(Boolean);
   const b={title:val("f_title"),description:val("f_desc"),assignee:val("f_asg"),deadline:fromLocal(val("f_dl")),
-    priority:val("f_prio"),status:val("f_status"),category:val("f_cat"),recurrence_rule:val("f_rec"),tags};
+    priority:val("f_prio"),status:val("f_status"),category:val("f_cat"),recurrence_rule:val("f_rec"),tags,
+    project_id:val("f_proj")||null};   // task↔project link (Variant A) — bo'sh → uzish
   const par=val("f_parent");if(par)b.parent_id=par;
   if(!b.title)return flash("Sarlavha kerak");
   await act(()=>api(id?`/tasks/${id}`:"/tasks",{method:id?"PATCH":"POST",body:JSON.stringify(b)}),"Saqlandi");closeM()}

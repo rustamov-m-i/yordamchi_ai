@@ -360,7 +360,8 @@ async def _reject_bad_parent(pid: str, self_id: str | None) -> None:
 
 
 _TASK_FIELDS = ("title", "description", "deadline", "priority", "status",
-                "assignee", "category", "recurrence_rule", "parent_id", "tags")
+                "assignee", "category", "recurrence_rule", "parent_id", "tags",
+                "project_id")
 _MEETING_FIELDS = ("title", "datetime_start", "datetime_end", "location_or_link",
                    "participants", "agenda", "prep_notes", "recurrence_rule")
 _NOTE_FIELDS = ("title", "content", "status", "tags")
@@ -1051,6 +1052,15 @@ async def items_list(request: web.Request) -> web.Response:
     return web.json_response({"items": items})
 
 
+async def project_tasks(request: web.Request) -> web.Response:
+    """Loyihaga bog'langan vazifalar (task↔project link, Variant A — read-only).
+    tasks jadvalidan project_id bo'yicha; project_items'dan alohida (§4.4 — status
+    modeli farqli, aralashtirilmaydi)."""
+    pid = request.match_info["id"]
+    tasks = await database.list_tasks(status_in=None, limit=200, project_id=pid)
+    return web.json_response({"tasks": tasks})
+
+
 async def item_create(request: web.Request) -> web.Response:
     pid = request.match_info["id"]
     if await database.get_project(pid) is None:
@@ -1381,6 +1391,7 @@ def create_app() -> web.Application:
         web.patch("/api/projects/{id}", project_update),
         web.delete("/api/projects/{id}", project_delete),
         web.get("/api/projects/{id}/items", items_list),
+        web.get("/api/projects/{id}/tasks", project_tasks),
         web.post("/api/projects/{id}/items", item_create),
         web.patch("/api/items/{id}", item_update),
         web.delete("/api/items/{id}", item_delete),
