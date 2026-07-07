@@ -2586,9 +2586,16 @@ async def create_meeting(data: dict) -> str:
     # that they could diverge from (a longer meeting silently shown as 60 min).
     _start = data.get("datetime_start")
     _end = data.get("datetime_end")
-    if _start and not _end:
-        _sd = parse_iso_dt(_start)
-        if _sd:
+    # Normalize the start to a canonical Asia/Tashkent ISO string. Every calendar
+    # read (day/month/week) filters `datetime_start BETWEEN ? AND ?` lexically
+    # against +05:00-suffixed bounds, so a bare date ('2026-07-15') or a naive
+    # value would sort OUT of its own window and vanish from every view. Storing
+    # the localized isoformat keeps the row findable (same localization the
+    # reminder scheduler already applies).
+    _sd = parse_iso_dt(_start) if _start else None
+    if _sd:
+        _start = _sd.isoformat()
+        if not _end:
             _end = (_sd + timedelta(minutes=60)).isoformat()
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(

@@ -1240,7 +1240,7 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
     """
     created_ids: dict[str, list[str]] = {
         "task": [], "reminder": [], "meeting": [], "contact": [], "correction": [],
-        "note": [], "_failed": [], "_refresh": [], "_conflict": [],
+        "note": [], "_failed": [], "_refresh": [], "_conflict": [], "_badtime": [],
     }
     _existing_cats: "set | None" = None       # lazy allowlist — categories (manual/Excel only)
     _existing_contacts: "dict | None" = None  # lazy allowlist {casefold: canonical name}
@@ -1346,6 +1346,17 @@ async def _execute_actions(actions: list[dict]) -> dict[str, list[str]]:
                 if not await database.delete_task(target_id):
                     created_ids["_failed"].append(atype)
             elif atype == "schedule_meeting":
+                # Vaqtni aniqlab bo'lmasa (bo'sh yoki yaroqsiz datetime_start) —
+                # uchrashuvni YARATMAYMIZ. Aks holda kalendar so'rovlari (lexical
+                # BETWEEN) topa olmaydigan "ko'rinmas" qator saqlanardi va
+                # foydalanuvchiga "qo'shildi" deb yolg'on aytilardi.
+                if database.parse_iso_dt(data.get("datetime_start")) is None:
+                    created_ids["_badtime"].append(
+                        (data.get("title") or "Uchrashuv").strip())
+                    logger.info(
+                        "schedule_meeting rad etildi — datetime_start yaroqsiz: %r",
+                        data.get("datetime_start"))
+                    continue
                 # To'qnashuvni oldini olish: bir xil vaqtga ustma-ust uchrashuv
                 # qo'ymaymiz. Vaqti mavjud uchrashuv bilan kesishsa — yaratmaymiz
                 # va foydalanuvchini ogohlantiramiz.
@@ -1574,6 +1585,19 @@ def _conflict_note(ids_by_type: dict[str, list[str]]) -> str:
     lines = "\n".join(f"• {c}" for c in conflicts)
     return (f"\n\n⚠️ **Uchrashuv qo'yilmadi (vaqt band):**\n{lines}\n"
             f"Boshqa vaqt tanlang yoki mavjud uchrashuvni bekor qiling.")
+
+
+def _badtime_note(ids_by_type: dict[str, list[str]]) -> str:
+    """Vaqti aniqlanmagan (bo'sh yoki yaroqsiz sana) uchun YARATILMAGAN
+    uchrashuvlar haqida ogohlantirish. Ilgari bunday uchrashuv hech qaysi
+    kalendar oynasida ko'rinmaydigan "ko'rinmas" qator bo'lib jim saqlanardi
+    va foydalanuvchiga "qo'shildi" deb yolg'on aytilardi — endi ochiq aytamiz."""
+    bad = ids_by_type.get("_badtime") if ids_by_type else None
+    if not bad:
+        return ""
+    lines = "\n".join(f"• «{t}»" for t in bad)
+    return (f"\n\n⚠️ **Uchrashuv qo'yilmadi (vaqt aniqlanmadi):**\n{lines}\n"
+            f"Aniq sana va vaqt bilan qayta yozing (masalan: «ertaga 15:00»).")
 
 
 def _failed_actions_note(ids_by_type: dict[str, list[str]]) -> str:
@@ -2487,6 +2511,7 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
 
         text = (final_response.get("user_message") or "").strip() or "✅"
         text += _conflict_note(ids_by_type)
+        text += _badtime_note(ids_by_type)
         text += _failed_actions_note(ids_by_type)
         text += _overflow_note
         if progress_msg is not None:
@@ -12056,6 +12081,11 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
         else:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[undo_row])
     text = (response.get("user_message") or "").strip() or "✅ Yaratildi"
+    # Uchrashuv tasdiq yo'li orqali o'tadi (schedule_meeting confirm-gated), shu
+    # sabab to'qnashuv/yaroqsiz-vaqt ogohlantirishlari SHU YERDA ham qo'shilishi
+    # shart — aks holda uchrashuv yaratilmagan bo'lsa ham "✅" ko'rinardi.
+    text += _conflict_note(ids_by_type)
+    text += _badtime_note(ids_by_type)
     text += _failed_actions_note(ids_by_type)
     await _safe_answer(query.message, text,
                         parse_mode="Markdown", reply_markup=keyboard)
