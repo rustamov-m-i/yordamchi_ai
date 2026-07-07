@@ -1002,7 +1002,8 @@ async def contacts_delete(request: web.Request) -> web.Response:
 # Eski /api/content* endpointlari olib tashlandi (Marketing Hub switchover) —
 # kontent endi /api/projects/{id}/items + /api/items/{id} orqali (project_items).
 _PROJECT_FIELDS = ("name", "description", "color", "status",
-                   "type", "icon", "default_view", "workflow", "template_id")
+                   "type", "icon", "default_view", "workflow", "template_id",
+                   "start_date", "end_date", "team")
 _ITEM_FIELDS = ("type", "title", "description", "primary_date", "start_date", "end_date",
                 "deadline", "status", "priority", "assignee", "category", "stage",
                 "parent_id", "fields", "order_index", "project_id")

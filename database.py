@@ -318,6 +318,9 @@ CREATE TABLE IF NOT EXISTS projects (
     icon TEXT,                    -- Tabler icon nomi
     default_view TEXT NOT NULL DEFAULT 'calendar',  -- calendar|kanban|table|dashboard
     workflow TEXT,                -- JSON: {"statuses":[{key,label,color},...]}
+    start_date TEXT,              -- loyiha boshlanish sanasi (YYYY-MM-DD)
+    end_date TEXT,                -- loyiha tugash/deadline sanasi
+    team TEXT,                    -- mas'ul jamoa (vergul bilan ajratilgan ismlar)
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -479,7 +482,7 @@ async def init() -> None:
         cur = await db.execute("PRAGMA table_info(projects)")
         proj_cols = {row[1] for row in await cur.fetchall()}
         if proj_cols:
-            for col in ("type", "icon", "workflow"):
+            for col in ("type", "icon", "workflow", "start_date", "end_date", "team"):
                 if col not in proj_cols:
                     await db.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
             if "default_view" not in proj_cols:
@@ -1311,20 +1314,26 @@ async def create_project(data: dict) -> str:
         workflow = json.dumps(workflow, ensure_ascii=False)
     if not workflow:
         workflow = json.dumps(config_marketing.default_workflow(ptype), ensure_ascii=False)
+
+    def _sd(k):
+        v = data.get(k)
+        return v.strip() if isinstance(v, str) else v
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO projects
                (id, name, description, color, status, type, icon, default_view, workflow,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                start_date, end_date, team, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (pid, (data.get("name") or "Loyiha").strip(), (data.get("description") or "").strip(),
-             color, data.get("status") or "active", ptype, icon, default_view, workflow, now, now))
+             color, data.get("status") or "active", ptype, icon, default_view, workflow,
+             _sd("start_date"), _sd("end_date"), _sd("team"), now, now))
         await db.commit()
     return pid
 
 
 async def update_project(project_id: str, data: dict) -> bool:
-    allowed = ("name", "description", "color", "status", "type", "icon", "default_view", "workflow")
+    allowed = ("name", "description", "color", "status", "type", "icon", "default_view", "workflow",
+               "start_date", "end_date", "team")
     fields, values = [], []
     for k in allowed:
         if k in data:

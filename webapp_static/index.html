@@ -455,6 +455,14 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .pcolors{display:flex;gap:9px;flex-wrap:wrap}
   .pcol{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2.5px solid transparent}
   .pcol.on{border-color:var(--text);box-shadow:0 0 0 2px var(--bg) inset}
+  .picons{display:flex;flex-wrap:wrap;gap:6px}
+  .picon{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:19px;color:var(--muted);cursor:pointer}
+  .picon.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-d)}
+  .wfprev{display:flex;flex-wrap:wrap;gap:6px}
+  .wfchip{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px}
+  .teamchips{display:flex;flex-wrap:wrap;gap:6px}
+  .tchip{font-size:12.5px;font-weight:600;padding:5px 11px;border-radius:20px;border:1px solid var(--line);color:var(--muted);cursor:pointer;background:var(--card)}
+  .tchip.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-d)}
 </style>
 </head>
 <body>
@@ -1363,27 +1371,52 @@ function itemDel(id){const run=async()=>{try{await api(`/items/${id}`,{method:"D
 
 // ── LOYIHA FORMASI (tur + shablon) ──
 const PCOLORS=["#6C5CE7","#16A34A","#2f7ae5","#E8A317","#d64545","#0C4A6E","#b060d0","#E8557F"];
+const PICONS=["brand-instagram","speakerphone","news","palette","calendar-event","route","device-tv","video","briefcase","folder","rocket","messages","building-bank","chart-bar","world","star"];
+let _pteam=[];
+function _teamChips(){const cs=META.contacts||[];
+  return cs.length?cs.map(n=>`<span class="tchip ${_pteam.includes(n)?'on':''}" onclick="pToggleTeam(this)" data-n="${esc(n)}">${esc(n)}</span>`).join(""):'<span style="font-size:12px;color:var(--faint)">Kontakt yo\'q</span>';}
+function pToggleTeam(el){const n=el.getAttribute("data-n");const i=_pteam.indexOf(n);if(i<0)_pteam.push(n);else _pteam.splice(i,1);el.classList.toggle("on");}
+function pPickIcon(el){document.querySelectorAll("#p_icons .picon").forEach(x=>x.classList.remove("on"));el.classList.add("on");$("p_icon").value=el.getAttribute("data-ic");}
+function pWfPreview(){const wfk=_ptype(val("p_type")||"smm").workflow;const sts=_MCFG.workflows[wfk]||[];
+  const el=$("p_wfprev");if(el)el.innerHTML=sts.map(s=>`<span class="wfchip" style="background:${s.color}1f;color:${s.color}">${esc(s.label)}</span>`).join("");}
+function pTypeChange(){const cfg=_ptype(val("p_type"));const iv=$("p_view");if(iv)iv.value=cfg.default_view;
+  const ic=$("p_icon");if(ic){ic.value=cfg.icon;document.querySelectorAll("#p_icons .picon").forEach(x=>x.classList.toggle("on",x.getAttribute("data-ic")===cfg.icon));}
+  pWfPreview();}
 function projEdit(p){p=p||{};const isNew=!p.id;const cur=p.color||"#6C5CE7";
-  const typeOpts=Object.entries(_MCFG.project_types||{}).map(([k,v])=>`<option value="${k}" ${p.type===k?"selected":""}>${esc(v.label)}</option>`).join("");
+  const ptype=p.type||"smm";const picon=p.icon||_ptype(ptype).icon;const pview=p.default_view||_ptype(ptype).default_view;
+  _pteam=(p.team||"").split(",").map(s=>s.trim()).filter(Boolean);
+  const typeOpts=Object.entries(_MCFG.project_types||{}).map(([k,v])=>`<option value="${k}" ${ptype===k?"selected":""}>${esc(v.label)}</option>`).join("");
   const tplOpts=`<option value="">— Shablonsiz —</option>`+(_MCFG.templates||[]).map(t=>`<option value="${t.id}">${esc(t.label)}</option>`).join("");
+  const viewOpts=[["calendar","Kalendar"],["kanban","Kanban"],["table","Jadval"],["dashboard","Overview"]].map(([k,l])=>`<option value="${k}" ${pview===k?"selected":""}>${l}</option>`).join("");
   openM(`<h3>${isNew?"Yangi loyiha":"Loyihani tahrirlash"}</h3>
   ${isNew?`<label>Shablon</label><select id="p_tpl" onchange="pTplPick()">${tplOpts}</select>`:""}
   <label>Nomi</label><input id="p_name" value="${esc(p.name)}" placeholder="Masalan: Ipoteka kampaniyasi">
-  <label>Turi</label><select id="p_type">${typeOpts}</select>
-  <label>Tavsif</label><textarea id="p_desc">${esc(p.description)}</textarea>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Turi</label><select id="p_type" onchange="pTypeChange()">${typeOpts}</select></div>
+    <div style="flex:1"><label>Ko'rinish</label><select id="p_view">${viewOpts}</select></div></div>
+  <label>Ikonka</label><div class="picons" id="p_icons">${PICONS.map(ic=>`<span class="picon ${ic===picon?'on':''}" data-ic="${ic}" onclick="pPickIcon(this)"><i class="ti ti-${ic}"></i></span>`).join("")}</div><input type="hidden" id="p_icon" value="${esc(picon)}">
   <label>Rang</label><div class="pcolors" id="p_colors">${PCOLORS.map(c=>`<span class="pcol ${c===cur?'on':''}" style="background:${c}" data-c="${c}" onclick="pPickColor(this)"></span>`).join("")}</div>
   <input type="hidden" id="p_color" value="${esc(cur)}">
+  <label>Workflow bosqichlari</label><div id="p_wfprev" class="wfprev"></div>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label>Boshlanish</label><input type="date" id="p_start" value="${esc(p.start_date||"")}"></div>
+    <div style="flex:1"><label>Tugash</label><input type="date" id="p_end" value="${esc(p.end_date||"")}"></div></div>
+  <label>Jamoa</label><div class="teamchips" id="p_team">${_teamChips()}</div>
+  <label>Tavsif</label><textarea id="p_desc">${esc(p.description)}</textarea>
   <label>Holat</label><select id="p_status"><option value="active" ${(p.status||'active')==='active'?'selected':''}>Faol</option><option value="archived" ${p.status==='archived'?'selected':''}>Arxiv</option></select>
-  <div class="macts">${p.id?`<button class="btn dang" onclick="projDel('${p.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="projSave('${p.id||""}')">Saqlash</button></div>`);}
+  <div class="macts">${p.id?`<button class="btn dang" onclick="projDel('${p.id}')"><i class="ti ti-trash"></i></button>`:""}<button class="btn" onclick="closeM()">Bekor</button><button class="btn pri" onclick="projSave('${p.id||""}')">Saqlash</button></div>`);
+  pWfPreview();}
 function pTplPick(){const t=(_MCFG.templates||[]).find(x=>x.id===val("p_tpl"));if(!t)return;
   const ts=$("p_type");if(ts)ts.value=t.type;
   const cc=$("p_color");if(cc){cc.value=t.color;document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.toggle("on",x.getAttribute("data-c")===t.color));}}
 function pPickColor(el){document.querySelectorAll("#p_colors .pcol").forEach(x=>x.classList.remove("on"));el.classList.add("on");$("p_color").value=el.getAttribute("data-c");}
-async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status"),type:val("p_type")};
+async function projSave(id){const b={name:val("p_name"),description:val("p_desc"),color:val("p_color"),status:val("p_status"),
+    type:val("p_type"),icon:val("p_icon"),default_view:val("p_view"),
+    start_date:val("p_start")||null,end_date:val("p_end")||null,team:_pteam.join(", ")};
   if(!b.name)return flash("Nom kerak");
   const tpl=$("p_tpl")?val("p_tpl"):"";
   if(!id){if(tpl)b.template_id=tpl;}
-  else{const wfk=_ptype(b.type).workflow;if(_MCFG.workflows[wfk])b.workflow={statuses:_MCFG.workflows[wfk]};}
+  // Tur o'zgarsagina workflow'ni yangi turning standartiga tushiramiz — aks holda
+  // Kanbanда qilingan workflow tahrirlari saqlanadi.
+  else if(_proj&&b.type&&b.type!==_proj.type){const wfk=_ptype(b.type).workflow;if(_MCFG.workflows[wfk])b.workflow={statuses:_MCFG.workflows[wfk]};}
   try{await api(id?`/projects/${id}`:"/projects",{method:id?"PATCH":"POST",body:JSON.stringify(b)});
     flash("Saqlandi");closeM();
     if(id&&_proj)_proj={..._proj,...b,workflow:b.workflow?JSON.stringify(b.workflow):_proj.workflow};
