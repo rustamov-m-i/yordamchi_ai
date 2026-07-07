@@ -1457,29 +1457,42 @@ function _hbars(data,labelFn){const max=Math.max(1,...data.map(d=>d[1]));
   return data.slice(0,6).map(([l,n])=>`<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px"><span>${esc(labelFn?labelFn(l):l)}</span><b style="color:var(--brand)">${n}</b></div><div class="tbar"><i style="width:${Math.round(n/max*100)}%;background:var(--brand)"></i></div></div>`).join("");
 }
 
-function pickImport(){const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx,.csv";
-  inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;flash("Import qilinmoqda…");
-    try{const buf=await f.arrayBuffer();
-      const r=await fetch("/api/import/tasks?name="+encodeURIComponent(f.name),{method:"POST",credentials:"same-origin",headers:{"Authorization":AUTH},body:buf});
-      const j=await r.json();if(!r.ok)return flash("⚠️ "+(j.error||("Xato "+r.status)));
-      flash(`${j.created||0} yangi, ${j.updated||0} yangilangan`);render(VIEW);
-    }catch(e){flash("⚠️ "+e.message);}};
-  inp.click();}
+// Fayl tanlash — input DOM'ga QO'SHILADI. Telegram mobil WebView'da (ayniqsa iOS)
+// DOM'ga ulanmagan <input type=file> tanlangach onchange'ni ISHGA TUSHIRMAYDI —
+// natijada "fayl tanlayman, lekin hech narsa bo'lmaydi". Tanlangach o'zini tozalaydi;
+// bekor qilinsa null qaytaradi.
+function _pickFile(accept){return new Promise(resolve=>{
+  const inp=document.createElement("input");inp.type="file";if(accept)inp.accept=accept;
+  inp.style.cssText="position:fixed;left:-9999px;width:1px;height:1px;opacity:0";
+  let done=false;const finish=f=>{if(done)return;done=true;try{inp.remove();}catch(e){}resolve(f||null);};
+  inp.onchange=()=>finish(inp.files&&inp.files[0]);inp.oncancel=()=>finish(null);
+  document.body.appendChild(inp);inp.click();});}
+async function pickImport(){const f=await _pickFile(".xlsx,.csv");if(!f)return;
+  flash("Import qilinmoqda…");
+  try{const buf=await f.arrayBuffer();
+    const r=await fetch("/api/import/tasks?name="+encodeURIComponent(f.name),{method:"POST",credentials:"same-origin",headers:{"Authorization":AUTH},body:buf});
+    const j=await r.json().catch(()=>({}));if(!r.ok)return flash("⚠️ "+(j.error||("Xato "+r.status)));
+    flash(`${j.created||0} yangi, ${j.updated||0} yangilangan`);render(VIEW);
+  }catch(e){flash("⚠️ "+e.message);}}
 
 // ── AI import: istalgan fayl/matn → Claude ajratadi → preview → joylaydi ──
 // projId berilsa → elementlar o'sha loyiha ichiga (project_items); aks holda → global vazifa.
 let _aiTasks=[],_aiImpProj=null;
-function aiImport(projId){_aiImpProj=projId||null;const inp=document.createElement("input");inp.type="file";
-  inp.accept=".xlsx,.csv,.pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp";
-  inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;flash("🔍 AI faylni o'qiyapti…");
-    try{const buf=await f.arrayBuffer();
-      const r=await fetch("/api/import/tasks/ai?name="+encodeURIComponent(f.name),
-        {method:"POST",credentials:"same-origin",headers:{"Authorization":AUTH,"Content-Type":f.type||"application/octet-stream"},body:buf});
-      const j=await r.json();if(!r.ok)return flash("⚠️ "+(j.error||("Xato "+r.status)));
-      if(!j.tasks||!j.tasks.length)return flash("Faylda vazifa topilmadi");
-      aiImportPreview(j.tasks,j.summary,j.truncated);
-    }catch(e){flash("⚠️ "+e.message);}};
-  inp.click();}
+async function aiImport(projId){_aiImpProj=projId||null;
+  const f=await _pickFile(".xlsx,.csv,.pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp");if(!f)return;
+  openM(`<h3>AI faylni o'qiyapti…</h3><div style="text-align:center;padding:16px 0">
+    <i class="ti ti-loader-2" style="font-size:26px;color:var(--brand);animation:spin .8s linear infinite;display:inline-block"></i>
+    <div style="font-size:12.5px;color:var(--muted);margin-top:10px">«${esc(f.name)}» — vazifalar ajratilmoqda…</div></div>`);
+  const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),90000);
+  try{const buf=await f.arrayBuffer();
+    const r=await fetch("/api/import/tasks/ai?name="+encodeURIComponent(f.name),
+      {method:"POST",credentials:"same-origin",signal:ctrl.signal,headers:{"Authorization":AUTH,"Content-Type":f.type||"application/octet-stream"},body:buf});
+    clearTimeout(to);const j=await r.json().catch(()=>({}));
+    if(!r.ok){closeM();return flash("⚠️ "+(j.error||("Xato "+r.status)));}
+    if(!j.tasks||!j.tasks.length){closeM();return flash("Faylda vazifa topilmadi");}
+    aiImportPreview(j.tasks,j.summary,j.truncated);
+  }catch(e){clearTimeout(to);closeM();
+    flash("⚠️ "+(e.name==="AbortError"?"Vaqt tugadi — fayl katta yoki AI band, qayta urining":e.message));}}
 function aiImportPreview(tasks,summary,truncated){_aiTasks=tasks;
   const row=(t,i)=>`<label class="aiimp"><input type="checkbox" data-i="${i}" checked>
     <span class="aiimptx"><span class="aiimpt">${esc(t.title)}</span>
