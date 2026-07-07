@@ -689,7 +689,12 @@ async def process_document(
     purpose = "document"
 
     try:
-        response = await _client.messages.create(
+        # Hujjatdan ko'p vazifa ajratish katta chiqish beradi (8000 tokengacha) va
+        # 60s standart timeout'dan oshib ketishi mumkin — o'shanda SDK 60s'da uzib
+        # 2 marta qayta urinardi (~180s), natijada nginx 504 qaytarardi. Shu chaqiruv
+        # uchun bitta uzoqroq (140s) urinish beramiz, retry-ko'paytirishsiz — chegara
+        # aniq va nginx proxy_read_timeout ostida qoladi.
+        response = await _client.with_options(timeout=140.0, max_retries=0).messages.create(
             model=model,
             max_tokens=_MAX_OUTPUT_TOKENS,
             system=[
