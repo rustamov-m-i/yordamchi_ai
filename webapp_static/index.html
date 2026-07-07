@@ -410,30 +410,35 @@ html.tgdark{--bg:#17171f;--card:#23232e;--text:#e9e9f0;--muted:#a2a2b2;--faint:#
   .kaddi{width:100%;margin-top:7px;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;font-size:12px;font-weight:600;padding:7px;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
   .kaddi:hover{border-color:var(--brand);color:var(--brand)}
   /* Jadval */
-  .grp{font-size:12px;color:var(--muted);display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .tgctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .tgctl .grplbl{font-size:12px;color:var(--muted);margin-right:2px}
+  .grpbtn{border:1px solid var(--line);background:var(--card);color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;padding:5px 12px;border-radius:20px;cursor:pointer}
+  .grpbtn.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-d)}
   .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
   .ptable{width:100%;min-width:460px;border-collapse:collapse;font-size:13px}
   .ptable th{text-align:left;padding:9px 10px;font-size:11px;font-weight:700;color:var(--muted);background:var(--soft);white-space:nowrap;text-transform:uppercase;letter-spacing:.3px}
   .ptable td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:middle;cursor:pointer}
   .ptable tr:hover td{background:var(--soft)}
   .ptable .tgrp td{background:var(--soft);font-weight:700;font-size:12px;cursor:default}
-  .ptable tr.wfhdr td{cursor:grab;-webkit-user-select:none;user-select:none}
-  .ptable tr.wfhdr .wfdot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:1px;margin-right:6px}
-  .ptable tr.wfdrag{opacity:.5}
-  .ptable tr.wfover td{box-shadow:inset 0 2px 0 var(--brand)}
-  .ptable tr.addwf td{color:var(--muted);cursor:pointer;font-weight:600}
-  .ptable tr.addwf td:hover{color:var(--brand)}
-  .grp .colsbtn{margin-left:auto;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+  .ptable .tgrp .wfdot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:1px;margin-right:6px}
   .ptable th[data-col]{cursor:grab;-webkit-user-select:none;user-select:none}
+  .ptable th .thgrip{color:var(--faint);font-size:13px;margin-right:5px;vertical-align:-2px}
   .ptable th.thdrag{opacity:.45}
   .ptable th.thover{box-shadow:inset 2px 0 0 var(--brand)}
+  .ptable th.addcolh,.ptable td.xcell{width:34px;text-align:center;padding:9px 6px}
+  .ptable th.addcolh{cursor:pointer;color:var(--brand);font-size:15px}
+  .ptable th.rgrip,.ptable td.rgrip{width:30px;padding:0 2px;text-align:center}
+  .ptable td.rgrip{cursor:grab;color:var(--faint);touch-action:none}
+  .ptable td.rgrip:active{cursor:grabbing}
+  .ptable td.rgrip i{font-size:16px;vertical-align:-3px}
+  .addrowbtn{width:100%;margin-top:8px;border:1px dashed var(--line);background:transparent;color:var(--brand);font:inherit;font-size:13px;font-weight:600;padding:11px;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+  .addrowbtn:hover{background:var(--brand-soft);border-color:var(--brand)}
+  .ptable tr.dragging{opacity:.5;background:var(--soft)}
+  .ptable tr.dropinto td{box-shadow:inset 0 2px 0 var(--brand)}
   .colpklist{display:flex;flex-direction:column;max-height:52vh;overflow-y:auto}
   .colpk{display:flex;align-items:center;gap:10px;padding:10px 4px;font-size:14px;border-bottom:1px solid var(--line);cursor:pointer}
   .colpk input{width:17px;height:17px;accent-color:var(--brand);flex:none}
-  .ptable tr.rrow{cursor:grab;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-  .ptable tr.rrow.dragging{cursor:grabbing}
-  .ptable tr.dragging{opacity:.5;background:var(--soft)}
-  .ptable tr.dropinto td{border-top:2px solid var(--brand)}
+  .tbhint{font-size:11px;color:var(--faint);margin-top:6px;line-height:1.5}
   .projname{font-size:15px;font-weight:600}
   .projmeta{font-size:12px;color:var(--muted);margin-top:2px}
   .ptabs{display:flex;gap:8px;margin-bottom:14px}
@@ -1168,31 +1173,22 @@ async function _reorderTo(id,targetId){const src=_titems.find(x=>x.id===id);if(!
 // (aks holda ro'yxat aylanadi). Holat ichida; boshqa holatga tashlash e'tiborsiz qoldiriladi.
 function _wireRowDrag(box){
   const tb=box.querySelector("tbody")||box;let st=null;
-  const clear=()=>{if(st&&st.timer)clearTimeout(st.timer);
-    box.querySelectorAll("tr.dropinto,tr.dragging").forEach(x=>x.classList.remove("dropinto","dragging"));st=null;};
+  const clear=()=>{box.querySelectorAll("tr.dropinto,tr.dragging").forEach(x=>x.classList.remove("dropinto","dragging"));st=null;};
   tb.addEventListener("pointerdown",e=>{
-    const tr=e.target.closest("tr.rrow");if(!tr)return;
-    if(e.target.closest("a,button,select,input,textarea"))return;
-    st={id:tr.dataset.id,tr,x:e.clientX,y:e.clientY,touch:e.pointerType==="touch",active:false,moved:false,over:null};
-    if(st.touch)st.timer=setTimeout(()=>{if(!st)return;st.active=true;tr.classList.add("dragging");   // touch: bosib turib
-      if(window.tg&&tg.HapticFeedback)tg.HapticFeedback.impactOccurred("light");},280);
-  });
-  tb.addEventListener("pointermove",e=>{
-    if(!st)return;
-    if(Math.abs(e.clientX-st.x)>4||Math.abs(e.clientY-st.y)>4)st.moved=true;
-    if(!st.active){
-      if(st.touch){if(st.moved)clearTimeout(st.timer);return;}   // touch: erta siljisa → ro'yxat aylanadi
-      if(st.moved){st.active=true;st.tr.classList.add("dragging");}   // mouse: siljitsa darrov
-    }
-    if(st.active){e.preventDefault();
-      const rt=e.target.closest("tr[data-id]");
-      box.querySelectorAll("tr.dropinto").forEach(x=>x.classList.remove("dropinto"));
-      st.over=(rt&&rt!==st.tr&&_sameStatus(st.id,rt.dataset.id))?rt.dataset.id:null;
-      if(st.over)rt.classList.add("dropinto");
-    }
+    const grip=e.target.closest("td.rgrip");if(!grip)return;   // faqat ⠿ tutqichdan
+    const tr=grip.closest("tr.rrow");if(!tr)return;
+    e.preventDefault();
+    st={id:tr.dataset.id,tr,over:null};tr.classList.add("dragging");
+    if(window.tg&&tg.HapticFeedback)tg.HapticFeedback.impactOccurred("light");
   },{passive:false});
-  tb.addEventListener("pointerup",()=>{if(!st)return;const a=st.active,ov=st.over,id=st.id,mv=st.moved;clear();
-    if(a){if(ov)_reorderTo(id,ov);}else if(!mv)itemOpen(id);});
+  tb.addEventListener("pointermove",e=>{
+    if(!st)return;e.preventDefault();
+    const rt=e.target.closest("tr[data-id]");
+    box.querySelectorAll("tr.dropinto").forEach(x=>x.classList.remove("dropinto"));
+    st.over=(rt&&rt!==st.tr&&_sameStatus(st.id,rt.dataset.id))?rt.dataset.id:null;
+    if(st.over)rt.classList.add("dropinto");
+  },{passive:false});
+  tb.addEventListener("pointerup",()=>{if(!st)return;const ov=st.over,id=st.id;clear();if(ov)_reorderTo(id,ov);});
   tb.addEventListener("pointercancel",clear);
 }
 
@@ -1249,43 +1245,31 @@ function _wireColHdrDrag(box){
 
 async function renderProjTable(box){
   const items=await _items();_titems=items;
-  const ro=_canReorder();const cols=_visCols();const ncol=cols.length;
-  const row=it=>`<tr data-id="${it.id}" class="${ro?'rrow':''}"${ro?"":` onclick="itemOpen('${it.id}')"`}>`+cols.map(k=>`<td>${_colCell(it,k)}</td>`).join("")+`</tr>`;
+  const ro=_canReorder();const cols=_visCols();
+  const ncol=(ro?1:0)+cols.length+1;   // grip + data ustunlar + «+ustun»
+  const row=it=>`<tr data-id="${it.id}"${ro?' class="rrow"':''}>`
+    +(ro?`<td class="rgrip" title="Sudrab tartiblang" aria-label="Ko'chirish"><i class="ti ti-grip-vertical"></i></td>`:"")
+    +cols.map(k=>`<td onclick="itemOpen('${it.id}')">${_colCell(it,k)}</td>`).join("")
+    +`<td class="xcell"></td></tr>`;
   let body="";
-  if(_grp==='status'){   // workflow tartibida — sarlavhalar tahrirlanadi/sudraladi (Kanban bilan bir xil)
+  const gf=_grp==='assignee'?(it=>it.assignee||"—"):_grp==='type'?(it=>_itype(it.type).label):null;
+  if(_grp==='status'){   // holat bo'yicha vizual guruh (tahrir yo'q — workflow Kanbanда tahrirlanadi)
     _wf(_proj).forEach(s=>{const g=items.filter(it=>it.status===s.key);
-      body+=`<tr class="tgrp wfhdr" data-st="${s.key}" title="Bosib tahrirlang · sudrab tartiblang"><td colspan="${ncol}"><span class="wfdot" style="background:${s.color}"></span>${esc(s.label)} · ${g.length}</td></tr>`+g.map(row).join("");});
-    body+=`<tr class="tgrp addwf"><td colspan="${ncol}" onclick="colAdd()"><i class="ti ti-plus"></i> Ustun qo'shish</td></tr>`;
-  }else if(_grp==='assignee'||_grp==='type'){const gf=_grp==='assignee'?(it=>it.assignee||"—"):(it=>_itype(it.type).label);
-    const g={};items.forEach(it=>{const k=gf(it);(g[k]=g[k]||[]).push(it);});
+      body+=`<tr class="tgrp"><td colspan="${ncol}"><span class="wfdot" style="background:${s.color}"></span>${esc(s.label)} · ${g.length}</td></tr>`+g.map(row).join("");});
+  }else if(gf){const g={};items.forEach(it=>{const k=gf(it);(g[k]=g[k]||[]).push(it);});
     Object.keys(g).sort().forEach(k=>{body+=`<tr class="tgrp"><td colspan="${ncol}">${esc(k)} · ${g[k].length}</td></tr>`+g[k].map(row).join("");});}
   else body=items.map(row).join("");
-  const chip=(k,l)=>`<span class="cf ${_grp===k?'on':''}" onclick="_grp='${k}';render('content')">${l}</span>`;
-  box.innerHTML=`<div class="grp">Guruh: ${chip('none',"Yo'q")}${chip('status',"Holat")}${chip('assignee',"Mas'ul")}${chip('type',"Tur")}
-      <button class="cf colsbtn" onclick="colsPicker()"><i class="ti ti-columns-3"></i> Ustunlar</button></div>
-    <div class="tblwrap"><table class="ptable"><thead><tr>${cols.map(k=>`<th data-col="${k}">${esc(_colLabel(k))}</th>`).join("")}</tr></thead>
-      <tbody>${body||`<tr><td colspan="${ncol}" style="text-align:center;color:var(--faint);padding:16px">Item yo'q</td></tr>`}</tbody></table></div>
-    <div style="font-size:11px;color:var(--faint);margin-top:6px">Ustun sarlavhalarini sudrab tartiblang · «Ustunlar» orqali tanlang.${_grp==='status'?" Status sarlavhasi: bosib tahrir / sudrab tartib.":""}${ro?" Qatorni sudrab holat ichida tartiblang.":""}</div>
-    <button class="btn pri" style="width:100%;margin-top:10px" onclick="itemEdit({})"><i class="ti ti-plus"></i> Item qo'shish</button>`;
+  if(!items.length)body=`<tr><td colspan="${ncol}" style="text-align:center;color:var(--faint);padding:16px">Hali item yo'q</td></tr>`;
+  const th=(ro?`<th class="rgrip"></th>`:"")
+    +cols.map(k=>`<th data-col="${k}"><i class="ti ti-grip-vertical thgrip" aria-hidden="true"></i>${esc(_colLabel(k))}</th>`).join("")
+    +`<th class="addcolh" onclick="colsPicker()" title="Ustun qo'shish / tanlash"><i class="ti ti-plus"></i></th>`;
+  const gb=(k,l)=>`<button class="grpbtn ${_grp===k?'on':''}" onclick="_grp='${k}';render('content')">${l}</button>`;
+  box.innerHTML=`<div class="tgctl"><span class="grplbl">Guruh</span>${gb('none',"Yo'q")}${gb('status',"Holat")}${gb('assignee',"Mas'ul")}${gb('type',"Tur")}</div>
+    <div class="tblwrap"><table class="ptable ptedit"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>
+    <button class="addrowbtn" onclick="itemEdit({})"><i class="ti ti-plus"></i> Yangi qator</button>
+    <div class="tbhint">Sarlavhani sudrab ustunlarni tartiblang · o'ngда «+» ustun qo'shadi · ${ro?"⠿ tutqichdan qatorni sudrang":"tartiblash Yo'q/Holat rejimida"}.</div>`;
   if(ro)_wireRowDrag(box);
-  if(_grp==='status')_wireWfHdrDrag(box);
   _wireColHdrDrag(box);
-}
-function _wireWfHdrDrag(box){
-  const tb=box.querySelector("tbody")||box;let st=null;
-  const clear=()=>{if(st&&st.timer)clearTimeout(st.timer);box.querySelectorAll("tr.wfdrag,tr.wfover").forEach(x=>x.classList.remove("wfdrag","wfover"));st=null;};
-  tb.addEventListener("pointerdown",e=>{const h=e.target.closest("tr.wfhdr");if(!h)return;
-    st={key:h.dataset.st,h,x:e.clientX,y:e.clientY,touch:e.pointerType==="touch",active:false,moved:false,over:null};
-    if(st.touch)st.timer=setTimeout(()=>{if(st){st.active=true;h.classList.add("wfdrag");if(window.tg&&tg.HapticFeedback)tg.HapticFeedback.impactOccurred("light");}},280);});
-  tb.addEventListener("pointermove",e=>{if(!st)return;
-    if(Math.abs(e.clientX-st.x)>5||Math.abs(e.clientY-st.y)>5)st.moved=true;
-    if(!st.active){if(st.touch){if(st.moved)clearTimeout(st.timer);return;}if(st.moved){st.active=true;st.h.classList.add("wfdrag");}}
-    if(st.active){e.preventDefault();const h=e.target.closest("tr.wfhdr");
-      box.querySelectorAll("tr.wfover").forEach(x=>x.classList.remove("wfover"));
-      st.over=(h&&h!==st.h)?h.dataset.st:null;if(st.over)h.classList.add("wfover");}},{passive:false});
-  tb.addEventListener("pointerup",()=>{if(!st)return;const a=st.active,ov=st.over,key=st.key,mv=st.moved;clear();
-    if(a){if(ov)_colReorder(key,ov);}else if(!mv)colEdit(key);});
-  tb.addEventListener("pointercancel",clear);
 }
 
 // ── KALENDAR (sana-markazli item'lar) ──
