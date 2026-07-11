@@ -406,16 +406,34 @@ def _repair_json(text: str) -> str:
 
 
 def _extract_json(text: str) -> Optional[dict]:
-    """Robust JSON extraction. Strips code fences, finds the JSON object, and repairs
-    unescaped quotes inside string values before giving up."""
-    text = text.strip()
-    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
-    if fence:
+    """Robust JSON extraction. Handles code fences AND surrounding/trailing prose
+    that some models (notably DeepSeek) add around the envelope: strips the first
+    fenced block, tries the whole string, then scans each '{' with raw_decode to
+    find the first decodable object, and finally repairs unescaped inner quotes."""
+    text = (text or "").strip()
+    # First fenced block (non-anchored — a model may append prose AFTER the ``` fence).
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence and fence.group(1).strip():
         text = fence.group(1).strip()
+    # Whole string is clean JSON?
     try:
-        return json.loads(text)
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
     except json.JSONDecodeError:
         pass
+    # Scan each '{' and try to decode an object starting there — tolerates leading
+    # and trailing prose and stray braces before the real envelope.
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    # Last resort: widest span + unescaped-inner-quote repair.
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -487,10 +505,255 @@ def _envelope_from_raw(raw: str) -> Optional[dict]:
     if parsed:
         return parsed
     text = (raw or "").strip()
-    if text and "{" not in text and "}" not in text:
-        # Pure prose — Claude chatted instead of emitting JSON. Show it verbatim.
-        return _fallback(text)
+    if text:
+        # Not a JSON attempt → chatty prose ("Salom", "ha"), show it verbatim. Detect
+        # by the FIRST non-fence char being '{' rather than "no braces at all" — a
+        # conversational reply may contain a stray brace (code snippet, ":-}") yet
+        # still be prose. Genuine-but-broken JSON (starts with '{') falls through.
+        probe = text.lstrip("`json \t\r\n")
+        if not probe.startswith("{"):
+            return _fallback(text)
     return None
+
+
+# ──────────────────────── DEEPSEEK (gibrid matn-provayderi) ────────────────────────
+# Matnli chaqiruvlar (chat, reja, matn/xlsx'dan vazifa ajratish) arzon DeepSeek'ga
+# (OpenAI-mos API) yo'naltiriladi. Vision (rasm/skaner-PDF) HAR DOIM Claude'da —
+# bu yo'lga faqat matn keladi. openai voice_service uchun allaqachon o'rnatilgan.
+# XAVFSIZ: LLM_TEXT_PROVIDER != "deepseek" YOKI kalit yo'q → hammasi Claude'da qoladi.
+
+_ds_client = None
+
+
+def _use_deepseek_text() -> bool:
+    return config.LLM_TEXT_PROVIDER == "deepseek" and bool(config.DEEPSEEK_API_KEY)
+
+
+def _deepseek():
+    global _ds_client
+    if _ds_client is None:
+        from openai import AsyncOpenAI
+        _ds_client = AsyncOpenAI(api_key=config.DEEPSEEK_API_KEY,
+                                 base_url=config.DEEPSEEK_BASE_URL,
+                                 timeout=60.0, max_retries=1)
+    return _ds_client
+
+
+def _deepseek_model(complexity: Optional[str], internal_directive: Optional[str]) -> str:
+    """Claude model-routerining (_pick_model) DeepSeek ekvivalenti. Aniq `complexity`
+    HAR DOIM g'olib — shu sabab /plan (complexity='default' + executive_plan direktivi
+    bilan ataylab ARZON modelni majburlaydi) reasoner'ga tushmaydi, xuddi Anthropic
+    yo'lidagidek. Faqat complexity berilmaganda kalit-so'zlar reasoner'ni tanlaydi."""
+    if complexity == "complex":
+        return config.DEEPSEEK_MODEL_COMPLEX
+    if complexity in ("fast", "default"):
+        return config.DEEPSEEK_MODEL
+    if internal_directive and any(k in internal_directive for k in _COMPLEX_DIRECTIVE_KEYWORDS):
+        return config.DEEPSEEK_MODEL_COMPLEX
+    return config.DEEPSEEK_MODEL
+
+
+def _blocks_need_vision(content_blocks: list) -> bool:
+    """content_blocks ichida rasm yoki PDF-hujjat bormi? Bo'lsa — Claude (vision) shart."""
+    return any(isinstance(b, dict) and b.get("type") in ("image", "document")
+               for b in (content_blocks or []))
+
+
+def _oai_messages(state_block: str, messages: list) -> list:
+    """Anthropic-uslub (system massiv + content) → OpenAI xabarlari. SYSTEM_PROMPT +
+    holat-bloki bitta system xabariga birlashadi; qolganlar matnga tekislanadi."""
+    def _flat(c):
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n\n".join(b.get("text", "") for b in c
+                               if isinstance(b, dict) and b.get("type") == "text")
+        return str(c or "")
+    out = [{"role": "system", "content": config.SYSTEM_PROMPT + "\n\n" + state_block}]
+    out += [{"role": m["role"], "content": _flat(m.get("content"))} for m in messages]
+    return out
+
+
+def _finalize_parsed(raw: str) -> Optional[dict]:
+    parsed = _envelope_from_raw(raw)
+    if not parsed:
+        return None
+    parsed.setdefault("intent", "none")
+    parsed.setdefault("actions", [])
+    parsed.setdefault("user_message", "")
+    parsed.setdefault("buttons", [])
+    parsed.setdefault("needs_clarification", False)
+    parsed.setdefault("clarification_question", None)
+    return parsed
+
+
+class _DSError(Exception):
+    def __init__(self, label: str, msg: str):
+        super().__init__(label)
+        self.label, self.msg = label, msg
+
+
+def _classify_openai_error(e) -> Tuple[str, str]:
+    import openai
+    if isinstance(e, openai.RateLimitError):
+        return "rate_limit", "Juda ko'p so'rov. Bir-ikki daqiqadan keyin qayta urinib ko'ring."
+    if isinstance(e, openai.AuthenticationError):
+        return "auth", "DeepSeek kalitida muammo. Administrator bilan bog'laning."
+    if isinstance(e, openai.APITimeoutError):
+        return "timeout", "Javob kech keldi. Qaytadan urinib ko'ring."
+    if isinstance(e, openai.APIConnectionError):
+        return "connection", "Tarmoqqa ulanib bo'lmadi. Bir ozdan keyin qaytadan urinib ko'ring."
+    code = getattr(e, "status_code", None)
+    if code == 402:
+        return "credit_low", "DeepSeek balansi tugadi. Hisobni to'ldiring: https://platform.deepseek.com"
+    if code == 429:
+        return "rate_limit", "Juda ko'p so'rov. Bir-ikki daqiqadan keyin qayta urinib ko'ring."
+    return "api_error", "Texnik xato yuz berdi. Iltimos, qaytadan urinib ko'ring."
+
+
+async def _deepseek_call(model: str, oai_msgs: list, timeout: float = 60.0):
+    """Bitta DeepSeek chat.completions → (raw_text, (in_tok, out_tok)). Xato → _DSError."""
+    import openai
+    try:
+        resp = await _deepseek().with_options(timeout=timeout).chat.completions.create(
+            model=model, max_tokens=_MAX_OUTPUT_TOKENS, messages=oai_msgs)
+    except openai.OpenAIError as e:
+        raise _DSError(*_classify_openai_error(e))
+    text = (resp.choices[0].message.content or "") if resp.choices else ""
+    u = getattr(resp, "usage", None)
+    return text, (getattr(u, "prompt_tokens", 0) if u else 0,
+                  getattr(u, "completion_tokens", 0) if u else 0)
+
+
+async def _ds_log(model, purpose, input_hash, input_chars, in_tok, out_tok, redacted_count, error=None):
+    if error:
+        await database.log_llm_call("deepseek", model, purpose, input_hash, input_chars,
+                                    None, None, redacted_terms_count=redacted_count, error=error)
+    else:
+        cost = redaction.estimate_cost(model, in_tok, out_tok, 0, 0)
+        await database.log_llm_call("deepseek", model, purpose, input_hash, input_chars,
+                                    in_tok, out_tok, redacted_terms_count=redacted_count,
+                                    estimated_cost_usd=cost)
+
+
+async def _ds_process_message(user_text, internal_directive, complexity):
+    model = _deepseek_model(complexity, internal_directive)
+    state_block = await _build_state_block()
+    if internal_directive:
+        messages = []
+        outgoing_content, redacted_count = redaction.redact(internal_directive)
+        purpose = "internal:" + internal_directive[:40]
+    else:
+        history = _budget_history(await database.recent_messages(limit=10))
+        messages = [{"role": m["role"], "content": m["content"]}
+                    for m in history if (m.get("content") or "").strip()]
+        outgoing_content, redacted_count = redaction.redact(user_text)
+        purpose = "user_message"
+    messages.append({"role": "user", "content": outgoing_content})
+    input_hash = redaction.hash_input(outgoing_content)
+    input_chars = len(outgoing_content)
+    try:
+        raw, (in_tok, out_tok) = await _deepseek_call(model, _oai_messages(state_block, messages))
+    except _DSError as e:
+        await _ds_log(model, purpose, input_hash, input_chars, 0, 0, redacted_count, error=e.label)
+        return _fallback(e.msg)
+    await _ds_log(model, purpose, input_hash, input_chars, in_tok, out_tok, redacted_count)
+    parsed = _finalize_parsed(raw)
+    if not parsed:
+        logger.error("DeepSeek returned unusable output: %s", (raw or "")[:500])
+        return _FALLBACK_RESPONSE
+    if not internal_directive:
+        await database.append_message("user", user_text)
+        await database.append_message("assistant", parsed.get("user_message") or "✅")
+        await database.trim_history(keep=30)
+    return parsed
+
+
+async def _ds_process_document(instruction, content_blocks, complexity, file_label):
+    model = _deepseek_model(complexity, None)
+    state_block = await _build_state_block()
+    instruction_red, redacted_count = redaction.redact(instruction or "")
+    # Faqat matnli bloklar (rasm/PDF _blocks_need_vision tomonidan bloklangan).
+    doc_text = "\n\n".join(b.get("text", "") for b in content_blocks
+                           if isinstance(b, dict) and b.get("type") == "text")
+    user_content = (doc_text + "\n\n" + instruction_red).strip()
+    oai_msgs = [{"role": "system", "content": config.SYSTEM_PROMPT + "\n\n" + state_block},
+                {"role": "user", "content": user_content}]
+    input_hash = redaction.hash_input(instruction_red)
+    input_chars = len(user_content)
+    purpose = "document"
+    try:
+        raw, (in_tok, out_tok) = await _deepseek_call(model, oai_msgs, timeout=140.0)
+    except _DSError as e:
+        await _ds_log(model, purpose, input_hash, input_chars, 0, 0, redacted_count, error=e.label)
+        return _fallback(e.msg)
+    await _ds_log(model, purpose, input_hash, input_chars, in_tok, out_tok, redacted_count)
+    parsed = _finalize_parsed(raw)
+    if not parsed:
+        logger.error("DeepSeek (document) returned unusable output: %s", (raw or "")[:500])
+        return _FALLBACK_RESPONSE
+    try:
+        marker = f"[Hujjat yuborildi: {file_label or 'fayl'}] {(instruction or '').strip()[:200]}"
+        await database.append_message("user", marker.strip())
+        await database.append_message("assistant", parsed.get("user_message") or "✅")
+        await database.trim_history(keep=30)
+    except Exception:
+        logger.debug("Could not persist document turn to history")
+    return parsed
+
+
+async def _ds_process_message_stream(user_text, complexity, internal_directive):
+    import openai
+    model = _deepseek_model(complexity, internal_directive)
+    state_block = await _build_state_block()
+    if internal_directive:
+        messages = []
+        outgoing_content, redacted_count = redaction.redact(internal_directive)
+        purpose = "internal_stream:" + internal_directive[:40]
+    else:
+        history = _budget_history(await database.recent_messages(limit=10))
+        messages = [{"role": m["role"], "content": m["content"]}
+                    for m in history if (m.get("content") or "").strip()]
+        outgoing_content, redacted_count = redaction.redact(user_text)
+        purpose = "user_message_stream"
+    messages.append({"role": "user", "content": outgoing_content})
+    input_hash = redaction.hash_input(outgoing_content)
+    input_chars = len(outgoing_content)
+    buf, last_emitted, in_tok, out_tok = "", "", 0, 0
+    try:
+        stream = await _deepseek().chat.completions.create(
+            model=model, max_tokens=_MAX_OUTPUT_TOKENS,
+            messages=_oai_messages(state_block, messages),
+            stream=True, stream_options={"include_usage": True})
+        async for chunk in stream:
+            u = getattr(chunk, "usage", None)
+            if u:
+                in_tok = getattr(u, "prompt_tokens", 0) or 0
+                out_tok = getattr(u, "completion_tokens", 0) or 0
+            if chunk.choices:
+                piece = getattr(chunk.choices[0].delta, "content", None)
+                if piece:
+                    buf += piece
+                    partial = _extract_partial_user_message(buf)
+                    if partial is not None and partial != last_emitted:
+                        last_emitted = partial
+                        yield ("partial", partial)
+    except openai.OpenAIError as e:
+        label, _ = _classify_openai_error(e)
+        logger.warning("Streaming DeepSeek failed (%s) — falling back to non-streaming", label)
+        yield ("complete", await _ds_process_message(user_text, internal_directive, complexity))
+        return
+    await _ds_log(model, purpose, input_hash, input_chars, in_tok, out_tok, redacted_count)
+    parsed = _finalize_parsed(buf)
+    if not parsed:
+        logger.error("DeepSeek (stream) returned unusable output: %s", (buf or "")[:500])
+        yield ("complete", _FALLBACK_RESPONSE)
+        return
+    if not internal_directive:
+        await database.append_message("user", user_text)
+        await database.append_message("assistant", parsed.get("user_message") or "✅")
+        await database.trim_history(keep=30)
+    yield ("complete", parsed)
 
 
 async def process_message(
@@ -506,6 +769,10 @@ async def process_message(
                 "default" (Sonnet), or "complex" (Opus). When omitted, the
                 router auto-picks based on internal_directive keywords.
     """
+
+    # Gibrid: matnli chaqiruvlar DeepSeek'ga (kalit sozlangan bo'lsa).
+    if _use_deepseek_text():
+        return await _ds_process_message(user_text, internal_directive, complexity)
 
     if _circuit_is_open():
         logger.warning("Anthropic circuit open — short-circuiting (cooldown remaining: %.0fs)",
@@ -666,6 +933,11 @@ async def process_document(
     indicator. A short marker plus the summary are written to conversation history
     so the principal can ask follow-up questions about the document.
     """
+    # Gibrid: matnli hujjat (xlsx/csv/docx/txt/matnli PDF) DeepSeek'ga. Rasm/skaner-PDF
+    # (vision) — HAR DOIM Claude'da (DeepSeek ko'rmaydi).
+    if _use_deepseek_text() and not _blocks_need_vision(content_blocks):
+        return await _ds_process_document(instruction, content_blocks, complexity, file_label)
+
     if _circuit_is_open():
         logger.warning("Anthropic circuit open — short-circuiting document analysis "
                         "(cooldown remaining: %.0fs)", _circuit_open_until - _time.time())
@@ -786,6 +1058,12 @@ async def process_message_stream(
 
     Falls back to the non-streaming path on any unrecoverable error (yields
     a single ("complete", fallback_dict))."""
+
+    # Gibrid: matnli oqim DeepSeek'ga (kalit sozlangan bo'lsa).
+    if _use_deepseek_text():
+        async for _ev in _ds_process_message_stream(user_text, complexity, internal_directive):
+            yield _ev
+        return
 
     model = _pick_model(complexity, internal_directive)
     state_block = await _build_state_block()

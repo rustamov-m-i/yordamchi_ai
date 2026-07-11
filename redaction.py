@@ -101,6 +101,10 @@ _PRICES_USD_PER_MTOK = {
     "claude-sonnet-4-5":   {"in": 3.0,  "out": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
     "claude-haiku-4-5":    {"in": 0.8,  "out": 4.0,  "cache_read": 0.08, "cache_write": 1.0},
     "whisper-1":           {"in": 6.0,  "out": 0.0,  "cache_read": 0.0,  "cache_write": 0.0},  # $0.006/min ≈ rough est.
+    # DeepSeek (gibrid matn-provayderi) — taxminiy, rasmiy narxni tekshiring:
+    # platform.deepseek.com/pricing. Sonnet'dan ~10-15× arzon.
+    "deepseek-chat":       {"in": 0.27, "out": 1.10, "cache_read": 0.07, "cache_write": 0.0},
+    "deepseek-reasoner":   {"in": 0.55, "out": 2.19, "cache_read": 0.14, "cache_write": 0.0},
 }
 
 

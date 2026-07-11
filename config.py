@@ -52,6 +52,19 @@ CLAUDE_MODEL_FAST: str = os.getenv("CLAUDE_MODEL_FAST", "claude-haiku-4-5").stri
 # (executive_plan). Used sparingly; ~5x cost of Sonnet.
 CLAUDE_MODEL_COMPLEX: str = os.getenv("CLAUDE_MODEL_COMPLEX", "claude-opus-4-8").strip()
 
+# ── LLM matn-provayderi (gibrid) ──────────────────────────────────────────────
+# "anthropic" (standart) — hamma narsa Claude'da, xatti-harakat o'zgarmaydi.
+# "deepseek" — MATNLI chaqiruvlar (chat, reja, matndan/xlsx'dan vazifa ajratish)
+# arzon DeepSeek'ga o'tadi. RASM/skaner-PDF (vision) chaqiruvlari HAR DOIM Claude'da
+# qoladi (DeepSeek'da vision yo'q). "deepseek" tanlansa DEEPSEEK_API_KEY ham shart —
+# aks holda avtomatik Claude'ga qaytiladi (xavfsiz default).
+LLM_TEXT_PROVIDER: str = os.getenv("LLM_TEXT_PROVIDER", "anthropic").strip().lower()
+DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
+DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
+# deepseek-chat (V3) — tez, umumiy. deepseek-reasoner (R1) — murakkab mulohaza uchun.
+DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat").strip()
+DEEPSEEK_MODEL_COMPLEX: str = os.getenv("DEEPSEEK_MODEL_COMPLEX", "deepseek-reasoner").strip()
+
 # OpenAI Whisper — STT fallback ONLY (used when both Uzbek-native providers fail).
 # Optional: leave unset to run without OpenAI entirely — the bot just loses the
 # last-resort transcription fallback. NOT used for the bot's brain (that's Claude).
