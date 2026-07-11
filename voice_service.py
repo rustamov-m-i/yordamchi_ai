@@ -39,6 +39,7 @@ import httpx
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
+import claude_service
 import config
 import database
 
@@ -242,15 +243,30 @@ async def _correct_transcript(text: str) -> str:
             f"INPUT:\n{text}"
         )
 
-        resp = await _anthropic_client.messages.create(
-            model=_CORRECTION_MODEL,
-            max_tokens=min(len(text) * 2 + 200, 2000),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        corrected = (resp.content[0].text if resp.content else "").strip()
+        max_tok = min(len(text) * 2 + 200, 2000)
+        # Gibrid: matn-tuzatish ham DeepSeek'ga (flag yoqilganda), aks holda Haiku.
+        # Vaqt/son/ism normallashtirish — matnli ish, vision emas.
+        if claude_service._use_deepseek_text():
+            provider, model = "deepseek", config.DEEPSEEK_MODEL
+            raw, (in_tok, out_tok) = await claude_service._deepseek_call(
+                model, [{"role": "user", "content": prompt}],
+                timeout=_CORRECTION_TIMEOUT, max_tokens=max_tok)
+            corrected = (raw or "").strip()
+        else:
+            provider, model = "anthropic", _CORRECTION_MODEL
+            resp = await _anthropic_client.messages.create(
+                model=model,
+                max_tokens=max_tok,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            corrected = (resp.content[0].text if resp.content else "").strip()
+            _u = getattr(resp, "usage", None)
+            in_tok = getattr(_u, "input_tokens", 0) if _u else 0
+            out_tok = getattr(_u, "output_tokens", 0) if _u else 0
+
         if not corrected:
             return text
-        # Safety: if Claude went off-script (truncated or expanded massively), keep original
+        # Safety: if the model went off-script (truncated or expanded massively), keep original
         if len(corrected) > len(text) * 3 or len(corrected) < len(text) // 3:
             logger.warning(
                 "Transcript correction shape off (orig=%d, corr=%d) — using original",
@@ -258,12 +274,9 @@ async def _correct_transcript(text: str) -> str:
             )
             return text
 
-        usage = getattr(resp, "usage", None)
         await database.log_llm_call(
-            "anthropic", _CORRECTION_MODEL, "voice_transcript_correction",
-            None, len(text),
-            getattr(usage, "input_tokens", 0) if usage else 0,
-            getattr(usage, "output_tokens", 0) if usage else 0,
+            provider, model, "voice_transcript_correction",
+            None, len(text), in_tok, out_tok,
         )
         if corrected != text:
             logger.info("Transcript fixed: %r -> %r", text[:80], corrected[:80])

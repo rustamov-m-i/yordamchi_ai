@@ -161,6 +161,20 @@ async def main():
     rf = await claude_service.process_message("test")
     check("DeepSeek xatosi → _fallback (crash yo'q, user_message bor)", isinstance(rf, dict) and "user_message" in rf)
 
+    # ── ovoz transkript-tuzatish ham DeepSeek'ga (gibrid) ──
+    import voice_service
+    claude_service._ds_client = _FakeDeepSeek("soat 11:30 uchrashuv")
+    vc = await voice_service._correct_transcript("soat o'n bir yarim uchrashuv")
+    check("_correct_transcript: DeepSeek orqali tuzatildi", vc == "soat 11:30 uchrashuv")
+    c2 = sqlite3.connect(config.DATABASE_PATH)
+    vrow = c2.execute("SELECT provider FROM llm_audit_log WHERE purpose='voice_transcript_correction' ORDER BY rowid DESC LIMIT 1").fetchone()
+    c2.close()
+    check("ovoz-tuzatish audit log: provider='deepseek'", vrow and vrow[0] == "deepseek")
+    # xato bo'lsa asl matn qaytadi (ovoz yo'qolmaydi)
+    claude_service._ds_client = _FakeDeepSeek("x", raise_exc=openai.APITimeoutError(request=None))
+    vc2 = await voice_service._correct_transcript("asl transkript matni")
+    check("_correct_transcript: xatoda asl matn qaytadi (fail-safe)", vc2 == "asl transkript matni")
+
 
 try:
     asyncio.run(main())

@@ -611,12 +611,13 @@ def _classify_openai_error(e) -> Tuple[str, str]:
     return "api_error", "Texnik xato yuz berdi. Iltimos, qaytadan urinib ko'ring."
 
 
-async def _deepseek_call(model: str, oai_msgs: list, timeout: float = 60.0):
+async def _deepseek_call(model: str, oai_msgs: list, timeout: float = 60.0,
+                         max_tokens: int = _MAX_OUTPUT_TOKENS):
     """Bitta DeepSeek chat.completions → (raw_text, (in_tok, out_tok)). Xato → _DSError."""
     import openai
     try:
         resp = await _deepseek().with_options(timeout=timeout).chat.completions.create(
-            model=model, max_tokens=_MAX_OUTPUT_TOKENS, messages=oai_msgs)
+            model=model, max_tokens=max_tokens, messages=oai_msgs)
     except openai.OpenAIError as e:
         raise _DSError(*_classify_openai_error(e))
     text = (resp.choices[0].message.content or "") if resp.choices else ""
