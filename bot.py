@@ -114,7 +114,7 @@ async def _clear_menu_button(bot: Bot) -> None:
     try:
         if config.WEBAPP_ENABLED and config.WEBAPP_URL.startswith("https://"):
             await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
-                text="🗂 Ilova", web_app=WebAppInfo(url=config.WEBAPP_URL)))
+                text="Ilova", web_app=WebAppInfo(url=config.WEBAPP_URL)))
         else:
             await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
     except Exception:
