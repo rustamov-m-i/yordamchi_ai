@@ -559,9 +559,45 @@ def _blocks_need_vision(content_blocks: list) -> bool:
                for b in (content_blocks or []))
 
 
+# DeepSeek Claude kabi tool-envelope'ga har doim amal qilmaydi — ba'zan action'ni
+# tashlab, faqat user_message'da "qo'shildi" deб yozadi (→ DB'ga hech narsa yozilmaydi,
+# false-success). Quyidagi kuchaytirish (qat'iy qoida + few-shot) uni action chiqarishga
+# majburlaydi. FAQAT DeepSeek yo'liga qo'shiladi — Claude system-prompt'iga tegmaydi.
+_DEEPSEEK_REINFORCE = (
+    "━━━ MUHIM — ACTION MAJBURIY (DeepSeek) ━━━\n"
+    "Agar foydalanuvchi biror narsa YARATISH / BELGILASH / O'ZGARTIRISH / O'CHIRISH / "
+    "KO'RSATISH so'rasa (vazifa, uchrashuv, eslatma, qayd, kontakt, kategoriya, sozlama, "
+    "eksport, reja...), mos action `actions` massivIDA BO'LISHI SHART. Hech qachon "
+    "`user_message`da \"qo'shildi / belgilandi / bajarildi\" deб yozib, action'ni TASHLAB "
+    "KETMA — action bo'lmasa DB'ga HECH NARSA yozilmaydi va foydalanuvchi aldangan bo'ladi. "
+    "\"Bajardim\" turidagi HAR BIR javob uchun mos action majburiy. Faqat sof "
+    "ma'lumot/hisob/tarjima so'ralganda `actions: []` (intent \"none\") bo'ladi.\n\n"
+    "Namuna 1 — vazifa:\n"
+    "INPUT: «Ertaga soat 10 da Dilnozaga banner tayyorlashni topshir, muhim»\n"
+    "OUTPUT: {\"intent\":\"A\",\"actions\":[{\"type\":\"create_task\",\"data\":{\"title\":"
+    "\"Banner tayyorlash\",\"priority\":\"P1\",\"deadline\":\"<ERTA>T10:00:00+05:00\","
+    "\"assignee\":\"Dilnoza\"}}],\"user_message\":\"✓ **Vazifa qo'shildi**\\n🗂 Banner "
+    "tayyorlash\\n👤 Dilnoza · ⏳ ertaga 10:00 · 🔺 P1\",\"needs_clarification\":false}\n\n"
+    "Namuna 2 — uchrashuv:\n"
+    "INPUT: «Ertaga soat 15 da Abror aka bilan uchrashuv belgila»\n"
+    "OUTPUT: {\"intent\":\"A\",\"actions\":[{\"type\":\"schedule_meeting\",\"data\":{\"title\":"
+    "\"Abror aka bilan uchrashuv\",\"datetime_start\":\"<ERTA>T15:00:00+05:00\","
+    "\"datetime_end\":\"<ERTA>T16:00:00+05:00\",\"participants\":[\"Abror\"]}}],"
+    "\"user_message\":\"✓ **Uchrashuv belgilandi**\\n🤝 Abror aka bilan uchrashuv\\n📅 ertaga "
+    "15:00\",\"needs_clarification\":false}\n\n"
+    "<ERTA> — HOLAT blokidagi \"bugun\" asosida haqiqiy ISO sanaga almashtiring. Chiqish — "
+    "faqat bitta JSON obyekt, kod-panjara (```) va prose'siz."
+)
+
+
+def _ds_system(state_block: str) -> str:
+    """DeepSeek uchun to'liq system matni: SYSTEM_PROMPT + holat-bloki + action-kuchaytirish."""
+    return config.SYSTEM_PROMPT + "\n\n" + state_block + "\n\n" + _DEEPSEEK_REINFORCE
+
+
 def _oai_messages(state_block: str, messages: list) -> list:
     """Anthropic-uslub (system massiv + content) → OpenAI xabarlari. SYSTEM_PROMPT +
-    holat-bloki bitta system xabariga birlashadi; qolganlar matnga tekislanadi."""
+    holat-bloki + DeepSeek action-kuchaytirishi bitta system xabariga; qolganlar matnga."""
     def _flat(c):
         if isinstance(c, str):
             return c
@@ -569,7 +605,7 @@ def _oai_messages(state_block: str, messages: list) -> list:
             return "\n\n".join(b.get("text", "") for b in c
                                if isinstance(b, dict) and b.get("type") == "text")
         return str(c or "")
-    out = [{"role": "system", "content": config.SYSTEM_PROMPT + "\n\n" + state_block}]
+    out = [{"role": "system", "content": _ds_system(state_block)}]
     out += [{"role": m["role"], "content": _flat(m.get("content"))} for m in messages]
     return out
 
@@ -678,7 +714,7 @@ async def _ds_process_document(instruction, content_blocks, complexity, file_lab
     doc_text = "\n\n".join(b.get("text", "") for b in content_blocks
                            if isinstance(b, dict) and b.get("type") == "text")
     user_content = (doc_text + "\n\n" + instruction_red).strip()
-    oai_msgs = [{"role": "system", "content": config.SYSTEM_PROMPT + "\n\n" + state_block},
+    oai_msgs = [{"role": "system", "content": _ds_system(state_block)},
                 {"role": "user", "content": user_content}]
     input_hash = redaction.hash_input(instruction_red)
     input_chars = len(user_content)

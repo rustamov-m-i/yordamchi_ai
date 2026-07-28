@@ -89,6 +89,8 @@ async def main():
     oai = claude_service._oai_messages("HOLAT-BLOKI", [{"role": "user", "content": [{"type": "text", "text": "salom"}]}])
     check("_oai_messages[0] = system (SYSTEM_PROMPT + holat)", oai[0]["role"] == "system" and "HOLAT-BLOKI" in oai[0]["content"])
     check("_oai_messages: content-bloklar matnga tekislandi", oai[1] == {"role": "user", "content": "salom"})
+    check("_oai_messages system: DeepSeek action-kuchaytirishi (few-shot) bor",
+          "ACTION MAJBURIY" in oai[0]["content"] and "create_task" in oai[0]["content"] and "schedule_meeting" in oai[0]["content"])
 
     # ── process_message → DeepSeek (mock) ──
     fake = _FakeDeepSeek(_ENV)
