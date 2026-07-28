@@ -246,7 +246,7 @@ async def _correct_transcript(text: str) -> str:
         max_tok = min(len(text) * 2 + 200, 2000)
         # Gibrid: matn-tuzatish ham DeepSeek'ga (flag yoqilganda), aks holda Haiku.
         # Vaqt/son/ism normallashtirish — matnli ish, vision emas.
-        if claude_service._use_deepseek_text():
+        if claude_service._use_deepseek_text(text_only=True):
             provider, model = "deepseek", config.DEEPSEEK_MODEL
             raw, (in_tok, out_tok) = await claude_service._deepseek_call(
                 model, [{"role": "user", "content": prompt}],

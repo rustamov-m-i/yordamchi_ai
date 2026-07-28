@@ -77,8 +77,10 @@ class _FakeDeepSeek:
 async def main():
     await database.init()
 
-    # ── marshrutlash yoqilgan ──
-    check("_use_deepseek_text() = True (provider=deepseek + kalit)", claude_service._use_deepseek_text() is True)
+    # ── marshrutlash: FAQAT text_only=True → DeepSeek (action kerak = Claude) ──
+    check("_use_deepseek_text(text_only=True) = True", claude_service._use_deepseek_text(text_only=True) is True)
+    check("_use_deepseek_text(text_only=False) = False → Claude (action yo'li)", claude_service._use_deepseek_text(text_only=False) is False)
+    check("_use_deepseek_text() default = False → Claude", claude_service._use_deepseek_text() is False)
 
     # ── _blocks_need_vision ──
     check("_blocks_need_vision([text]) = False", claude_service._blocks_need_vision([{"type": "text", "text": "x"}]) is False)
@@ -92,13 +94,12 @@ async def main():
     check("_oai_messages system: DeepSeek action-kuchaytirishi (few-shot) bor",
           "ACTION MAJBURIY" in oai[0]["content"] and "create_task" in oai[0]["content"] and "schedule_meeting" in oai[0]["content"])
 
-    # ── process_message → DeepSeek (mock) ──
+    # ── process_message(text_only=True) → DeepSeek (mock) ──
     fake = _FakeDeepSeek(_ENV)
     claude_service._ds_client = fake
-    r = await claude_service.process_message("Bannerlarni tayyorla")
-    check("process_message: DeepSeek javobi parse qilindi (create_task)",
-          r.get("actions") and r["actions"][0]["data"]["title"] == "Bannerlar tayyorlash")
-    check("process_message: user_message keldi", r.get("user_message") == "Bir vazifa qo'shildi")
+    r = await claude_service.process_message("Kunlik yakun tayyorla", text_only=True)
+    check("process_message(text_only): DeepSeek javobi parse qilindi",
+          r.get("actions") is not None and r.get("user_message") == "Bir vazifa qo'shildi")
     check("DeepSeek create() chaqirildi (stream'siz)", fake.captured is not None and not fake.captured.get("stream"))
     check("system xabari yuborildi", fake.captured["messages"][0]["role"] == "system")
 
@@ -109,17 +110,32 @@ async def main():
     c.close()
     check("audit log: provider='deepseek'", rows and rows[0][0] == "deepseek" and rows[0][1] == "deepseek-chat")
 
-    # ── process_document (matnli) → DeepSeek ──
-    claude_service._ds_client = _FakeDeepSeek(_ENV)
-    rd = await claude_service.process_document("Vazifalarni ajrat", [{"type": "text", "text": "1. Banner\n2. Post"}], file_label="reja.xlsx")
-    check("process_document (matn): DeepSeek'ga bordi va parse qilindi",
-          rd.get("actions") and rd["actions"][0]["data"]["title"] == "Bannerlar tayyorlash")
+    # ── process_document HAR DOIM Claude (DeepSeek'ga bormaydi — action kerak) ──
+    # (DeepSeek klienti o'rnatilgan bo'lsa ham process_document uni chaqirmasligi kerak;
+    #  klientni "portlash" qilib qo'yamiz — chaqirilsa test yiqiladi.)
+    class _Boom:
+        def __getattr__(self, _):
+            raise AssertionError("process_document DeepSeek'ni chaqirmasligi kerak edi!")
+    _saved = claude_service._ds_client
+    claude_service._ds_client = _Boom()
+    doc_routed_to_claude = True
+    try:
+        # Claude yo'liga ketadi; test muhitida Anthropic kaliti soxta → xato bo'lishi
+        # mumkin, lekin MUHIMI: DeepSeek (_Boom) CHAQIRILMASLIGI. AssertionError chiqsa —
+        # DeepSeek chaqirilgan (xato). Boshqa har qanday xato — Claude yo'li (to'g'ri).
+        await claude_service.process_document("Ajrat", [{"type": "text", "text": "1. X"}], file_label="f.xlsx")
+    except AssertionError:
+        doc_routed_to_claude = False
+    except Exception:
+        pass  # Claude yo'li (soxta kalit) — kutilgan
+    claude_service._ds_client = _saved
+    check("process_document DeepSeek'ga BORMAYDI (har doim Claude)", doc_routed_to_claude)
 
-    # ── streaming → partial + complete ──
+    # ── streaming(text_only=True) → partial + complete ──
     part1 = _ENV[: len(_ENV) // 2]
     part2 = _ENV[len(_ENV) // 2:]
     claude_service._ds_client = _FakeDeepSeek(_ENV, chunks=[part1, part2])
-    events = [ev async for ev in claude_service.process_message_stream("Bannerlar")]
+    events = [ev async for ev in claude_service.process_message_stream("Yakun", text_only=True)]
     kinds = [e[0] for e in events]
     complete = [e[1] for e in events if e[0] == "complete"]
     check("stream: oxirida ('complete', envelope)", kinds and kinds[-1] == "complete")
@@ -138,7 +154,7 @@ async def main():
           (claude_service._extract_json(leading) or {}).get("intent") == "create_task")
     # process_message: prose-o'ralgan javob ham ishlaydi (endi "Texnik xato" emas)
     claude_service._ds_client = _FakeDeepSeek(fenced)
-    rp = await claude_service.process_message("Bannerlar")
+    rp = await claude_service.process_message("Bannerlar", text_only=True)
     check("process_message: prose-o'ralgan javobdan action ajratildi",
           rp.get("actions") and rp["actions"][0]["data"]["title"] == "Bannerlar tayyorlash")
 
@@ -160,7 +176,7 @@ async def main():
     # ── xato → _fallback (crash emas) ──
     import openai
     claude_service._ds_client = _FakeDeepSeek(_ENV, raise_exc=openai.APITimeoutError(request=None))
-    rf = await claude_service.process_message("test")
+    rf = await claude_service.process_message("test", text_only=True)
     check("DeepSeek xatosi → _fallback (crash yo'q, user_message bor)", isinstance(rf, dict) and "user_message" in rf)
 
     # ── ovoz transkript-tuzatish ham DeepSeek'ga (gibrid) ──

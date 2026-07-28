@@ -525,8 +525,15 @@ def _envelope_from_raw(raw: str) -> Optional[dict]:
 _ds_client = None
 
 
-def _use_deepseek_text() -> bool:
-    return config.LLM_TEXT_PROVIDER == "deepseek" and bool(config.DEEPSEEK_API_KEY)
+def _use_deepseek_text(text_only: bool = False) -> bool:
+    """DeepSeek FAQAT matn-only chaqiruvlar uchun ishlatiladi (brifing, yakun, ovoz
+    transkript-tuzatish — natijadan `actions` EMAS, faqat `user_message` olinadi).
+    Action chiqarish kerak bo'lgan yo'llar (user chat, fayl import, extraction,
+    protokol) HAR DOIM Claude'da qoladi — DeepSeek structured action'ni ishonchli
+    chiqarmaydi (jonli test bilan tasdiqlangan). Shu sabab default text_only=False →
+    Claude; faqat chaqiruvchi text_only=True desa DeepSeek'ga o'tadi."""
+    return (text_only and config.LLM_TEXT_PROVIDER == "deepseek"
+            and bool(config.DEEPSEEK_API_KEY))
 
 
 def _deepseek():
@@ -706,37 +713,9 @@ async def _ds_process_message(user_text, internal_directive, complexity):
     return parsed
 
 
-async def _ds_process_document(instruction, content_blocks, complexity, file_label):
-    model = _deepseek_model(complexity, None)
-    state_block = await _build_state_block()
-    instruction_red, redacted_count = redaction.redact(instruction or "")
-    # Faqat matnli bloklar (rasm/PDF _blocks_need_vision tomonidan bloklangan).
-    doc_text = "\n\n".join(b.get("text", "") for b in content_blocks
-                           if isinstance(b, dict) and b.get("type") == "text")
-    user_content = (doc_text + "\n\n" + instruction_red).strip()
-    oai_msgs = [{"role": "system", "content": _ds_system(state_block)},
-                {"role": "user", "content": user_content}]
-    input_hash = redaction.hash_input(instruction_red)
-    input_chars = len(user_content)
-    purpose = "document"
-    try:
-        raw, (in_tok, out_tok) = await _deepseek_call(model, oai_msgs, timeout=140.0)
-    except _DSError as e:
-        await _ds_log(model, purpose, input_hash, input_chars, 0, 0, redacted_count, error=e.label)
-        return _fallback(e.msg)
-    await _ds_log(model, purpose, input_hash, input_chars, in_tok, out_tok, redacted_count)
-    parsed = _finalize_parsed(raw)
-    if not parsed:
-        logger.error("DeepSeek (document) returned unusable output: %s", (raw or "")[:500])
-        return _FALLBACK_RESPONSE
-    try:
-        marker = f"[Hujjat yuborildi: {file_label or 'fayl'}] {(instruction or '').strip()[:200]}"
-        await database.append_message("user", marker.strip())
-        await database.append_message("assistant", parsed.get("user_message") or "✅")
-        await database.trim_history(keep=30)
-    except Exception:
-        logger.debug("Could not persist document turn to history")
-    return parsed
+# Eslatma: hujjat-import (process_document) endi HAR DOIM Claude'da — u create_task
+# action'lari chiqarishi shart, DeepSeek esa buni ishonchli qilolmaydi. Shu sabab
+# alohida _ds_process_document YO'Q (ataylab olib tashlangan).
 
 
 async def _ds_process_message_stream(user_text, complexity, internal_directive):
@@ -797,6 +776,7 @@ async def process_message(
     user_text: str,
     internal_directive: Optional[str] = None,
     complexity: Optional[str] = None,
+    text_only: bool = False,
 ) -> dict:
     """Send user input to Claude, return parsed JSON envelope.
 
@@ -807,8 +787,8 @@ async def process_message(
                 router auto-picks based on internal_directive keywords.
     """
 
-    # Gibrid: matnli chaqiruvlar DeepSeek'ga (kalit sozlangan bo'lsa).
-    if _use_deepseek_text():
+    # Gibrid: FAQAT matn-only chaqiruvlar DeepSeek'ga (action kerak bo'lmaganlar).
+    if _use_deepseek_text(text_only):
         return await _ds_process_message(user_text, internal_directive, complexity)
 
     if _circuit_is_open():
@@ -970,11 +950,9 @@ async def process_document(
     indicator. A short marker plus the summary are written to conversation history
     so the principal can ask follow-up questions about the document.
     """
-    # Gibrid: matnli hujjat (xlsx/csv/docx/txt/matnli PDF) DeepSeek'ga. Rasm/skaner-PDF
-    # (vision) — HAR DOIM Claude'da (DeepSeek ko'rmaydi).
-    if _use_deepseek_text() and not _blocks_need_vision(content_blocks):
-        return await _ds_process_document(instruction, content_blocks, complexity, file_label)
-
+    # Hujjat-import HAR DOIM Claude'da: u create_task action'lari chiqarishi shart
+    # (bu — DeepSeek ishonchli qilolmaydigan aynan o'sha ish). Vision (rasm/PDF) ham
+    # baribir Claude'da. Shuning uchun bu yo'l DeepSeek'ga umuman o'tmaydi.
     if _circuit_is_open():
         logger.warning("Anthropic circuit open — short-circuiting document analysis "
                         "(cooldown remaining: %.0fs)", _circuit_open_until - _time.time())
@@ -1075,6 +1053,7 @@ async def process_message_stream(
     user_text: str,
     complexity: Optional[str] = None,
     internal_directive: Optional[str] = None,
+    text_only: bool = False,
 ) -> AsyncIterator[Tuple[str, object]]:
     """Streaming variant of process_message for the interactive user path.
 
@@ -1096,8 +1075,8 @@ async def process_message_stream(
     Falls back to the non-streaming path on any unrecoverable error (yields
     a single ("complete", fallback_dict))."""
 
-    # Gibrid: matnli oqim DeepSeek'ga (kalit sozlangan bo'lsa).
-    if _use_deepseek_text():
+    # Gibrid: FAQAT matn-only oqim DeepSeek'ga (action kerak bo'lmaganlar).
+    if _use_deepseek_text(text_only):
         async for _ev in _ds_process_message_stream(user_text, complexity, internal_directive):
             yield _ev
         return

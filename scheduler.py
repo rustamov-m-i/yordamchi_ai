@@ -396,7 +396,8 @@ class YordamchiScheduler:
     async def _evening_summary(self) -> None:
         logger.info("Generating evening summary")
         response = await claude_service.process_message(
-            "", internal_directive="[INTERNAL] generate_evening_summary"
+            "", internal_directive="[INTERNAL] generate_evening_summary",
+            text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
         )
         text = response.get("user_message", "")
         if text:
@@ -455,6 +456,7 @@ class YordamchiScheduler:
                 "(c) meetings ended without follow-up actions. "
                 "If nothing actionable, respond with user_message='' and actions=[]."
             ),
+            text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
         )
         text = response.get("user_message", "").strip()
         if text:
@@ -588,6 +590,7 @@ class YordamchiScheduler:
             )
             response = await claude_service.process_message(
                 "", internal_directive=directive, complexity="fast",
+                text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
             )
             text = (response.get("user_message") or "").strip()
             if text:
@@ -807,7 +810,8 @@ class YordamchiScheduler:
                 "user_message ichiga to'liq matnni qaytaring. actions=[]."
             )
             response = await claude_service.process_message(
-                "", internal_directive=directive  # Sonnet (was Opus): templated stats narrative
+                "", internal_directive=directive,  # Sonnet (was Opus): templated stats narrative
+                text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
             )
             text = response.get("user_message", "").strip()
             if text:
