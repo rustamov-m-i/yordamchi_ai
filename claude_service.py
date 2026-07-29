@@ -422,8 +422,12 @@ def _extract_json(text: str) -> Optional[dict]:
     except json.JSONDecodeError:
         pass
     # Scan each '{' and try to decode an object starting there — tolerates leading
-    # and trailing prose and stray braces before the real envelope.
+    # and trailing prose and stray braces before the real envelope. Prefer an
+    # ENVELOPE-shaped dict (has intent/actions/user_message): DeepSeek sometimes
+    # echoes a few-shot example JSON before its real answer, so "first dict" alone
+    # could return the wrong object.
     decoder = json.JSONDecoder()
+    _first = None
     for idx, ch in enumerate(text):
         if ch != "{":
             continue
@@ -431,8 +435,14 @@ def _extract_json(text: str) -> Optional[dict]:
             obj, _ = decoder.raw_decode(text[idx:])
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict):
+        if not isinstance(obj, dict):
+            continue
+        if any(k in obj for k in ("user_message", "actions", "intent")):
             return obj
+        if _first is None:
+            _first = obj
+    if _first is not None:
+        return _first
     # Last resort: widest span + unescaped-inner-quote repair.
     start = text.find("{")
     end = text.rfind("}")
@@ -450,7 +460,11 @@ def _extract_json(text: str) -> Optional[dict]:
         return None
 
 
-def _fallback(user_message: str) -> dict:
+def _fallback(user_message: str, error: bool = False) -> dict:
+    # error=True → bu texnik xato/degradatsiya javobi (foydalanuvchi-matni emas).
+    # Rejalashtirilgan ishlar (brifing/yakun/followup) buni foydalanuvchiga
+    # JO'NATMASLIGI kerak — aks holda "Texnik xato" yoki provayder billing URL'i
+    # soxta "yakun" bo'lib chiqadi. Interaktiv chatda esa baribir ko'rsatiladi.
     return {
         "intent": "none",
         "actions": [],
@@ -458,10 +472,11 @@ def _fallback(user_message: str) -> dict:
         "buttons": [],
         "needs_clarification": False,
         "clarification_question": None,
+        "_error": error,
     }
 
 
-_FALLBACK_RESPONSE = _fallback("Texnik xato yuz berdi. Iltimos, qaytadan urinib ko'ring.")
+_FALLBACK_RESPONSE = _fallback("Texnik xato yuz berdi. Iltimos, qaytadan urinib ko'ring.", error=True)
 
 
 def _classify_anthropic_error(e: Exception) -> Tuple[str, str]:
@@ -700,7 +715,7 @@ async def _ds_process_message(user_text, internal_directive, complexity):
         raw, (in_tok, out_tok) = await _deepseek_call(model, _oai_messages(state_block, messages))
     except _DSError as e:
         await _ds_log(model, purpose, input_hash, input_chars, 0, 0, redacted_count, error=e.label)
-        return _fallback(e.msg)
+        return _fallback(e.msg, error=True)
     await _ds_log(model, purpose, input_hash, input_chars, in_tok, out_tok, redacted_count)
     parsed = _finalize_parsed(raw)
     if not parsed:

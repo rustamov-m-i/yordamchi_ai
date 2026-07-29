@@ -78,6 +78,16 @@ async def main():
     check("naive uchrashuv oy ko'rinishida topiladi",
           any(m["id"] == mid2 for m in await database.list_meetings_in_month(2026, 8)))
 
+    # Z-suffiksli UTC ISO (Python 3.9 fromisoformat 'Z'ni tushunmaydi) — parse bo'lishi
+    # va yaroqli uchrashuv RAD ETILMASLIGI kerak (10:00Z UTC → 15:00 +05:00).
+    check("Z-suffiks '2026-08-15T10:00:00Z' parse bo'ladi (None emas)",
+          database.parse_iso_dt("2026-08-15T10:00:00Z") is not None)
+    midz = await database.create_meeting({"title": "UTC-Z", "datetime_start": "2026-08-15T10:00:00Z"})
+    rowz = sqlite3.connect(_tmp).execute("SELECT datetime_start FROM meetings WHERE id=?", (midz,)).fetchone()
+    check("Z-suffiks uchrashuv +05:00 ga o'giriladi (10:00Z → 15:00)", rowz[0] == "2026-08-15T15:00:00+05:00")
+    check("Z-suffiksli uchrashuv oy ko'rinishida topiladi",
+          any(m["id"] == midz for m in await database.list_meetings_in_month(2026, 8)))
+
     # ── #2: _execute_actions yaroqsiz vaqtni yaratmaydi + _badtime ──
     print("=== #2: yaroqsiz datetime_start → yaratilmaydi, ogohlantiriladi ===")
     before = len(await database.list_meetings_in_month(2026, 9))

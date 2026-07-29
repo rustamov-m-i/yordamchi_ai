@@ -400,7 +400,7 @@ class YordamchiScheduler:
             text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
         )
         text = response.get("user_message", "")
-        if text:
+        if text and not response.get("_error"):  # xato-javobni jo'natmaymiz
             await self._send(text)
 
     async def _followup_check(self) -> None:
@@ -459,7 +459,7 @@ class YordamchiScheduler:
             text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
         )
         text = response.get("user_message", "").strip()
-        if text:
+        if text and not response.get("_error"):  # xato-javobni jo'natmaymiz
             await self._send(text)
 
     async def _fire_meeting_reminder(self, meeting_id: str, lead_minutes: Optional[int] = None) -> None:
@@ -593,7 +593,7 @@ class YordamchiScheduler:
                 text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
             )
             text = (response.get("user_message") or "").strip()
-            if text:
+            if text and not response.get("_error"):  # xato-javobni jo'natmaymiz
                 await self._send("🔗 **VAZIFA BOG'LANISHLARI**\n\n" + text)
         except Exception:
             logger.exception("Proactive dependency check failed")
@@ -814,7 +814,7 @@ class YordamchiScheduler:
                 text_only=True,  # faqat user_message ishlatiladi → DeepSeek xavfsiz
             )
             text = response.get("user_message", "").strip()
-            if text:
+            if text and not response.get("_error"):  # xato-javobni jo'natmaymiz
                 await self._send("📊 **HAFTALIK RETROSPEKTIV**\n\n" + text)
         except Exception:
             logger.exception("Weekly retrospective failed")

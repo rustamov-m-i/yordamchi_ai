@@ -2509,11 +2509,16 @@ async def _process_and_reply(message: Message, user_text: str, state: "FSMContex
         if keyboard:
             keyboard = _append_back_row(keyboard)
 
-        text = (final_response.get("user_message") or "").strip() or "✅"
+        # Agar to'qnashuv/yaroqsiz-vaqt sabab hech narsa qo'yilmagan bo'lsa, LLM'ning
+        # optimistik "qo'shildi" matni ogohlantirish bilan ZID bo'ladi — shu holatda
+        # asos matnni tashlab, faqat aniq ogohlantirishni ko'rsatamiz.
+        _base = (final_response.get("user_message") or "").strip() or "✅"
+        text = "" if (ids_by_type.get("_conflict") or ids_by_type.get("_badtime")) else _base
         text += _conflict_note(ids_by_type)
         text += _badtime_note(ids_by_type)
         text += _failed_actions_note(ids_by_type)
         text += _overflow_note
+        text = text.strip() or _base
         if progress_msg is not None:
             # Finalize the same message we've been editing — single chat bubble.
             try:
@@ -3932,12 +3937,14 @@ async def cb_import_mirror_confirm(query: CallbackQuery, state: FSMContext) -> N
     except Exception:
         logger.exception("Pre-mirror backup failed (continuing)")
     try:
-        await _execute_actions(response.get("actions", []))
+        ids_by_type = await _execute_actions(response.get("actions", []))
     except Exception as e:
         logger.exception("mirror _execute_actions failed")
         await query.message.answer(_humanize_error(e))
         return
     msg = response.get("user_message") or "📥 Moslashtirildi."
+    # DB xatosi bo'lgan qatorlarni jimgina yutmaymiz — ogohlantirishni qo'shamiz.
+    msg += _failed_actions_note(ids_by_type) + _conflict_note(ids_by_type)
     kb = None
     if undo_token:
         kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -12080,13 +12087,16 @@ async def cb_actions_confirm(query: CallbackQuery, state: FSMContext) -> None:
             keyboard.inline_keyboard.insert(0, undo_row)
         else:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[undo_row])
-    text = (response.get("user_message") or "").strip() or "✅ Yaratildi"
     # Uchrashuv tasdiq yo'li orqali o'tadi (schedule_meeting confirm-gated), shu
     # sabab to'qnashuv/yaroqsiz-vaqt ogohlantirishlari SHU YERDA ham qo'shilishi
-    # shart — aks holda uchrashuv yaratilmagan bo'lsa ham "✅" ko'rinardi.
+    # shart. To'qnashuv/yaroqsiz-vaqt bo'lsa LLM'ning "✅ Yaratildi" matni ZID
+    # bo'lardi — uni tashlab, faqat ogohlantirishni ko'rsatamiz.
+    _base = (response.get("user_message") or "").strip() or "✅ Yaratildi"
+    text = "" if (ids_by_type.get("_conflict") or ids_by_type.get("_badtime")) else _base
     text += _conflict_note(ids_by_type)
     text += _badtime_note(ids_by_type)
     text += _failed_actions_note(ids_by_type)
+    text = text.strip() or _base
     await _safe_answer(query.message, text,
                         parse_mode="Markdown", reply_markup=keyboard)
     # Restore prior section state and auto-refresh the section list so the

@@ -746,7 +746,13 @@ def parse_iso_dt(iso: Optional[str]) -> Optional[datetime]:
     if not iso:
         return None
     try:
-        dt = datetime.fromisoformat(iso)
+        s = iso
+        # Python 3.9 datetime.fromisoformat 'Z' (UTC) suffiksini tushunmaydi —
+        # LLM ba'zan '...T10:00:00Z' qaytaradi. +00:00 ga almashtiramiz, aks holda
+        # yaroqli vaqt None bo'lib, uchrashuv/deadline noto'g'ri rad etilardi.
+        if isinstance(s, str) and s[-1:] in ("Z", "z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
         if dt.tzinfo is not None:
             return dt.astimezone(TZ)
         return TZ.localize(dt)

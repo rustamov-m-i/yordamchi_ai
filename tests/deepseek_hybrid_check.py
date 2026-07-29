@@ -173,6 +173,19 @@ async def main():
     check("_deepseek_model(None, executive_plan) = reasoner (complexity berilmaganda kalit-so'z)",
           claude_service._deepseek_model(None, "[INTERNAL] executive_plan") == config.DEEPSEEK_MODEL_COMPLEX)
 
+    # ── FIX: _fallback error bayrog'i (rejalashtirilgan ishlar xato jo'natmasin) ──
+    import openai as _oai
+    check("_fallback(error=True)['_error'] = True", claude_service._fallback("x", error=True).get("_error") is True)
+    check("_fallback() default '_error' = False (oddiy prose jo'natiladi)", claude_service._fallback("y").get("_error") is False)
+    claude_service._ds_client = _FakeDeepSeek(_ENV, raise_exc=_oai.APITimeoutError(request=None))
+    err_resp = await claude_service._ds_process_message("test", None, None)
+    check("DeepSeek xato → javobda '_error' = True (scheduler jo'natmaydi)", err_resp.get("_error") is True)
+
+    # ── FIX: _extract_json — envelope-shaklli obyektni afzal ko'radi (namuna oldинда bo'lsa) ──
+    mixed = 'Namuna: {"foo": 1}\nJavob: {"intent":"A","actions":[],"user_message":"tayyor"}'
+    check("_extract_json namuna-oldин bo'lsa ham ENVELOPE'ni tanlaydi",
+          (claude_service._extract_json(mixed) or {}).get("user_message") == "tayyor")
+
     # ── xato → _fallback (crash emas) ──
     import openai
     claude_service._ds_client = _FakeDeepSeek(_ENV, raise_exc=openai.APITimeoutError(request=None))
