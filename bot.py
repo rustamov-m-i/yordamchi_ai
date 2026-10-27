@@ -178,7 +178,7 @@ async def main() -> None:
     fsm = SQLiteStorage()
     await fsm.init()
     # Drop FSM rows older than 24 hours on startup — backstop for the
-    # in-handler TTL middleware (30 min) when the user never returns.
+    # in-handler TTL middleware (2 hours) when the user never returns.
     purged_fsm = await fsm.purge_old_rows(max_age_hours=24)
     if purged_fsm:
         logger.info("Purged %d stale FSM rows (>24h)", purged_fsm)

@@ -985,7 +985,7 @@ async def _reject(message_or_query, reason: str = "Bu shaxsiy bot."):
         await message_or_query.answer(reason, show_alert=True)
 
 
-_FSM_STATE_TTL_SECONDS = 30 * 60  # 30 minutes
+_FSM_STATE_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 
 
 @router.message.middleware()
@@ -1000,7 +1000,7 @@ async def auth_message_middleware(handler, event: Message, data):
         await _reject(event, "Bu bot faqat shaxsiy chat'da ishlaydi. Iltimos, men bilan to'g'ridan-to'g'ri yozing.")
         return
     # FSM state TTL: if the user started a flow (say, NewTaskFSM.awaiting_title),
-    # walked away for >30 min, and comes back with a random "Salom", we'd
+    # walked away for >2 hours, and comes back with a random "Salom", we'd
     # store "Salom" as the task title. Detect stale state via timestamp in
     # state.data and auto-clear with a friendly notice.
     state = data.get("state")
@@ -1014,7 +1014,7 @@ async def auth_message_middleware(handler, event: Message, data):
                 if started_at and (now_ts - float(started_at)) > _FSM_STATE_TTL_SECONDS:
                     await state.clear()
                     await event.answer(
-                        "⏱ Avvalgi amaliyot 30 daqiqadan ortiq vaqt o'tgani uchun bekor qilindi. "
+                        "⏱ Avvalgi amaliyot 2 soatdan ortiq vaqt o'tgani uchun bekor qilindi. "
                         "Yangi xabar yuboring yoki /start bosing.",
                     )
                     return

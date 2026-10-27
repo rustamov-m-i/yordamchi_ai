@@ -206,50 +206,72 @@ OOM belgisi (`MemoryMax=512M` oshsa systemd o'ldiradi):
 
 ## 7.5. Telegram Mini App (Web App) — ixtiyoriy
 
-Bot ichida ochiluvchi web ilova (vazifa/uchrashuv/qayd/eslatma — to'liq boshqaruv).
-`aiohttp` server bot bilan bir jarayonда `127.0.0.1:8081`да ishlaydi; nginx uni
-HTTPS bilan tashqariga chiqaradi. Auth: Telegram `initData` (bot-token HMAC) +
-faqat `PRINCIPAL_USER_ID`. **Domen + HTTPS majburiy** (Telegram https'siz ochmaydi).
+Bot ichida ochiluvchi web ilova vazifa, uchrashuv, qayd va eslatmalarni boshqaradi.
+`aiohttp` server bot bilan bir jarayonda `127.0.0.1:8081`da ishlaydi; Nginx HTTPS
+orqali tashqariga chiqaradi. Telegram ichidagi kirish `initData` imzosi bilan
+tekshiriladi va faqat `PRINCIPAL_USER_ID`ga ruxsat beriladi. **Public domen va HTTPS
+majburiy.**
 
-**1) Env** (`.env`ga qo'shing, keyin `sudo systemctl restart yordamchi`):
+Quyidagi `app.DOMENINGIZ.uz` o‘rniga o‘zingiz boshqaradigan domenni yozing.
+
+**1) DNS va firewall**
+
+- `app.DOMENINGIZ.uz` uchun A yozuvini VM tashqi IP manziliga yo‘naltiring.
+- GCP firewall’da VM’ning `yordamchi-bot` tagi uchun TCP 80 va 443’ni oching:
+
+```bash
+gcloud compute firewall-rules create allow-yordamchi-web \
+  --allow=tcp:80,tcp:443 --target-tags=yordamchi-bot \
+  --source-ranges=0.0.0.0/0
 ```
+
+**2) `.env`**
+
+Serverdagi `.env`da quyidagi qiymatlarni kiriting. `WEBAPP_OPEN_ACCESS=0` bo‘lib
+qolsin; bu parametrni `1` qilish production’da autentifikatsiyani o‘chiradi.
+
+```dotenv
 WEBAPP_ENABLED=1
-WEBAPP_URL=https://app.SIZNING-DOMEN.uz
+WEBAPP_URL=https://app.DOMENINGIZ.uz
 WEBAPP_PORT=8081
+WEBAPP_HOST=127.0.0.1
+WEBAPP_OPEN_ACCESS=0
 ```
 
-**2) DNS**: `app.SIZNING-DOMEN.uz` A-yozuvини VM tashqi IP'siga yo'naltiring.
+Telegram Mini App ichidagi kirish uchun OAuth secret kerak emas. Brauzerdan
+Telegram orqali alohida login qilish kerak bo‘lsa, BotFather’da Web Login’ni
+sozlab, redirect URI sifatida `https://app.DOMENINGIZ.uz/api/auth/tg/callback`
+ro‘yxatdan o‘tkazing va `WEBAPP_OAUTH_CLIENT_SECRET`ni kiriting.
 
-**3) nginx + TLS** (VMда):
+**3) Nginx va TLS** (VM’da):
+
 ```bash
 sudo apt-get install -y nginx certbot python3-certbot-nginx
-sudo tee /etc/nginx/sites-available/yordamchi-app > /dev/null <<'EOF'
-server {
-    server_name app.SIZNING-DOMEN.uz;
-    location / {
-        proxy_pass http://127.0.0.1:8081;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-sudo ln -sf /etc/nginx/sites-available/yordamchi-app /etc/nginx/sites-enabled/
+sudo install -d /etc/nginx/sites-available /etc/nginx/sites-enabled
+sudo install -m 0644 deploy/nginx/yordamchi-app.conf.template \
+  /etc/nginx/sites-available/yordamchi-app
+sudo sed -i 's/app.example.uz/app.DOMENINGIZ.uz/g' \
+  /etc/nginx/sites-available/yordamchi-app
+sudo ln -sfn /etc/nginx/sites-available/yordamchi-app \
+  /etc/nginx/sites-enabled/yordamchi-app
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d app.SIZNING-DOMEN.uz   # Let's Encrypt sertifikat (avtomatik yangilanadi)
+sudo certbot --nginx --redirect -d app.DOMENINGIZ.uz
 ```
-GCP firewall'да 80/443 portlar ochiq bo'lsin (`gcloud compute firewall-rules ...` yoki konsol).
 
-**4) systemd** `ReadWritePaths` allaqachon loyiha papkasini qamraydi — o'zgarish shart emas.
-Botni qayta ishga tushiring; u startда menyu tugmasini "🗂 Ilova"ga o'zgartiradi.
+**4) Botni ishga tushirish va tekshirish**
 
-**5) Tekshirish**: Telegramда botni oching → pastdagi menyu tugmasi (🗂 Ilova) → ilova ochiladi.
-Muammo bo'lsa: `curl -H "Authorization: tma test" https://app.SIZNING-DOMEN.uz/api/health`
-(`{"ok":true}` qaytishi kerak — health authsiz).
+```bash
+sudo systemctl restart yordamchi
+sudo systemctl status yordamchi --no-pager
+curl --fail --silent --show-error https://app.DOMENINGIZ.uz/api/health
+```
 
-> Xavfsizlik: `WEBAPP_HOST=127.0.0.1` — server to'g'ridan-to'g'ri tashqariga
-> chiqmaydi, faqat nginx orqali. Har API so'rovi `initData` imzosi bilan
-> tekshiriladi; imzo faqat sizning Telegram klientingizda hosil bo'ladi.
+Health endpoint `{"ok":true}` qaytarsa, Telegram’da botni oching va pastdagi
+`🗂 Ilova` menyu tugmasini bosing. Muammo bo‘lsa, `sudo journalctl -u yordamchi -n 100 --no-pager`
+va `sudo journalctl -u nginx -n 100 --no-pager` loglarini tekshiring.
+
+> `WEBAPP_HOST=127.0.0.1` qolsin: aiohttp server tashqi tarmoq interfeysida emas,
+> faqat Nginx ortida tinglaydi. `WEBAPP_OPEN_ACCESS`ni production’da yoqmang.
 
 ---
 

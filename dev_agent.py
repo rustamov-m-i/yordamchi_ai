@@ -10,8 +10,8 @@ GUARDRAILS (banking, spec §9):
   • All work happens in a THROWAWAY git worktree (the live tree is never edited).
   • A diff touching ANY protected path is REJECTED (proposal → requires_manual).
   • Every step is audited via database.log_si_audit.
-  • Nothing runs autonomously: approval is human (Phase 3) and the live push/merge
-    wiring is intentionally OFF in this scaffolding.
+  • Nothing runs autonomously: every implement/push/merge/deploy step is still
+    human-gated from Telegram.
 """
 
 import asyncio
@@ -143,8 +143,13 @@ def default_implementer():
 
 
 # ── git plumbing (module-level so tests can monkeypatch) ───────────────────────
-def _git(args: list, cwd: str = ROOT) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def _git(args: list, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+    """Run git in `cwd` or the current module ROOT.
+
+    Keep ROOT dynamic for tests: dev_agent_check temporarily points ROOT at a
+    throwaway repo, and a default argument would keep the import-time live repo.
+    """
+    return subprocess.run(["git", *args], cwd=cwd or ROOT, capture_output=True, text=True)
 
 
 def _worktree_path(branch: str) -> str:

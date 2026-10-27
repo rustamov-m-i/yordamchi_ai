@@ -15,7 +15,7 @@ Shaxsiy executive AI yordamchi. Faqat bir foydalanuvchi uchun. O'zbek tilida ovo
 
 ## Asosiy imkoniyatlar
 
-- **Voice & text input** — O'zbek tilida ovoz orqali (Whisper) yoki matn orqali topshiriq yuborish
+- **Voice & text input** — O'zbek tilida ovoz orqali (Aisha → Muxlisa → Whisper fallback) yoki matn orqali topshiriq yuborish
 - **Intent detection** — bot avtomatik aniqlaydi: vazifa qo'yishmi, matnni tahrirlashmi, yoki ikkalasi
 - **Professional polishing** — kundalik dictation'lardan rasmiy, executive-grade matn
 - **Task management** — P0/P1/P2/P3 prioritetlar, deadline'lar, statuslar
@@ -31,8 +31,8 @@ Shaxsiy executive AI yordamchi. Faqat bir foydalanuvchi uchun. O'zbek tilida ovo
 ## Texnik stack
 
 - **Bot framework:** aiogram 3.x (async Telegram bot)
-- **LLM:** Anthropic Claude Sonnet 4.6 (default) / Opus 4.7 (optional)
-- **Voice → text:** OpenAI Whisper API
+- **LLM:** Anthropic Claude Sonnet 4.6 (default) / Haiku 4.5 (fast) / Opus 4.8 (complex), optional DeepSeek text routing
+- **Voice → text:** Aisha AI primary, Muxlisa secondary, OpenAI Whisper fallback
 - **Database:** SQLite (aiosqlite, async)
 - **Scheduler:** APScheduler (cron-style + interval triggers)
 - **Hosting:** har qanday VPS (Linux + Python 3.11+)
@@ -69,8 +69,12 @@ nano .env
 | `TELEGRAM_BOT_TOKEN` | [@BotFather](https://t.me/BotFather) → `/newbot` | ✓ |
 | `PRINCIPAL_USER_ID` | [@userinfobot](https://t.me/userinfobot) → bosing | ✓ |
 | `ANTHROPIC_API_KEY` | https://console.anthropic.com | ✓ |
-| `OPENAI_API_KEY` | https://platform.openai.com/api-keys | ✓ (voice uchun) |
+| `AISHA_API_KEY` | Aisha cabinet/API keys | ovoz uchun tavsiya |
+| `MUXLISA_API_KEY` | Muxlisa cabinet/API keys | optional fallback |
+| `OPENAI_API_KEY` | https://platform.openai.com/api-keys | optional Whisper fallback |
 | `CLAUDE_MODEL` | default: `claude-sonnet-4-6` | optional |
+| `CLAUDE_MODEL_FAST` / `CLAUDE_MODEL_COMPLEX` | default: `claude-haiku-4-5` / `claude-opus-4-8` | optional |
+| `DEEPSEEK_API_KEY` | DeepSeek console | optional, `LLM_TEXT_PROVIDER=deepseek` uchun |
 
 ### 4. Ishga tushirish
 
